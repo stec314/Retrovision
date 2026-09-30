@@ -1,0 +1,388 @@
+// Retrovision probe <-> host wire protocol, v1.
+//
+// Single source of truth for every probe (firmware) and host (Android app).
+// See docs/protocol.md for framing, handshake, time sync and evolution rules.
+//
+// Compatibility rules (enforced in review, not by the compiler):
+//   * Never renumber or reuse a field number. Remove fields with `reserved`.
+//   * New fields are always optional in semantics: receivers MUST ignore
+//     unknown fields and MUST tolerate missing ones.
+//   * Adding an enum value is a MINOR bump; receivers MUST treat unknown enum
+//     values as the *_UNSPECIFIED value.
+//   * Anything that changes the meaning of an existing field is a MAJOR bump.
+//
+// Bounded sizes for nanopb live in retrovision.options, next to this file.
+
+syntax = "proto3";
+
+package retrovision.v1;
+
+option java_package = "dev.retrovision.proto.v1";
+option java_multiple_files = true;
+
+// Wire protocol version implemented by this file: 1.0
+// (proto3 has no constants; the canonical value lives in proto/VERSION and
+// is exchanged in Hello/HelloAck.)
+// MAJOR mismatch: host refuses the probe. MINOR mismatch: both sides proceed
+// and simply ignore what they don't understand.
+
+// ---------------------------------------------------------------------------
+// Envelope: every frame on the wire carries exactly one Envelope.
+// ---------------------------------------------------------------------------
+
+message Envelope {
+  // Per-sender, per-boot monotonically increasing counter, starting at 1.
+  // Lets the receiver detect lost frames (gap) and match CommandAck to Command.
+  uint32 seq = 1;
+
+  oneof payload {
+    // probe -> host
+    Hello hello = 10;
+    Observation observation = 11;
+    CommandAck command_ack = 12;
+    Status status = 13;
+    Log log = 14;
+    TimeSyncResponse time_sync_response = 15;
+
+    // host -> probe
+    HelloAck hello_ack = 30;
+    Command command = 31;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+  CAPABILITY_WIFI_PROBE_REQ = 1;   // 802.11 probe requests (2.4 GHz)
+  CAPABILITY_WIFI_BEACON = 2;      // 802.11 beacons / probe responses
+  CAPABILITY_WIFI_DATA = 3;        // data/mgmt source addresses (associated clients)
+  CAPABILITY_WIFI_RAW_IES = 4;     // can forward raw Information Elements
+  CAPABILITY_WIFI_5GHZ = 5;        // 5 GHz channels (e.g. ESP32-C5)
+  CAPABILITY_BLE_ADV = 10;         // BLE legacy advertising
+  CAPABILITY_BLE_EXT_ADV = 11;     // BLE 5 extended advertising
+  CAPABILITY_BLE_ACTIVE_SCAN = 12; // can send SCAN_REQ to get scan responses
+  CAPABILITY_GNSS = 20;            // probe has its own GNSS receiver
+  CAPABILITY_CUSTOM = 100;         // emits CustomObservation, see schema_ids
+}
+
+// First frame the probe sends after the transport opens, and again every
+// 2 s until it receives a HelloAck.
+message Hello {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+
+  // Reverse-DNS probe type, selects the host-side ProbeDriver.
+  // e.g. "dev.retrovision.esp32s3". Stable across firmware versions.
+  string probe_type = 3;
+
+  string firmware_version = 4;   // semver, e.g. "0.1.0+g1a2b3c4"
+  bytes hardware_id = 5;         // stable unique id (e.g. factory base MAC), max 8 bytes
+
+  // Random value chosen at every boot. A change means the probe rebooted:
+  // the host MUST discard its time-sync state and seq tracking.
+  fixed32 boot_id = 6;
+
+  repeated Capability capabilities = 7;
+
+  // Largest *decoded* frame (Envelope bytes + CRC) the probe can receive.
+  uint32 max_rx_frame = 8;
+
+  // Channels the radio can tune to (Wi-Fi channel numbers, 1..14, 36..177).
+  repeated uint32 supported_wifi_channels = 9;
+
+  // For CAPABILITY_CUSTOM: schema ids this probe may emit.
+  repeated string custom_schema_ids = 10;
+}
+
+message HelloAck {
+  uint32 protocol_major = 1;
+  uint32 protocol_minor = 2;
+
+  // Echo of Hello.boot_id, so a stale ack from a previous boot is ignored.
+  fixed32 boot_id = 3;
+
+  bool accepted = 4;
+  string reject_reason = 5; // set when accepted == false
+
+  // Optional initial configuration; equivalent to an immediate SetConfig.
+  Config config = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Time sync (NTP-style, see docs/protocol.md)
+// ---------------------------------------------------------------------------
+
+message TimeSyncRequest {
+  // Host wall clock when the request was written (Unix epoch, microseconds).
+  uint64 host_t1_us = 1;
+}
+
+message TimeSyncResponse {
+  uint64 host_t1_us = 1;    // echoed verbatim
+  uint64 probe_t2_us = 2;   // probe monotonic clock when the response was built
+}
+
+// ---------------------------------------------------------------------------
+// Observations
+// ---------------------------------------------------------------------------
+
+enum Sensor {
+  SENSOR_UNSPECIFIED = 0;
+  SENSOR_WIFI = 1;
+  SENSOR_BLE = 2;
+  SENSOR_GNSS = 3;
+  SENSOR_CUSTOM = 100;
+}
+
+message Observation {
+  // Probe monotonic clock (microseconds since boot) at capture time.
+  // The host maps it to wall-clock time via TimeSync; the probe never
+  // needs wall-clock time.
+  uint64 probe_ts_us = 1;
+
+  Sensor sensor = 2;
+
+  // Received signal strength, dBm. 0 means unknown.
+  sint32 rssi_dbm = 3;
+
+  // How many identical sightings were merged into this one by probe-side
+  // dedup (see Config.*_dedup_ms). 0 or 1 = single sighting.
+  uint32 merged_count = 4;
+
+  oneof detail {
+    WifiFrame wifi = 10;
+    BleAdvertisement ble = 11;
+    GnssFix gnss = 12;
+    CustomObservation custom = 100;
+  }
+}
+
+enum WifiFrameType {
+  WIFI_FRAME_TYPE_UNSPECIFIED = 0;
+  WIFI_FRAME_TYPE_PROBE_REQ = 1;
+  WIFI_FRAME_TYPE_PROBE_RESP = 2;
+  WIFI_FRAME_TYPE_BEACON = 3;
+  WIFI_FRAME_TYPE_ASSOC_REQ = 4;
+  WIFI_FRAME_TYPE_REASSOC_REQ = 5;
+  WIFI_FRAME_TYPE_AUTH = 6;
+  WIFI_FRAME_TYPE_DEAUTH = 7;
+  WIFI_FRAME_TYPE_DISASSOC = 8;
+  WIFI_FRAME_TYPE_DATA = 9;       // source address of a data frame
+  WIFI_FRAME_TYPE_ACTION = 10;
+}
+
+message WifiFrame {
+  WifiFrameType frame_type = 1;
+  uint32 channel = 2;
+
+  bytes addr1 = 3;  // receiver / destination, 6 bytes
+  bytes addr2 = 4;  // transmitter / source, 6 bytes  <- the one that matters
+  bytes addr3 = 5;  // BSSID, 6 bytes
+
+  // 802.11 sequence number (12 bits). Continuity across MAC rotations is a
+  // strong re-identification signal, so always forward it.
+  uint32 seq_ctrl = 6;
+
+  // SSID element content. Empty = wildcard probe / hidden network.
+  // Raw bytes, NOT guaranteed to be UTF-8. Max 32 bytes.
+  bytes ssid = 7;
+
+  // Tagged parameters (all IEs after the fixed fields), verbatim.
+  // Only sent when Config.wifi.forward_raw_ies is true and the probe has
+  // CAPABILITY_WIFI_RAW_IES. The host computes fingerprints from these, so
+  // the fingerprint algorithm can evolve without reflashing probes.
+  bytes raw_ies = 8;
+
+  // True when raw_ies was cut to fit the frame budget.
+  bool raw_ies_truncated = 9;
+}
+
+enum BleAddressType {
+  BLE_ADDRESS_TYPE_UNSPECIFIED = 0;
+  BLE_ADDRESS_TYPE_PUBLIC = 1;
+  BLE_ADDRESS_TYPE_RANDOM_STATIC = 2;
+  BLE_ADDRESS_TYPE_RANDOM_RESOLVABLE = 3;      // RPA, rotates
+  BLE_ADDRESS_TYPE_RANDOM_NON_RESOLVABLE = 4;  // NRPA, rotates
+}
+
+enum BleAdvType {
+  BLE_ADV_TYPE_UNSPECIFIED = 0;
+  BLE_ADV_TYPE_ADV_IND = 1;
+  BLE_ADV_TYPE_ADV_DIRECT_IND = 2;
+  BLE_ADV_TYPE_ADV_SCAN_IND = 3;
+  BLE_ADV_TYPE_ADV_NONCONN_IND = 4;
+  BLE_ADV_TYPE_SCAN_RSP = 5;
+  BLE_ADV_TYPE_EXTENDED = 6;
+}
+
+message BleAdvertisement {
+  bytes address = 1;               // 6 bytes, as transmitted (LSB first on air; sent here MSB first)
+  BleAddressType address_type = 2;
+  BleAdvType adv_type = 3;
+
+  // Raw AD structures (length-type-value), verbatim. Up to 31 bytes legacy,
+  // up to 251 extended. Tracker detection (AirTag/Find My, SmartTag, Tile,
+  // Google FMDN...) is done host-side from these bytes.
+  bytes adv_data = 4;
+  bytes scan_rsp_data = 5;         // only with active scanning
+
+  sint32 tx_power_dbm = 6;         // from AD type 0x0A if present, else 0
+  uint32 primary_phy = 7;          // 1 = 1M, 3 = Coded; 0 = unknown
+  uint32 secondary_phy = 8;        // extended adv only
+}
+
+// Position from a probe-side GNSS receiver. Phones use their own GPS; this
+// exists so a standalone probe (e.g. in a car) can still be correlated.
+message GnssFix {
+  double latitude_deg = 1;
+  double longitude_deg = 2;
+  float altitude_m = 3;
+  float horizontal_accuracy_m = 4;
+  float speed_mps = 5;
+  uint64 gnss_time_unix_ms = 6;
+}
+
+// Escape hatch for experimental probes before their data gets a first-class
+// message here. Promote to a typed message once the schema is stable.
+message CustomObservation {
+  string schema_id = 1;            // reverse-DNS, e.g. "org.example.subghz.v1"
+  bytes payload = 2;               // CBOR-encoded, max 512 bytes
+}
+
+// ---------------------------------------------------------------------------
+// Commands (host -> probe) and acknowledgements
+// ---------------------------------------------------------------------------
+
+message Command {
+  oneof kind {
+    Config set_config = 1;
+    TimeSyncRequest time_sync = 2;
+    GetStatus get_status = 3;
+    Reboot reboot = 4;
+  }
+}
+
+message GetStatus {}
+
+message Reboot {
+  bool into_bootloader = 1;        // enter ROM download mode for flashing
+}
+
+enum AckResult {
+  ACK_RESULT_UNSPECIFIED = 0;
+  ACK_RESULT_OK = 1;
+  ACK_RESULT_PARTIAL = 2;          // applied, but some values were clamped/ignored
+  ACK_RESULT_UNSUPPORTED = 3;
+  ACK_RESULT_INVALID = 4;
+  ACK_RESULT_ERROR = 5;
+}
+
+message CommandAck {
+  uint32 command_seq = 1;          // Envelope.seq of the Command being acked
+  AckResult result = 2;
+  string message = 3;              // human-readable detail, max 96 bytes
+}
+
+// Full desired configuration. Semantics are replace-not-merge: every
+// SetConfig carries the complete config and the probe applies it atomically.
+// Values out of range are clamped and reported with ACK_RESULT_PARTIAL.
+message Config {
+  WifiConfig wifi = 1;
+  BleConfig ble = 2;
+  RadioSchedule schedule = 3;
+
+  // Seconds between unsolicited Status frames. 0 = only on GetStatus.
+  uint32 status_interval_s = 4;
+}
+
+message ChannelDwell {
+  uint32 channel = 1;
+  uint32 dwell_ms = 2;             // clamped to [50, 5000]
+}
+
+message WifiConfig {
+  bool enabled = 1;
+
+  // Hop sequence, visited in order and repeated. Empty = probe default
+  // (1,6,11 weighted, then the rest).
+  repeated ChannelDwell hop = 2;
+
+  // Frame types to forward. Empty = PROBE_REQ + BEACON.
+  repeated WifiFrameType frame_types = 3;
+
+  bool forward_raw_ies = 4;
+
+  // Probe-side dedup. Identical (type, addr2, ssid) sightings within this
+  // window are merged into one Observation (max RSSI, merged_count).
+  // Probe requests should stay low so seq_ctrl continuity survives.
+  uint32 probe_req_dedup_ms = 5;   // default 0 (off)
+  uint32 beacon_dedup_ms = 6;      // default 30000
+
+  sint32 min_rssi_dbm = 7;         // drop weaker frames; 0 = no filter
+}
+
+message BleConfig {
+  bool enabled = 1;
+  bool active_scan = 2;            // default false: passive is stealthier
+  uint32 scan_interval_ms = 3;
+  uint32 scan_window_ms = 4;
+  bool extended = 5;               // enable BLE 5 extended adv scanning
+  uint32 dedup_ms = 6;             // merge identical (address, adv_data) sightings; default 1000
+  sint32 min_rssi_dbm = 7;
+}
+
+enum RadioMode {
+  RADIO_MODE_UNSPECIFIED = 0;
+  RADIO_MODE_COEX = 1;             // let the SoC coexistence scheduler share the radio
+  RADIO_MODE_TIME_SLICED = 2;      // explicit alternation, see wifi_slice_ms / ble_slice_ms
+  RADIO_MODE_WIFI_ONLY = 3;
+  RADIO_MODE_BLE_ONLY = 4;
+}
+
+// Single-radio probes (ESP32-S3) share one antenna between Wi-Fi and BLE.
+message RadioSchedule {
+  RadioMode mode = 1;
+  uint32 wifi_slice_ms = 2;
+  uint32 ble_slice_ms = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry
+// ---------------------------------------------------------------------------
+
+message Status {
+  uint64 probe_ts_us = 1;
+  uint32 free_heap_bytes = 2;
+  uint32 min_free_heap_bytes = 3;
+  float chip_temp_c = 4;
+  uint32 current_wifi_channel = 5;
+
+  // Counters since boot; the host computes rates from successive Status.
+  uint64 wifi_frames_seen = 10;
+  uint64 wifi_obs_sent = 11;
+  uint64 ble_adv_seen = 12;
+  uint64 ble_obs_sent = 13;
+
+  // Observations lost because the outbound queue was full. Non-zero means
+  // the host is not draining fast enough or the dedup windows are too small.
+  uint64 obs_dropped = 14;
+  uint64 rx_frames_bad = 15;       // host->probe frames that failed COBS/CRC/decode
+}
+
+enum LogLevel {
+  LOG_LEVEL_UNSPECIFIED = 0;
+  LOG_LEVEL_ERROR = 1;
+  LOG_LEVEL_WARN = 2;
+  LOG_LEVEL_INFO = 3;
+  LOG_LEVEL_DEBUG = 4;
+}
+
+message Log {
+  uint64 probe_ts_us = 1;
+  LogLevel level = 2;
+  string tag = 3;                  // max 16 bytes
+  string text = 4;                 // max 128 bytes
+}

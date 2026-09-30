@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+
+# ESP-IDF
+firmware/**/build/
+firmware/**/sdkconfig.old
+firmware/**/managed_components/
+
+# Android
+android/.gradle/
+android/**/build/
+android/local.properties
+*.keystore
+*.jks
+
+# Captures: never commit real data
+*.pcap
+*.pcapng
+*.db
+*.kismet

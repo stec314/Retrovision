@@ -1,0 +1,34 @@
+# nanopb size bounds for retrovision.proto.
+# Every bytes/string/repeated field MUST have a bound here so the firmware
+# never allocates dynamically. Keep in sync with the limits in docs/protocol.md.
+
+retrovision.v1.Hello.probe_type                max_size:48
+retrovision.v1.Hello.firmware_version          max_size:32
+retrovision.v1.Hello.hardware_id               max_size:8
+retrovision.v1.Hello.capabilities              max_count:16
+retrovision.v1.Hello.supported_wifi_channels   max_count:64
+retrovision.v1.Hello.custom_schema_ids         max_count:4
+retrovision.v1.Hello.custom_schema_ids         max_size:48
+
+retrovision.v1.HelloAck.reject_reason          max_size:96
+
+retrovision.v1.WifiFrame.addr1                 max_size:6
+retrovision.v1.WifiFrame.addr2                 max_size:6
+retrovision.v1.WifiFrame.addr3                 max_size:6
+retrovision.v1.WifiFrame.ssid                  max_size:32
+retrovision.v1.WifiFrame.raw_ies               max_size:320
+
+retrovision.v1.BleAdvertisement.address        max_size:6
+retrovision.v1.BleAdvertisement.adv_data       max_size:251
+retrovision.v1.BleAdvertisement.scan_rsp_data  max_size:251
+
+retrovision.v1.CustomObservation.schema_id     max_size:48
+retrovision.v1.CustomObservation.payload       max_size:512
+
+retrovision.v1.CommandAck.message              max_size:96
+
+retrovision.v1.WifiConfig.hop                  max_count:64
+retrovision.v1.WifiConfig.frame_types          max_count:12
+
+retrovision.v1.Log.tag                         max_size:16
+retrovision.v1.Log.text                        max_size:128
