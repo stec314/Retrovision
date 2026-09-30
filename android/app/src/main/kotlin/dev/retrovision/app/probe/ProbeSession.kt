@@ -1,0 +1,336 @@
+package dev.retrovision.app.probe
+
+import com.google.protobuf.InvalidProtocolBufferException
+import dev.retrovision.core.model.BleAddressKind
+import dev.retrovision.core.model.BleDetail
+import dev.retrovision.core.model.MacAddress
+import dev.retrovision.core.model.Radio
+import dev.retrovision.core.model.Sighting
+import dev.retrovision.core.model.WifiDetail
+import dev.retrovision.core.model.WifiKind
+import dev.retrovision.core.time.ClockSync
+import dev.retrovision.core.wire.FrameDecoder
+import dev.retrovision.core.wire.Framing
+import dev.retrovision.proto.v1.BleConfig
+import dev.retrovision.proto.v1.Command
+import dev.retrovision.proto.v1.Config
+import dev.retrovision.proto.v1.Envelope
+import dev.retrovision.proto.v1.Hello
+import dev.retrovision.proto.v1.HelloAck
+import dev.retrovision.proto.v1.Observation
+import dev.retrovision.proto.v1.RadioMode
+import dev.retrovision.proto.v1.RadioSchedule
+import dev.retrovision.proto.v1.Reboot
+import dev.retrovision.proto.v1.TimeSyncRequest
+import dev.retrovision.proto.v1.WifiConfig
+import dev.retrovision.proto.v1.WifiFrameType
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+
+/** Bytes out to the probe. Implemented over USB; fakeable in tests. */
+interface ProbeTransport {
+    fun write(data: ByteArray)
+}
+
+enum class Phase { WAITING_HELLO, SYNCING, STREAMING, REJECTED }
+
+class ProbeInfo(
+    val probeType: String,
+    val firmware: String,
+    val hardwareId: String,
+    val bootId: Int,
+    val protocol: String,
+)
+
+data class SessionState(
+    val phase: Phase = Phase.WAITING_HELLO,
+    val info: ProbeInfo? = null,
+    val clockUncertaintyUs: Long = -1,
+    val wifiObs: Long = 0,
+    val bleObs: Long = 0,
+    val droppedNoClock: Long = 0,
+    val lostFrames: Long = 0,
+    val badFrames: Long = 0,
+    val probeDropped: Long = 0,
+    val freeHeap: Int = 0,
+    val chipTempC: Float = 0f,
+    val channel: Int = 0,
+    val lastLog: String = "",
+    val rejectReason: String = "",
+)
+
+/**
+ * Host side of the Retrovision wire protocol v1 (docs/protocol.md): handshake, time sync,
+ * observation decoding. The probe is dumb; everything that needs a wall clock happens here.
+ *
+ * [onBytes] may be called from any thread; timers run on [scope].
+ */
+class ProbeSession(
+    private val transport: ProbeTransport,
+    private val scope: CoroutineScope,
+    private val onSighting: (Sighting) -> Unit,
+    private val nowUs: () -> Long = WallClock::nowUs,
+) {
+    private val lock = Any()
+    private val decoder = FrameDecoder()
+    private val clock = ClockSync()
+    private var txSeq = 0
+    private var rxSeq = 0L
+    private var bootId: Int? = null
+    private var probeId = ""
+    private var syncJob: Job? = null
+    private var maintainJob: Job? = null
+
+    private val _state = MutableStateFlow(SessionState())
+    val state: StateFlow<SessionState> = _state
+
+    /** Flush anything the probe has half-sent, as the protocol recommends after opening the port. */
+    fun start() {
+        synchronized(lock) { runCatching { transport.write(byteArrayOf(0)) } }
+    }
+
+    fun stop() {
+        syncJob?.cancel()
+        maintainJob?.cancel()
+    }
+
+    fun onBytes(chunk: ByteArray) {
+        synchronized(lock) {
+            decoder.feed(chunk) { env ->
+                try {
+                    handle(Envelope.parseFrom(env))
+                } catch (_: InvalidProtocolBufferException) {
+                    decoder.badFrames++
+                }
+            }
+            update { it.copy(badFrames = decoder.badFrames) }
+        }
+    }
+
+    /** Ask the probe to reboot, optionally into the ROM download mode used for flashing. */
+    fun rebootProbe(intoBootloader: Boolean) {
+        synchronized(lock) {
+            send(Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                Command.newBuilder().setReboot(Reboot.newBuilder().setIntoBootloader(intoBootloader)),
+            ).build())
+        }
+    }
+
+    // ---- handlers (lock held) --------------------------------------------------
+
+    private fun handle(env: Envelope) {
+        trackSeq(env.seq)
+        when (env.payloadCase) {
+            Envelope.PayloadCase.HELLO -> onHello(env.hello)
+            Envelope.PayloadCase.OBSERVATION -> onObservation(env.observation)
+            Envelope.PayloadCase.STATUS -> env.status.let { s ->
+                update {
+                    it.copy(
+                        probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes,
+                        chipTempC = s.chipTempC, channel = s.currentWifiChannel,
+                    )
+                }
+            }
+            Envelope.PayloadCase.LOG -> update { it.copy(lastLog = "${env.log.tag}: ${env.log.text}") }
+            Envelope.PayloadCase.TIME_SYNC_RESPONSE -> env.timeSyncResponse.let {
+                val t3 = nowUs()
+                // Ignore absurd round trips (stale echo after a reconnect).
+                if (t3 - it.hostT1Us in 0..5_000_000L) clock.addSample(it.hostT1Us, it.probeT2Us, t3)
+            }
+            else -> Unit // CommandAck: nothing to do in v1
+        }
+    }
+
+    private fun trackSeq(seq: Int) {
+        val s = seq.toLong() and 0xFFFFFFFFL
+        if (rxSeq != 0L && s != 0L) {
+            val expected = if (rxSeq == 0xFFFFFFFFL) 1L else rxSeq + 1
+            if (s != expected) {
+                val gap = (s - expected) and 0xFFFFFFFFL
+                if (gap < 1_000_000L) update { it.copy(lostFrames = it.lostFrames + gap) }
+            }
+        }
+        rxSeq = s
+    }
+
+    private fun onHello(h: Hello) {
+        if (h.protocolMajor != PROTOCOL_MAJOR) {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                    HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                        .setBootId(h.bootId).setAccepted(false)
+                        .setRejectReason("protocol major ${h.protocolMajor} not supported (host speaks $PROTOCOL_MAJOR)"),
+                ).build(),
+            )
+            update {
+                it.copy(
+                    phase = Phase.REJECTED,
+                    rejectReason = "Firmware protocol v${h.protocolMajor} ≠ app v$PROTOCOL_MAJOR: update the firmware",
+                )
+            }
+            return
+        }
+        if (bootId != h.bootId) {
+            clock.reset()
+            rxSeq = 0
+        }
+        bootId = h.bootId
+        probeId = h.hardwareId.toByteArray().joinToString("") { "%02x".format(it) }
+        send(
+            Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                    .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig()),
+            ).build(),
+        )
+        update {
+            it.copy(
+                phase = Phase.SYNCING,
+                rejectReason = "",
+                info = ProbeInfo(
+                    h.probeType, h.firmwareVersion, probeId, h.bootId,
+                    "${h.protocolMajor}.${h.protocolMinor}",
+                ),
+            )
+        }
+        startSync()
+    }
+
+    private fun onObservation(o: Observation) {
+        if (!clock.isSynced) {
+            update { it.copy(droppedNoClock = it.droppedNoClock + 1) }
+            return
+        }
+        val timeMs = clock.toWallMs(o.probeTsUs)
+        when (o.detailCase) {
+            Observation.DetailCase.WIFI -> {
+                val w = o.wifi
+                val addr = mac(w.addr2.toByteArray()) ?: return
+                if (addr.bits == 0L || addr.isMulticast) return
+                val kind = when (w.frameType) {
+                    WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ -> WifiKind.PROBE_REQ
+                    WifiFrameType.WIFI_FRAME_TYPE_PROBE_RESP -> WifiKind.PROBE_RESP
+                    WifiFrameType.WIFI_FRAME_TYPE_BEACON -> WifiKind.BEACON
+                    WifiFrameType.WIFI_FRAME_TYPE_ASSOC_REQ -> WifiKind.ASSOC_REQ
+                    WifiFrameType.WIFI_FRAME_TYPE_REASSOC_REQ -> WifiKind.REASSOC_REQ
+                    WifiFrameType.WIFI_FRAME_TYPE_AUTH -> WifiKind.AUTH
+                    WifiFrameType.WIFI_FRAME_TYPE_DEAUTH -> WifiKind.DEAUTH
+                    WifiFrameType.WIFI_FRAME_TYPE_DISASSOC -> WifiKind.DISASSOC
+                    WifiFrameType.WIFI_FRAME_TYPE_DATA -> WifiKind.DATA
+                    WifiFrameType.WIFI_FRAME_TYPE_ACTION -> WifiKind.ACTION
+                    else -> WifiKind.OTHER
+                }
+                val detail = WifiDetail(
+                    kind = kind,
+                    channel = w.channel,
+                    ssid = w.ssid.toByteArray(),
+                    bssid = mac(w.addr3.toByteArray()),
+                    seq = w.seqCtrl ushr 4,
+                    ies = w.rawIes.toByteArray(),
+                    iesTruncated = w.rawIesTruncated,
+                )
+                update { it.copy(wifiObs = it.wifiObs + 1) }
+                onSighting(Sighting(timeMs, Radio.WIFI, addr, o.rssiDbm, maxOf(1, o.mergedCount), wifi = detail, probeId = probeId))
+            }
+            Observation.DetailCase.BLE -> {
+                val b = o.ble
+                val addr = mac(b.address.toByteArray()) ?: return
+                val kind = when (b.addressType) {
+                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_PUBLIC -> BleAddressKind.PUBLIC
+                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_STATIC -> BleAddressKind.RANDOM_STATIC
+                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_RESOLVABLE -> BleAddressKind.RANDOM_RESOLVABLE
+                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_NON_RESOLVABLE -> BleAddressKind.RANDOM_NON_RESOLVABLE
+                    else -> BleAddressKind.UNKNOWN
+                }
+                val detail = BleDetail(kind, b.advType.number, b.advData.toByteArray(), b.txPowerDbm)
+                update { it.copy(bleObs = it.bleObs + 1) }
+                onSighting(Sighting(timeMs, Radio.BLE, addr, o.rssiDbm, maxOf(1, o.mergedCount), ble = detail, probeId = probeId))
+            }
+            else -> Unit // GNSS / custom: no consumer in v1 of the app
+        }
+    }
+
+    private fun mac(b: ByteArray): MacAddress? = if (b.size == 6) MacAddress.of(b) else null
+
+    // ---- time sync -------------------------------------------------------------
+
+    private fun startSync() {
+        syncJob?.cancel()
+        maintainJob?.cancel()
+        syncJob = scope.launch {
+            burst()
+            synchronized(lock) {
+                if (clock.isSynced) update { it.copy(phase = Phase.STREAMING) }
+            }
+            maintainJob = launch {
+                while (isActive) {
+                    delay(30_000)
+                    burst()
+                }
+            }
+        }
+    }
+
+    private suspend fun burst() {
+        repeat(8) {
+            synchronized(lock) {
+                send(
+                    Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                        Command.newBuilder().setTimeSync(TimeSyncRequest.newBuilder().setHostT1Us(nowUs())),
+                    ).build(),
+                )
+            }
+            delay(60)
+        }
+        delay(400)
+        synchronized(lock) {
+            if (clock.endBurst()) update { it.copy(clockUncertaintyUs = clock.uncertaintyUs) }
+        }
+    }
+
+    // ---- plumbing --------------------------------------------------------------
+
+    private fun nextSeq(): Int {
+        txSeq = if (txSeq == -1) 1 else txSeq + 1 // wraps 2^32-1 -> 1 (as unsigned)
+        if (txSeq == 0) txSeq = 1
+        return txSeq
+    }
+
+    private fun send(env: Envelope) {
+        runCatching { transport.write(Framing.encode(env.toByteArray())) }
+    }
+
+    private inline fun update(f: (SessionState) -> SessionState) {
+        _state.value = f(_state.value)
+    }
+
+    private fun defaultConfig(): Config = Config.newBuilder()
+        .setWifi(
+            WifiConfig.newBuilder().setEnabled(true)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_BEACON)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_RESP)
+                .setForwardRawIes(true)
+                .setProbeReqDedupMs(0)
+                .setBeaconDedupMs(30_000),
+        )
+        .setBle(BleConfig.newBuilder().setEnabled(true).setExtended(true).setDedupMs(1_000))
+        .setSchedule(RadioSchedule.newBuilder().setMode(RadioMode.RADIO_MODE_COEX))
+        .setStatusIntervalS(10)
+        .build()
+
+    companion object {
+        const val PROTOCOL_MAJOR = 1
+        const val PROTOCOL_MINOR = 0
+    }
+}
+
+/** Microsecond wall clock with sub-millisecond resolution, monotonic between NTP steps. */
+object WallClock {
+    private val baseUs: Long = System.currentTimeMillis() * 1000 - System.nanoTime() / 1000
+    fun nowUs(): Long = baseUs + System.nanoTime() / 1000
+}

@@ -13,6 +13,8 @@ android/**/build/
 android/local.properties
 *.keystore
 *.jks
+# Public development signing key (see android/app/build.gradle.kts)
+!android/app/signing/retrovision-dev.jks
 
 # Captures: never commit real data
 *.pcap

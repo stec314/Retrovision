@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Espressif native USB (ESP32-S3/C3/...) -->
+    <usb-device vendor-id="12346" product-id="4097" />
+    <!-- CH340 (most ESP32 dev boards) -->
+    <usb-device vendor-id="6790" product-id="29987" />
+    <!-- CP210x -->
+    <usb-device vendor-id="4292" product-id="60000" />
+</resources>
