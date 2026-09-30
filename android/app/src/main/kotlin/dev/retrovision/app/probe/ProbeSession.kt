@@ -11,6 +11,7 @@ import dev.retrovision.core.model.WifiKind
 import dev.retrovision.core.time.ClockSync
 import dev.retrovision.core.wire.FrameDecoder
 import dev.retrovision.core.wire.Framing
+import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
 import dev.retrovision.proto.v1.Command
 import dev.retrovision.proto.v1.Config
@@ -78,6 +79,7 @@ class ProbeSession(
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
+    private var badProto = 0L
     private val clock = ClockSync()
     private var txSeq = 0
     private var rxSeq = 0L
@@ -105,10 +107,10 @@ class ProbeSession(
                 try {
                     handle(Envelope.parseFrom(env))
                 } catch (_: InvalidProtocolBufferException) {
-                    decoder.badFrames++
+                    badProto++
                 }
             }
-            update { it.copy(badFrames = decoder.badFrames) }
+            update { it.copy(badFrames = decoder.badFrames + badProto) }
         }
     }
 
@@ -240,10 +242,10 @@ class ProbeSession(
                 val b = o.ble
                 val addr = mac(b.address.toByteArray()) ?: return
                 val kind = when (b.addressType) {
-                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_PUBLIC -> BleAddressKind.PUBLIC
-                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_STATIC -> BleAddressKind.RANDOM_STATIC
-                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_RESOLVABLE -> BleAddressKind.RANDOM_RESOLVABLE
-                    dev.retrovision.proto.v1.BleAddressType.BLE_ADDRESS_TYPE_RANDOM_NON_RESOLVABLE -> BleAddressKind.RANDOM_NON_RESOLVABLE
+                    BleAddressType.BLE_ADDRESS_TYPE_PUBLIC -> BleAddressKind.PUBLIC
+                    BleAddressType.BLE_ADDRESS_TYPE_RANDOM_STATIC -> BleAddressKind.RANDOM_STATIC
+                    BleAddressType.BLE_ADDRESS_TYPE_RANDOM_RESOLVABLE -> BleAddressKind.RANDOM_RESOLVABLE
+                    BleAddressType.BLE_ADDRESS_TYPE_RANDOM_NON_RESOLVABLE -> BleAddressKind.RANDOM_NON_RESOLVABLE
                     else -> BleAddressKind.UNKNOWN
                 }
                 val detail = BleDetail(kind, b.advType.number, b.advData.toByteArray(), b.txPowerDbm)
