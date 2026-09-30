@@ -54,11 +54,20 @@ jobs:
           target: esp32s3
           path: firmware/esp32s3
           command: >-
-            git config --global --add safe.directory '*' &&
-            idf.py build &&
-            cd build &&
-            python -m esptool --chip esp32s3 merge_bin -o retrovision-esp32s3-merged.bin @flash_args &&
-            idf.py -C .. size
+            set -o pipefail;
+            idf.py build 2>&1 | tee build.log &&
+            (cd build && python -m esptool --chip esp32s3 merge_bin
+            -o retrovision-esp32s3-merged.bin @flash_args) &&
+            idf.py size | tee -a build.log
+      # Surface compiler errors as annotations (readable without log access).
+      - name: Report build errors
+        if: failure()
+        run: |
+          f=firmware/esp32s3/build.log
+          [ -f "$f" ] || { echo "::error::no build.log (failed before build)"; exit 0; }
+          grep -nE "error:|Error:|CMake Error|FAILED:|undefined reference|ninja: build stopped" "$f" \
+            | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+          tail -30 "$f" | while IFS= read -r l; do echo "::warning::${l//%/%25}"; done
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
