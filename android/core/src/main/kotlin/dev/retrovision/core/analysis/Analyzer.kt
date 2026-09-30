@@ -1,0 +1,269 @@
+package dev.retrovision.core.analysis
+
+import dev.retrovision.core.identity.MobileAp
+import dev.retrovision.core.identity.TrackerClassifier
+import dev.retrovision.core.identity.TrackerKind
+import dev.retrovision.core.model.BleAdvType
+import dev.retrovision.core.model.GeoFix
+import dev.retrovision.core.model.MacAddress
+import dev.retrovision.core.model.Radio
+import dev.retrovision.core.model.Sighting
+import dev.retrovision.core.model.WifiKind
+
+data class AnalysisConfig(
+    /** How far back an analysis run looks. */
+    val lookbackMs: Long = 2 * 3600_000L,
+    /** CYT time windows, minutes before "now": [0,5), [5,10), [10,15), [15,20). */
+    val windowMinutes: List<Int> = listOf(5, 10, 15, 20),
+    val placeRadiusM: Double = 100.0,
+    val fixMaxGapMs: Long = 60_000,
+    /** Alert when score ≥ this AND the entity was seen at ≥ [alertMinPlaces] places. */
+    val alertScore: Double = 0.7,
+    val alertMinPlaces: Int = 3,
+    /** Span and travel at which the respective sub-scores saturate. */
+    val spanSaturationMs: Long = 30 * 60_000L,
+    val travelSaturationM: Double = 2_000.0,
+)
+
+/** Things the user told us to ignore: own devices, baseline, own networks. */
+data class IgnoreList(
+    val entityIds: Set<String> = emptySet(),
+    val addresses: Set<MacAddress> = emptySet(),
+    /** Access points with these SSIDs (your own networks) are ignored. */
+    val apSsids: Set<String> = emptySet(),
+)
+
+/** One sighting already attributed to an entity by the EntityResolver. */
+class EntitySighting(val entityId: String, val sighting: Sighting)
+
+/** Why an entity scored what it scored. Rendered (and localised) by the UI. */
+sealed class Reason {
+    data class SeenAtPlaces(val places: Int) : Reason()
+    data class PresentInWindows(val windows: Int, val of: Int) : Reason()
+    data class SeenFor(val durationMs: Long) : Reason()
+    data class TravelledWithYou(val meters: Double) : Reason()
+    data class Tracker(val kind: TrackerKind, val separatedFromOwner: Boolean?) : Reason()
+    data class MovingAccessPoint(val kind: MobileAp.Kind, val ssid: String) : Reason()
+    data class RotatedAddresses(val addresses: Int) : Reason()
+}
+
+enum class EntityKind { WIFI_CLIENT, WIFI_AP, BLE_DEVICE, BLE_TRACKER }
+
+class EntityReport(
+    val entityId: String,
+    val kind: EntityKind,
+    val score: Double,
+    val alert: Boolean,
+    val reasons: List<Reason>,
+    val placeIds: Set<Int>,
+    /** Indices into [AnalysisConfig.windowMinutes] where the entity was present. */
+    val windows: Set<Int>,
+    val firstSeenMs: Long,
+    val lastSeenMs: Long,
+    val sightings: Int,
+    val maxRssi: Int,
+    val addresses: Set<MacAddress>,
+    /** SSIDs this client asked for (CYT probe analysis) or the AP's own SSID. */
+    val ssids: Set<String>,
+    val tracker: TrackerKind?,
+    val mobileAp: MobileAp.Kind?,
+    /** Chronological (time, place) track, for maps and KML. */
+    val track: List<Pair<Long, GeoFix>>,
+)
+
+class AnalysisResult(
+    val nowMs: Long,
+    val places: List<Place>,
+    /** Sorted by score, descending. Ignored entities are not included. */
+    val entities: List<EntityReport>,
+    val ignoredEntities: Int,
+) {
+    val alerts: List<EntityReport> get() = entities.filter { it.alert }
+}
+
+/**
+ * Persistence / following analysis (CYT surveillance_detector + multi-location
+ * tracking, extended with trackers and moving APs).
+ *
+ * score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel (+ bonuses), each
+ * sub-score in [0,1]. An entity seen at a single place is capped at 0.3: being
+ * near you for a long time in one spot is a neighbour, not a follower.
+ * Every contribution is reported as a [Reason] so the user can judge it.
+ */
+class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
+
+    fun analyze(
+        nowMs: Long,
+        sightings: List<EntitySighting>,
+        fixes: List<GeoFix>,
+        ignore: IgnoreList = IgnoreList(),
+    ): AnalysisResult {
+        val from = nowMs - config.lookbackMs
+        val timeline = FixTimeline(fixes.filter { it.timeMs in from..nowMs }, config.fixMaxGapMs)
+        val clusterer = PlaceClusterer(config.placeRadiusM)
+        val placeOfFix = HashMap<GeoFix, Place>()
+        for (f in timeline.fixes) placeOfFix[f] = clusterer.assign(f)
+
+        val byEntity = sightings.asSequence()
+            .filter { it.sighting.timeMs in from..nowMs }
+            .groupBy { it.entityId }
+
+        var ignored = 0
+        val reports = ArrayList<EntityReport>(byEntity.size)
+        for ((id, list) in byEntity) {
+            if (isIgnored(id, list, ignore)) {
+                ignored++
+                continue
+            }
+            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix)
+        }
+        reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
+        return AnalysisResult(nowMs, clusterer.places, reports, ignored)
+    }
+
+    private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
+        if (id in ignore.entityIds) return true
+        if (list.any { it.sighting.address in ignore.addresses }) return true
+        if (ignore.apSsids.isNotEmpty() && list.any { s ->
+                val w = s.sighting.wifi
+                w != null && (w.kind == WifiKind.BEACON || w.kind == WifiKind.PROBE_RESP) && w.ssidText in ignore.apSsids
+            }
+        ) return true
+        return false
+    }
+
+    private fun score(
+        id: String,
+        list: List<EntitySighting>,
+        nowMs: Long,
+        timeline: FixTimeline,
+        placeOfFix: Map<GeoFix, Place>,
+    ): EntityReport {
+        val first = list.first().sighting.timeMs
+        val last = list.last().sighting.timeMs
+        val addresses = LinkedHashSet<MacAddress>()
+        val ssids = LinkedHashSet<String>()
+        val places = LinkedHashSet<Int>()
+        val windows = HashSet<Int>()
+        val track = ArrayList<Pair<Long, GeoFix>>()
+        var maxRssi = Int.MIN_VALUE
+        var tracker: TrackerKind? = null
+        var separated: Boolean? = null
+        var mobileAp: MobileAp.Kind? = null
+        var mobileSsid = ""
+        var isAp = false
+        var lastPlace = -1
+
+        for (es in list) {
+            val s = es.sighting
+            addresses += s.address
+            if (s.rssi != 0) maxRssi = maxOf(maxRssi, s.rssi)
+            windowIndex(nowMs - s.timeMs)?.let { windows += it }
+
+            s.wifi?.let { w ->
+                val text = w.ssidText
+                when (w.kind) {
+                    WifiKind.BEACON, WifiKind.PROBE_RESP -> {
+                        isAp = true
+                        if (text.isNotEmpty()) ssids += text
+                        if (mobileAp == null) {
+                            MobileAp.classify(text, w.bssid ?: s.address)?.let {
+                                mobileAp = it
+                                mobileSsid = text
+                            }
+                        }
+                    }
+                    WifiKind.PROBE_REQ -> if (text.isNotEmpty()) ssids += text
+                    else -> Unit
+                }
+            }
+            s.ble?.let { b ->
+                if (b.advType != BleAdvType.SCAN_RSP) {
+                    TrackerClassifier.classify(b.advData)?.let { m ->
+                        if (tracker == null || TrackerClassifier.isTag(m.kind)) tracker = m.kind
+                        if (m.separated == true) separated = true
+                        else if (m.separated == false && separated == null) separated = false
+                    }
+                }
+            }
+
+            timeline.nearest(s.timeMs)?.let { fix ->
+                val p = placeOfFix[fix] ?: return@let
+                places += p.id
+                if (p.id != lastPlace) {
+                    track += s.timeMs to fix
+                    lastPlace = p.id
+                }
+            }
+        }
+
+        val placeFixes = track.map { it.second }
+        var travel = 0.0
+        for (i in placeFixes.indices) for (j in i + 1 until placeFixes.size) {
+            travel = maxOf(travel, Geo.distanceM(placeFixes[i], placeFixes[j]))
+        }
+
+        val nPlaces = places.size
+        val sPlaces = ((nPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
+        val sWindows = windows.size.toDouble() / config.windowMinutes.size
+        val sSpan = ((last - first).toDouble() / config.spanSaturationMs).coerceIn(0.0, 1.0)
+        val sTravel = (travel / config.travelSaturationM).coerceIn(0.0, 1.0)
+        var score = 0.40 * sPlaces + 0.20 * sWindows + 0.15 * sSpan + 0.25 * sTravel
+
+        val reasons = ArrayList<Reason>()
+        if (nPlaces >= 2) reasons += Reason.SeenAtPlaces(nPlaces)
+        if (windows.size >= 2) reasons += Reason.PresentInWindows(windows.size, config.windowMinutes.size)
+        if (last - first >= 5 * 60_000L) reasons += Reason.SeenFor(last - first)
+        if (travel >= 200) reasons += Reason.TravelledWithYou(travel)
+
+        val tk = tracker
+        if (tk != null) {
+            reasons += Reason.Tracker(tk, separated)
+            if (nPlaces >= 2 && TrackerClassifier.isTag(tk)) score += if (separated == true) 0.20 else 0.10
+        }
+        val ap = mobileAp
+        if (ap != null && ap != MobileAp.Kind.WIFI_DIRECT) {
+            reasons += Reason.MovingAccessPoint(ap, mobileSsid)
+            if (nPlaces >= 2) score += 0.10
+        }
+        if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
+
+        if (nPlaces < 2) score = minOf(score, 0.3)
+        score = score.coerceIn(0.0, 1.0)
+
+        val radio = list.first().sighting.radio
+        val kind = when {
+            radio == Radio.BLE && tk != null && TrackerClassifier.isTag(tk) -> EntityKind.BLE_TRACKER
+            radio == Radio.BLE -> EntityKind.BLE_DEVICE
+            isAp -> EntityKind.WIFI_AP
+            else -> EntityKind.WIFI_CLIENT
+        }
+
+        return EntityReport(
+            entityId = id,
+            kind = kind,
+            score = score,
+            alert = score >= config.alertScore && nPlaces >= config.alertMinPlaces,
+            reasons = reasons,
+            placeIds = places,
+            windows = windows,
+            firstSeenMs = first,
+            lastSeenMs = last,
+            sightings = list.sumOf { maxOf(1, it.sighting.mergedCount) },
+            maxRssi = if (maxRssi == Int.MIN_VALUE) 0 else maxRssi,
+            addresses = addresses,
+            ssids = ssids,
+            tracker = tk,
+            mobileAp = mobileAp,
+            track = track,
+        )
+    }
+
+    /** Index of the CYT window containing `ageMs`, or null if older than the last one. */
+    fun windowIndex(ageMs: Long): Int? {
+        if (ageMs < 0) return 0
+        val minutes = ageMs / 60_000.0
+        val i = config.windowMinutes.indexOfFirst { minutes < it }
+        return if (i >= 0) i else null
+    }
+}
