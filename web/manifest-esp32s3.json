@@ -1,0 +1,13 @@
+{
+  "name": "Retrovision probe (ESP32-S3)",
+  "version": "dev",
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "firmware/retrovision-esp32s3-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

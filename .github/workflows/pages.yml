@@ -1,0 +1,51 @@
+name: pages
+
+# Publishes web/ plus the firmware image built by the "firmware" workflow.
+on:
+  workflow_run:
+    workflows: ["firmware"]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: retrovision-esp32s3
+          path: site-fw
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id || github.run_id }}
+      - name: Assemble site
+        run: |
+          mkdir -p site/firmware
+          cp web/index.html web/manifest-esp32s3.json site/
+          f=$(find site-fw -name retrovision-esp32s3-merged.bin | head -1)
+          [ -n "$f" ] || { echo "::error::merged image not found"; exit 1; }
+          cp "$f" site/firmware/
+          sha=$(git rev-parse --short HEAD)
+          sed -i "s/\"version\": \"dev\"/\"version\": \"$sha\"/" site/manifest-esp32s3.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4
