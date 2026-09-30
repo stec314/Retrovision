@@ -66,7 +66,8 @@ probe                                   host
   | == Observation / Status / Log ====>   |   streaming
 ```
 
-- Before it receives a `HelloAck` whose `boot_id` matches its own, the probe sends only `Hello` and `Log`. It captures nothing.
+- Before it receives a `HelloAck` whose `boot_id` matches its own, the probe captures nothing. It sends `Hello`, `Log`, and answers to the only two commands allowed at that point: `TimeSyncRequest` and `Reboot`. These two let a flasher reboot a probe even when its protocol version is unknown. Any other command is answered with `ACK_RESULT_ERROR` ("no session").
+- The probe answers the `HelloAck` itself with a `CommandAck` whose `command_seq` is the `HelloAck`'s `Envelope.seq`. That ack reports how the initial config was applied (`OK` / `PARTIAL`).
 - `HelloAck.accepted = false` means the probe stays idle and keeps sending `Hello` every 10 s. The host shows `reject_reason` to the user; the usual case is a major-version mismatch, which triggers a firmware-update prompt (see §10).
 - A new `boot_id` in any later `Hello` means the probe rebooted. The host then discards the time-sync state and `seq` tracking and runs the handshake again.
 - A `Hello` that arrives during an active session is how the probe asks to be reinitialised. The host always answers it.
@@ -101,19 +102,27 @@ Expected accuracy over USB is about 1 ms. That is more than enough, because a ph
 
 ### 7.2 BLE (`BleAdvertisement`)
 
-- `adv_data` and `scan_rsp_data` are the raw AD structures. All tracker classification (Apple Find My, Samsung SmartTag, Tile, Google FMDN, and others) happens on the host.
+- `adv_data` and `scan_rsp_data` are the raw AD structures. A scan response arrives as its own Observation with `adv_type = SCAN_RSP`, and the host pairs it with the advertisement by address. All tracker classification (Apple Find My, Samsung SmartTag, Tile, Google FMDN, and others) happens on the host.
 - `address` is sent MSB-first, the same order as its written form.
 - Passive scanning is the default. Active scanning sends `SCAN_REQ` frames and so makes the probe itself observable.
 
 ### 7.3 Probe-side dedup
 
-Without dedup, a busy street produces thousands of frames per second (beacons at 10 Hz per AP, BLE advertisements at 1–10 Hz per device). The probe therefore merges identical sightings within a window: it keeps the maximum RSSI and the timestamp of the first sighting, and puts the number of merged sightings in `merged_count`.
+Without dedup, a busy street produces thousands of frames per second: beacons at 10 Hz per AP, BLE advertisements at 1–10 Hz per device. The probe therefore uses **emit-first** dedup:
+
+1. The first sighting of a key is forwarded **immediately**, so there is no added latency.
+2. Repeats of that key within the window are suppressed and counted.
+3. The first sighting after the window has elapsed is forwarded again with `merged_count = 1 + suppressed`. The window then restarts from that sighting.
+
+Net effect: the host sees each device at most once per window, with timestamp and RSSI taken from the forwarded sighting. The probe keeps no payload state. It uses a fixed 1024-slot hash table of about 24 KB; when the table overflows, the oldest key is evicted and its next sighting is forwarded as if it were new.
 
 | Stream | Identity key | Default window |
 |---|---|---|
-| Wi-Fi probe request | (addr2, ssid) | **0 (off)**: each frame carries a distinct `seq_ctrl`, which fingerprinting needs |
-| Wi-Fi beacon | (addr2, ssid) | 30 s |
-| BLE | (address, hash(adv_data)) | 1 s |
+| Wi-Fi probe request | (type, addr2, ssid) | **0 (off)**: each frame carries a distinct `seq_ctrl`, which fingerprinting needs |
+| Wi-Fi beacon / probe response | (type, addr2, ssid) | 30 s |
+| BLE | (address, adv_type, adv_data) | 1 s |
+
+Because the BLE key includes the payload, a tracker that rotates its payload but keeps its address shows up once per payload change. That is the behaviour we want.
 
 ### 7.4 GNSS and custom data
 
@@ -122,8 +131,9 @@ Without dedup, a busy street produces thousands of frames per second (beacons at
 
 ## 8. Commands, config, backpressure
 
-- `Config` is **replace, not merge**. Each `SetConfig` carries the full desired state and is applied atomically. Out-of-range values are clamped and the probe answers `ACK_RESULT_PARTIAL` with a message.
-- `RadioSchedule` exists because the ESP32-S3 has one 2.4 GHz radio shared by Wi-Fi and BLE. `COEX` hands the sharing to ESP-IDF's coexistence scheduler; `TIME_SLICED` alternates between the two explicitly (e.g. 400 ms Wi-Fi / 200 ms BLE). Which gives better capture is an open question for the firmware bring-up phase, to be settled by measurement.
+- `Config` is **replace, not merge**. Each `SetConfig` carries the full desired state and is applied atomically. Out-of-range values are clamped and the probe answers `ACK_RESULT_PARTIAL` with a message describing the first adjustment.
+- Defaults: an **absent** sub-message (`wifi`, `ble`, `schedule`) means probe defaults. Inside a **present** sub-message, zero means dedup off, no RSSI filter, and the default hop list, frame types and scan timing. `status_interval_s = 0` in a present `Config` means Status is sent only on `GetStatus`, so the host should always set it.
+- `RadioSchedule` exists because the ESP32-S3 has one 2.4 GHz radio shared by Wi-Fi and BLE. `COEX` hands the sharing to ESP-IDF's coexistence scheduler; `TIME_SLICED` alternates between the two explicitly (e.g. 400 ms Wi-Fi / 200 ms BLE). Firmware 0.1 implements only `COEX`, `WIFI_ONLY` and `BLE_ONLY`; it answers `TIME_SLICED` with `PARTIAL` and falls back to `COEX`. Whether `TIME_SLICED` is worth implementing will be decided by measurement.
 - Backpressure: the probe has a bounded outbound queue. When it is full the probe **drops new Observations** and increments `obs_dropped`. It never drops `Hello`, `CommandAck`, `TimeSyncResponse` or `Status`, which bypass the queue. If `obs_dropped` grows, the host should widen the dedup windows or reduce `frame_types`.
 - `Status` is sent every `status_interval_s` seconds (default 5) and doubles as a heartbeat. If no frame arrives for 3 intervals, the host considers the probe stalled.
 - `Reboot{into_bootloader: true}` puts the chip in ROM download mode for flashing from the app or the web flasher.

@@ -4,7 +4,7 @@ Counter-surveillance for your pocket: an ESP32 probe captures Wi-Fi and BLE traf
 
 Retrovision is a from-scratch reimplementation of the ideas behind [Chasing Your Tail NG](https://github.com/ArgeliusLabs/Chasing-Your-Tail-NG) by @matt0177 / ArgeliusLabs. It replaces the Kismet-plus-Linux-laptop setup with a thumb-sized probe and a phone.
 
-> **Status:** early design. Only the wire protocol exists so far.
+> **Status:** early development. Wire protocol v1 and the ESP32-S3 probe firmware are in place (not yet validated on hardware); the Android app is next.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ Retrovision is a from-scratch reimplementation of the ideas behind [Chasing Your
 | Path | Contents |
 |---|---|
 | `proto/` | Wire protocol schema, the single source of truth, plus conformance vectors |
-| `firmware/esp32s3/` | ESP-IDF firmware *(planned)* |
+| `firmware/` | ESP-IDF probe firmware (ESP32-S3) and portable C core, see [firmware/README.md](firmware/README.md) |
 | `android/` | Kotlin app *(planned)* |
 | `web/` | Browser-based firmware flasher (ESP Web Tools on GitHub Pages) *(planned)* |
 | `tools/refcodec/` | Python reference codec and tests for the framing |

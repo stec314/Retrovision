@@ -1,0 +1,73 @@
+name: firmware
+
+on:
+  push:
+    paths:
+      - "proto/**"
+      - "firmware/**"
+      - "tools/**"
+      - ".github/workflows/firmware.yml"
+  pull_request:
+    paths:
+      - "proto/**"
+      - "firmware/**"
+      - "tools/**"
+      - ".github/workflows/firmware.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Protocol + core tests (host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install generators
+        run: pip install grpcio-tools "nanopb==$(cat firmware/components/nanopb/VERSION)"
+      - name: Generated code is up to date
+        run: |
+          ./tools/gen_proto.sh
+          python3 tools/refcodec/gen_vectors.py
+          git diff --exit-code -- firmware/components/rv_proto proto/testvectors
+      - name: Reference codec tests
+        run: python3 -m unittest -v tools/refcodec/test_framing.py
+      - name: rv_core tests (C, incl. ASan/UBSan fuzz smoke)
+        run: python3 -m unittest -v firmware/components/rv_core/test/test_rv_core.py
+
+  build-esp32s3:
+    name: Build ESP32-S3 firmware
+    runs-on: ubuntu-latest
+    needs: host-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe -> firmware version
+      - name: idf.py build + merged image
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.5
+          target: esp32s3
+          path: firmware/esp32s3
+          command: >-
+            git config --global --add safe.directory '*' &&
+            idf.py build &&
+            cd build &&
+            python -m esptool --chip esp32s3 merge_bin -o retrovision-esp32s3-merged.bin @flash_args &&
+            idf.py -C .. size
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: retrovision-esp32s3
+          path: |
+            firmware/esp32s3/build/retrovision-esp32s3-merged.bin
+            firmware/esp32s3/build/retrovision_esp32s3.bin
+            firmware/esp32s3/build/retrovision_esp32s3.elf
+            firmware/esp32s3/build/bootloader/bootloader.bin
+            firmware/esp32s3/build/partition_table/partition-table.bin
+            firmware/esp32s3/build/flash_args
+          if-no-files-found: error
