@@ -148,8 +148,9 @@ message Observation {
   // Received signal strength, dBm. 0 means unknown.
   sint32 rssi_dbm = 3;
 
-  // How many identical sightings were merged into this one by probe-side
-  // dedup (see Config.*_dedup_ms). 0 or 1 = single sighting.
+  // Probe-side dedup (see Config.*_dedup_ms, docs/protocol.md §7.3):
+  // this sighting plus the identical sightings suppressed since the previous
+  // forwarded one. 0 or 1 = single sighting.
   uint32 merged_count = 4;
 
   oneof detail {
@@ -227,7 +228,9 @@ message BleAdvertisement {
   // up to 251 extended. Tracker detection (AirTag/Find My, SmartTag, Tile,
   // Google FMDN...) is done host-side from these bytes.
   bytes adv_data = 4;
-  bytes scan_rsp_data = 5;         // only with active scanning
+  // Only with active scanning. Sent as its own Observation with
+  // adv_type = SCAN_RSP (adv_data empty); the host pairs it by address.
+  bytes scan_rsp_data = 5;
 
   sint32 tx_power_dbm = 6;         // from AD type 0x0A if present, else 0
   uint32 primary_phy = 7;          // 1 = 1M, 3 = Coded; 0 = unknown
@@ -289,6 +292,13 @@ message CommandAck {
 // Full desired configuration. Semantics are replace-not-merge: every
 // SetConfig carries the complete config and the probe applies it atomically.
 // Values out of range are clamped and reported with ACK_RESULT_PARTIAL.
+//
+// Defaults: an ABSENT sub-message (wifi, ble, schedule) means "probe
+// defaults" for that block; the "default" values in the comments below are
+// those. Inside a PRESENT sub-message every field is taken literally, with
+// zero meaning: dedup off, no RSSI filter, and probe default for hop list,
+// frame types and scan timing. proto3 cannot tell 0 from unset, hence the
+// rule.
 message Config {
   WifiConfig wifi = 1;
   BleConfig ble = 2;
@@ -315,9 +325,10 @@ message WifiConfig {
 
   bool forward_raw_ies = 4;
 
-  // Probe-side dedup. Identical (type, addr2, ssid) sightings within this
-  // window are merged into one Observation (max RSSI, merged_count).
-  // Probe requests should stay low so seq_ctrl continuity survives.
+  // Probe-side dedup. The first (type, addr2, ssid) sighting is forwarded,
+  // repeats within this window are suppressed and counted in the next
+  // forwarded Observation's merged_count. 0 = off.
+  // Probe requests should stay off so seq_ctrl continuity survives.
   uint32 probe_req_dedup_ms = 5;   // default 0 (off)
   uint32 beacon_dedup_ms = 6;      // default 30000
 
@@ -330,7 +341,7 @@ message BleConfig {
   uint32 scan_interval_ms = 3;
   uint32 scan_window_ms = 4;
   bool extended = 5;               // enable BLE 5 extended adv scanning
-  uint32 dedup_ms = 6;             // merge identical (address, adv_data) sightings; default 1000
+  uint32 dedup_ms = 6;             // suppress identical (address, adv_type, adv_data) repeats; default 1000
   sint32 min_rssi_dbm = 7;
 }
 
