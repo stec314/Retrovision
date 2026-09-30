@@ -67,7 +67,7 @@ kotlin {
 }
 
 protobuf {
-    protoc { artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}" }
+    protoc { artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.asProvider().get()}" }
     generateProtoTasks {
         all().forEach { task ->
             task.builtins { create("java") { option("lite") } }
