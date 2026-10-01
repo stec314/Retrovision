@@ -51,7 +51,8 @@ class RomSimulator(
         return n
     }
 
-    override fun setLines(dtr: Boolean, rts: Boolean) {}
+    override fun setDtr(on: Boolean) {}
+    override fun setRts(on: Boolean) {}
     override fun discardInput() { out.reset() }
 
     private fun reply(cmd: Int, value: Int, payload: ByteArray = ByteArray(0), status: Int = 0, err: Int = 0) {

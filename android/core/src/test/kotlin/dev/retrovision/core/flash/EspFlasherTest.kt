@@ -137,4 +137,21 @@ class EspFlasherTest {
         assertEquals(8 shl 20, EspFlasher.flashSizeFromHeader(image(16)))
         assertEquals(null, EspFlasher.flashSizeFromHeader(ByteArray(16)))
     }
+
+    @Test fun usbJtagResetFollowsEsptoolSequence() {
+        val calls = ArrayList<String>()
+        val link = object : SerialLink {
+            override fun write(data: ByteArray) {}
+            override fun read(buf: ByteArray, timeoutMs: Int) = 0
+            override fun setDtr(on: Boolean) { calls += "D${if (on) 1 else 0}" }
+            override fun setRts(on: Boolean) { calls += "R${if (on) 1 else 0}" }
+            override fun discardInput() {}
+        }
+        EspFlasher(link, sleep = {}).resetIntoBootloader(ResetStyle.USB_JTAG)
+        // Never passes through DTR=0,RTS=0 between "DTR=1" and the reset: that would drop the boot strap.
+        assertEquals(
+            listOf("R0", "D0", "D1", "R0", "R1", "D0", "R1", "R0", "D0"),
+            calls,
+        )
+    }
 }

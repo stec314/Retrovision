@@ -13,7 +13,13 @@ interface SerialLink {
     /** Reads up to buf.size bytes; returns the count, 0 on timeout. */
     fun read(buf: ByteArray, timeoutMs: Int): Int
 
-    fun setLines(dtr: Boolean, rts: Boolean)
+    /**
+     * DTR and RTS are set one at a time, in the caller's order: the USB-Serial-JTAG reset logic
+     * reacts to the sequence of intermediate states, so the order is part of the protocol.
+     */
+    fun setDtr(on: Boolean)
+
+    fun setRts(on: Boolean)
 
     fun discardInput()
 }
@@ -67,18 +73,19 @@ class EspFlasher(
 
     // ---- reset ---------------------------------------------------------------
 
+    /** Same line sequences as esptool (USBJTAGSerialReset / ClassicReset), step for step. */
     fun resetIntoBootloader(style: ResetStyle) {
         when (style) {
             ResetStyle.USB_JTAG -> {
-                link.setLines(dtr = false, rts = false); sleep(100)
-                link.setLines(dtr = true, rts = false); sleep(100)
-                link.setLines(dtr = false, rts = true); sleep(100)
-                link.setLines(dtr = false, rts = false)
+                link.setRts(false); link.setDtr(false); sleep(100)
+                link.setDtr(true); link.setRts(false); sleep(100)
+                link.setRts(true); link.setDtr(false); link.setRts(true); sleep(100)
+                link.setRts(false); link.setDtr(false)
             }
             ResetStyle.CLASSIC -> {
-                link.setLines(dtr = false, rts = true); sleep(100)
-                link.setLines(dtr = true, rts = false); sleep(50)
-                link.setLines(dtr = false, rts = false)
+                link.setDtr(false); link.setRts(true); sleep(100)
+                link.setDtr(true); link.setRts(false); sleep(50)
+                link.setDtr(false)
             }
         }
         sleep(100)
@@ -86,8 +93,8 @@ class EspFlasher(
     }
 
     fun hardReset() {
-        link.setLines(dtr = false, rts = true); sleep(100)
-        link.setLines(dtr = false, rts = false)
+        link.setDtr(false); link.setRts(true); sleep(100)
+        link.setRts(false)
     }
 
     // ---- connect -------------------------------------------------------------

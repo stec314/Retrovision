@@ -81,9 +81,12 @@ class UsbSerialLink(private val port: UsbSerialPort) : SerialLink {
 
     override fun read(buf: ByteArray, timeoutMs: Int): Int = port.read(buf, maxOf(1, timeoutMs))
 
-    override fun setLines(dtr: Boolean, rts: Boolean) {
-        port.dtr = dtr
-        port.rts = rts
+    override fun setDtr(on: Boolean) {
+        port.dtr = on
+    }
+
+    override fun setRts(on: Boolean) {
+        port.rts = on
     }
 
     override fun discardInput() {
