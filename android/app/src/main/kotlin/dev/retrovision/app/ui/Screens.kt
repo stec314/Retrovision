@@ -276,7 +276,7 @@ fun ProbeScreen(modifier: Modifier) {
     val conn by Collector.connection.collectAsState()
     val flash by Collector.flash.collectAsState()
     val images = remember { FirmwareAssets.load(ctx) }
-    var confirm by remember { mutableStateOf<dev.retrovision.app.probe.FirmwareImage?>(null) }
+    var confirmAll by remember { mutableStateOf(false) }
 
     val view = LocalView.current
     DisposableEffect(flash.running) {
@@ -298,12 +298,21 @@ fun ProbeScreen(modifier: Modifier) {
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        images.forEach { img ->
+        if (images.isNotEmpty()) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("${img.chip.label} · ${img.version}", style = MaterialTheme.typography.titleMedium)
-                    Text("${img.data.size / 1024} KiB", style = MaterialTheme.typography.bodySmall)
-                    Button(enabled = !flash.running, onClick = { confirm = img }) { Text(Texts.tr("Flash this firmware", "Flasha questo firmware")) }
+                    Text(Texts.tr("Firmware ", "Firmware ") + images.first().version, style = MaterialTheme.typography.titleMedium)
+                    images.forEach { img ->
+                        Text("• ${img.chip.label} · ${img.data.size / 1024} KiB", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        Texts.tr(
+                            "The board is detected automatically: XIAO ESP32-S3, or classic ESP32 (NodeMCU-32S, DevKitC).",
+                            "La scheda viene riconosciuta da sola: XIAO ESP32-S3 oppure ESP32 classica (NodeMCU-32S, DevKitC).",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Button(enabled = !flash.running, onClick = { confirmAll = true }) { Text(Texts.tr("Flash the connected board", "Flasha la scheda collegata")) }
                 }
             }
         }
@@ -326,13 +335,13 @@ fun ProbeScreen(modifier: Modifier) {
         flash.log.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
     }
 
-    confirm?.let { img ->
+    if (confirmAll) {
         AlertDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text(Texts.tr("Flash ${img.chip.label}?", "Flashare ${img.chip.label}?")) },
+            onDismissRequest = { confirmAll = false },
+            title = { Text(Texts.tr("Flash the probe?", "Flashare la sonda?")) },
             text = { Text(Texts.tr("This overwrites the firmware on the connected board.", "Sovrascrive il firmware della scheda collegata.")) },
-            confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, img); confirm = null }) { Text(Texts.tr("Flash", "Flasha")) } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text(Texts.tr("Cancel", "Annulla")) } },
+            confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, images); confirmAll = false }) { Text(Texts.tr("Flash", "Flasha")) } },
+            dismissButton = { TextButton(onClick = { confirmAll = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
     }
 }

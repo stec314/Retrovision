@@ -6,7 +6,10 @@
 #include "capture.h"
 #include "config.h"
 #include "driver/gpio.h"
+#include "soc/soc_caps.h"
+#if SOC_TEMP_SENSOR_SUPPORTED
 #include "driver/temperature_sensor.h"
+#endif
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -19,14 +22,23 @@
 #include "freertos/task.h"
 #include "link.h"
 #include "rv_framing.h"
+#if !CONFIG_IDF_TARGET_ESP32
 #include "soc/rtc_cntl_reg.h"
+#endif
 #include "soc/soc.h"
 #include "wifi_sniffer.h"
 
 static const char *TAG = "session";
 
+#if CONFIG_IDF_TARGET_ESP32
+// NodeMCU-32S / most ESP32 DevKits: blue LED on GPIO2, active high (harmless on boards without it).
+#define LED_GPIO GPIO_NUM_2
+#define LED_ON 1
+#else
 // XIAO ESP32-S3 user LED (orange), active low.
 #define LED_GPIO GPIO_NUM_21
+#define LED_ON 0
+#endif
 #define HELLO_PERIOD_MS 2000
 #define HELLO_REJECTED_PERIOD_MS 10000
 #define USB_GONE_MS 1000
@@ -37,7 +49,9 @@ static volatile state_t s_state = ST_HELLO;
 static uint32_t s_boot_id;
 static SemaphoreHandle_t s_lock;       // serialises state changes (rx task vs session task)
 static rv_cfg_t s_cfg;
+#if SOC_TEMP_SENSOR_SUPPORTED
 static temperature_sensor_handle_t s_tsens;
+#endif
 
 // Envelopes built by the session. Two, because the rx task (acks) and the
 // session task (hello/status) run concurrently.
@@ -68,7 +82,9 @@ static void send_hello(void)
         retrovision_v1_Capability_CAPABILITY_WIFI_DATA,
         retrovision_v1_Capability_CAPABILITY_WIFI_RAW_IES,
         retrovision_v1_Capability_CAPABILITY_BLE_ADV,
+#if CONFIG_BT_NIMBLE_EXT_ADV
         retrovision_v1_Capability_CAPABILITY_BLE_EXT_ADV,
+#endif
         retrovision_v1_Capability_CAPABILITY_BLE_ACTIVE_SCAN,
     };
     h->capabilities_count = sizeof caps / sizeof caps[0];
@@ -90,10 +106,12 @@ static void fill_status(retrovision_v1_Envelope *e)
     s->probe_ts_us = (uint64_t)esp_timer_get_time();
     s->free_heap_bytes = esp_get_free_heap_size();
     s->min_free_heap_bytes = esp_get_minimum_free_heap_size();
+#if SOC_TEMP_SENSOR_SUPPORTED
     float t = 0;
     if (s_tsens && temperature_sensor_get_celsius(s_tsens, &t) == ESP_OK) {
         s->chip_temp_c = t;
     }
+#endif
     s->current_wifi_channel = rv_wifi_sniffer_channel();
     s->wifi_frames_seen = st.wifi_seen;
     s->wifi_obs_sent = st.wifi_sent;
@@ -167,10 +185,16 @@ static void reboot(bool into_bootloader)
 {
     rv_capture_stop();
     rv_link_flush(pdMS_TO_TICKS(200));
+#if !CONFIG_IDF_TARGET_ESP32
     if (into_bootloader) {
         // Next reset boots the ROM download mode (esptool / web flasher).
         REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
     }
+#else
+    // The classic ESP32 can only enter download mode through the GPIO0 strap:
+    // the host does that with DTR/RTS (auto-reset circuit) after this plain reboot.
+    (void)into_bootloader;
+#endif
     esp_restart();
 }
 
@@ -287,7 +311,7 @@ static void session_task(void *arg)
             break;
         }
         xSemaphoreGive(s_lock);
-        gpio_set_level(LED_GPIO, led ? 0 : 1); // active low
+        gpio_set_level(LED_GPIO, led ? LED_ON : !LED_ON);
     }
 }
 
@@ -302,14 +326,16 @@ void rv_session_init(void)
 
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
-    gpio_set_level(LED_GPIO, 1);
+    gpio_set_level(LED_GPIO, !LED_ON);
 
+#if SOC_TEMP_SENSOR_SUPPORTED
     temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
     if (temperature_sensor_install(&tcfg, &s_tsens) == ESP_OK) {
         temperature_sensor_enable(s_tsens);
     } else {
         s_tsens = NULL;
     }
+#endif
 
     xTaskCreatePinnedToCore(session_task, "rv_session", 4096, NULL, 7, NULL, tskNO_AFFINITY);
 }

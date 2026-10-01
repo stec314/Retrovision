@@ -2,7 +2,9 @@
 
 | Path | What |
 |---|---|
-| `esp32s3/` | ESP-IDF app for the **Seeed Studio XIAO ESP32-S3** |
+| `esp32s3/` | ESP-IDF app for the **Seeed Studio XIAO ESP32-S3** (native USB link) |
+| `esp32/` | ESP-IDF app for **classic ESP32** boards: NodeMCU-32S, ESP32-DevKitC, WROOM-32 (UART link at 921600 baud via CP210x/CH340) |
+| `components/rv_probe/` | The probe firmware itself, shared by both boards |
 | `components/rv_core/` | Portable C core: framing, 802.11 parser, BLE helpers, dedup. Host-tested |
 | `components/rv_proto/` | nanopb code generated from `proto/`. **Do not edit**; run `tools/gen_proto.sh` |
 | `components/nanopb/` | Vendored nanopb runtime (zlib license), version in `VERSION` |
@@ -18,7 +20,14 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash   # XIAO native USB; hold BOOT while plugging in if the port does not show up
 ```
 
-CI (`.github/workflows/firmware.yml`) builds every push and publishes `retrovision-esp32s3-merged.bin` as an artifact. That single file is flashed at offset `0x0`, and it is what the web flasher will serve.
+CI (`.github/workflows/firmware.yml`) builds both boards on every push and publishes `retrovision-esp32s3-merged.bin` (flash at `0x0`) and `retrovision-esp32-merged.bin` (flash at `0x1000`). The app and the web flasher pick the right one from the detected chip.
+
+### Classic ESP32 differences
+- Link is UART0 at **921600 baud** through the board's USB-UART bridge; the IDF console is off so the line carries only protocol frames. The ROM boot banner at 115200 is skipped by the host decoder.
+- Bluetooth 4.2 radio: legacy BLE advertising only (no extended advertising, no Coded PHY).
+- No on-die temperature sensor in ESP-IDF 5 for this chip: `chip_temp_c` stays 0.
+- Download mode only via the GPIO0 strap: the app uses the DTR/RTS auto-reset circuit; if that fails, hold BOOT, press EN/RST, release BOOT.
+- LED on GPIO2 (NodeMCU-32S).
 
 ## How it works
 

@@ -231,7 +231,7 @@ class CollectorService : Service() {
         val name = dev.productName ?: "%04x:%04x".format(dev.vendorId, dev.productId)
         Collector.connection.value = ConnectionUi(Link.CONNECTING, name)
         val port = try {
-            usb.openPort(dev)
+            usb.openPort(dev, UsbAccess.PROBE_BAUD, release = true)
         } catch (e: Exception) {
             null
         }

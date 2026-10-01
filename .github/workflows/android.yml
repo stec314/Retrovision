@@ -47,23 +47,27 @@ jobs:
       - name: Fetch firmware built from this commit
         uses: actions/download-artifact@v4
         with:
-          name: retrovision-esp32s3
+          pattern: retrovision-esp32*
           path: fw
 
       - name: Bundle firmware into the APK
         run: |
           set -e
-          bin=$(find fw -name retrovision-esp32s3-merged.bin | head -1)
-          [ -n "$bin" ] || { echo "::error::merged firmware image not found in artifact"; exit 1; }
           d=android/app/src/main/assets/firmware
           mkdir -p "$d"
-          cp "$bin" "$d/"
+          for t in esp32s3 esp32; do
+            bin=$(find fw -name "retrovision-$t-merged.bin" | head -1)
+            [ -n "$bin" ] || { echo "::error::merged $t firmware image not found in artifacts"; exit 1; }
+            cp "$bin" "$d/"
+          done
           ver="0.1.0-r${{ github.run_number }}"
           python3 - "$ver" <<'PY'
           import json, sys
           json.dump({"version": sys.argv[1], "images": [
               {"id": "esp32s3", "chip": "ESP32-S3", "offset": 0,
-               "file": "retrovision-esp32s3-merged.bin"}]},
+               "file": "retrovision-esp32s3-merged.bin"},
+              {"id": "esp32", "chip": "ESP32", "offset": 4096,
+               "file": "retrovision-esp32-merged.bin"}]},
               open("android/app/src/main/assets/firmware/manifest.json", "w"), indent=2)
           PY
           echo "RV_VERSION_NAME=$ver" >> "$GITHUB_ENV"
@@ -114,15 +118,17 @@ jobs:
         run: |
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           cp "$apk" "Retrovision-${RV_VERSION_NAME}.apk"
-          cp "$(find fw -name retrovision-esp32s3-merged.bin | head -1)" "retrovision-esp32s3-${RV_VERSION_NAME}.bin"
-          sha256sum Retrovision-*.apk retrovision-esp32s3-*.bin | tee SHA256SUMS
+          for t in esp32s3 esp32; do
+            cp "$(find fw -name retrovision-$t-merged.bin | head -1)" "retrovision-$t-${RV_VERSION_NAME}.bin"
+          done
+          sha256sum Retrovision-*.apk retrovision-esp32*.bin | tee SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: retrovision-apk
           path: |
             Retrovision-*.apk
-            retrovision-esp32s3-*.bin
+            retrovision-esp32*.bin
             SHA256SUMS
           if-no-files-found: error
 
@@ -142,7 +148,7 @@ jobs:
           for a in $(gh release view dev-latest --json assets -q '.assets[].name'); do
             gh release delete-asset dev-latest "$a" -y
           done
-          gh release upload dev-latest Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS --clobber
+          gh release upload dev-latest Retrovision-*.apk retrovision-esp32*.bin SHA256SUMS --clobber
           gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
 
       - name: Publish tagged release
@@ -150,4 +156,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --generate-notes Retrovision-*.apk retrovision-esp32*.bin SHA256SUMS

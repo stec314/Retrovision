@@ -1,4 +1,5 @@
-// USB-Serial-JTAG link: framing + protobuf on top of the native USB port.
+// Host link: framing + protobuf over the native USB-Serial-JTAG port (ESP32-S3)
+// or UART0 at 921600 baud through the USB-UART bridge (classic ESP32).
 #pragma once
 
 #include <stdbool.h>

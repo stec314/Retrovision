@@ -21,17 +21,17 @@
 <body>
 <main>
   <h1>Retrovision probe firmware</h1>
-  <p class="lead">Flash the ESP32-S3 probe from your browser over USB. Nothing leaves your computer.</p>
+  <p class="lead">Flash the probe (XIAO ESP32-S3 or classic ESP32 / NodeMCU-32S) from your browser over USB. Nothing leaves your computer.</p>
 
   <section>
     <h2>1. Connect</h2>
-    <p>Plug the board in with a data-capable USB cable. On a XIAO ESP32-S3, use the USB-C port.</p>
+    <p>Plug the board in with a data-capable USB cable. On a XIAO ESP32-S3, use the USB-C port. On a classic ESP32 board you may need the CP210x or CH340 driver, and to hold BOOT while the flasher connects.</p>
     <p id="unsupported" class="warn">This browser has no Web Serial. Use Chrome, Edge or Opera on desktop, or flash from the Retrovision Android app.</p>
   </section>
 
   <section>
     <h2>2. Flash</h2>
-    <esp-web-install-button manifest="manifest-esp32s3.json">
+    <esp-web-install-button manifest="manifest.json">
       <button slot="activate">Install firmware</button>
       <span slot="unsupported">Web Serial is not available in this browser.</span>
       <span slot="not-allowed">Web Serial needs HTTPS.</span>
@@ -48,7 +48,7 @@
 </main>
 <script>
   if (!("serial" in navigator)) document.getElementById("unsupported").style.display = "block";
-  fetch("manifest-esp32s3.json").then(r => r.json()).then(m => {
+  fetch("manifest.json").then(r => r.json()).then(m => {
     document.getElementById("ver").textContent = m.version || "unknown";
   }).catch(() => { document.getElementById("ver").textContent = "unknown"; });
 </script>

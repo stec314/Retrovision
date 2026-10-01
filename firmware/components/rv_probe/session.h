@@ -5,7 +5,13 @@
 
 #define RV_PROTOCOL_MAJOR 1
 #define RV_PROTOCOL_MINOR 0
+#include "sdkconfig.h"
+
+#if CONFIG_IDF_TARGET_ESP32
+#define RV_PROBE_TYPE "dev.retrovision.esp32"
+#else
 #define RV_PROBE_TYPE "dev.retrovision.esp32s3"
+#endif
 
 void rv_session_init(void);
 

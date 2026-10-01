@@ -27,10 +27,11 @@ import kotlinx.coroutines.withContext
 object FlashRunner {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    fun start(ctx: Context, image: FirmwareImage) {
-        if (Collector.flash.value.running) return
+    /** Flashes whichever of [images] matches the chip found on the board. */
+    fun start(ctx: Context, images: List<FirmwareImage>) {
+        if (Collector.flash.value.running || images.isEmpty()) return
         Collector.flash.value = FlashUi(running = true, stage = "Preparazione")
-        scope.launch { run(ctx.applicationContext, image) }
+        scope.launch { run(ctx.applicationContext, images) }
     }
 
     private fun log(msg: String) {
@@ -42,7 +43,7 @@ object FlashRunner {
         Collector.flash.value = Collector.flash.value.copy(stage = stage, done = done, total = total)
     }
 
-    private suspend fun run(ctx: Context, image: FirmwareImage) {
+    private suspend fun run(ctx: Context, images: List<FirmwareImage>) {
         val usb = UsbAccess(ctx)
         try {
             // 1. If a probe is streaming, ask it to reboot into the ROM bootloader first.
@@ -71,7 +72,8 @@ object FlashRunner {
 
                 // (b) Ask the probe firmware to reboot into download mode. This works with no
                 //     handshake (docs/protocol.md §5) and does not depend on DTR/RTS behaving.
-                if (!ok) {
+                //     Only the native-USB chips can do it: a classic ESP32 needs the GPIO0 strap.
+                if (!ok && UsbIds.isNativeUsb(dev)) {
                     log("Riavvio in download mode via firmware")
                     runCatching { port.write(rebootFrame(), 1000) }
                     runCatching { port.close() }
@@ -96,6 +98,10 @@ object FlashRunner {
                     )
                 }
 
+                val chip = flasher.detectChip()
+                val image = images.firstOrNull { it.chip == chip }
+                    ?: throw FlashException("Questa app non contiene firmware per ${chip.label}")
+                log("Scheda: ${chip.label} → firmware ${image.id} @0x%x".format(image.offset))
                 val flashSize = EspFlasher.flashSizeFromHeader(image.data, headerAt = 0)
                     ?: throw FlashException("Immagine firmware non valida (header)")
                 val flasher2 = flasher
