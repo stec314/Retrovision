@@ -110,6 +110,10 @@ jobs:
           gh release view dev-latest >/dev/null 2>&1 || \
             gh release create dev-latest --prerelease --target "$SHA" \
               --title "Dev build (latest)" --notes "placeholder"
+          # Remove assets of older builds so the release only ever holds the latest APK.
+          for a in $(gh release view dev-latest --json assets -q '.assets[].name'); do
+            gh release delete-asset dev-latest "$a" -y
+          done
           gh release upload dev-latest Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS --clobber
           gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
 
