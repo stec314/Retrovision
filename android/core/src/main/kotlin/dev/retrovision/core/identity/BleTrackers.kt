@@ -11,6 +11,7 @@ object AdParser {
     const val COMPLETE_NAME = 0x09
     const val TX_POWER = 0x0A
     const val SERVICE_DATA_16 = 0x16
+    const val APPEARANCE = 0x19
     const val MANUFACTURER = 0xFF
 
     /** Lenient: stops at the first malformed or zero-length structure. */
@@ -39,6 +40,8 @@ class AdvertisementInfo(
     val txPower: Int?,
     /** AD Flags byte, null when absent. */
     val flags: Int?,
+    /** GAP Appearance value (AD type 0x19), null when absent. */
+    val appearance: Int? = null,
 ) {
     companion object {
         fun of(ad: ByteArray): AdvertisementInfo {
@@ -49,6 +52,7 @@ class AdvertisementInfo(
             var name: String? = null
             var tx: Int? = null
             var flags: Int? = null
+            var appearance: Int? = null
             for (s in AdParser.parse(ad)) {
                 val d = s.data
                 when (s.type) {
@@ -71,9 +75,10 @@ class AdvertisementInfo(
                         if (name == null) name = String(d, Charsets.UTF_8)
                     AdParser.TX_POWER -> if (d.size == 1) tx = d[0].toInt()
                     AdParser.FLAGS -> if (d.isNotEmpty()) flags = d[0].toInt() and 0xFF
+                    AdParser.APPEARANCE -> if (d.size >= 2) appearance = (d[0].toInt() and 0xFF) or ((d[1].toInt() and 0xFF) shl 8)
                 }
             }
-            return AdvertisementInfo(mId, mData, uuids, sdata, name, tx, flags)
+            return AdvertisementInfo(mId, mData, uuids, sdata, name, tx, flags, appearance)
         }
     }
 }

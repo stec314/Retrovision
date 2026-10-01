@@ -28,7 +28,7 @@ object Texts {
             EntityKind.WIFI_AP -> (r.ssids.firstOrNull() ?: tr("(hidden network)", "(rete nascosta)")) + " · $addr$v"
             EntityKind.WIFI_CLIENT -> tr("Wi-Fi device", "Dispositivo Wi-Fi") + " $addr$v"
             EntityKind.BLE_TRACKER -> (r.tracker?.label ?: "Tracker") + " · $addr"
-            EntityKind.BLE_DEVICE -> tr("Bluetooth device", "Dispositivo Bluetooth") + " $addr$v"
+            EntityKind.BLE_DEVICE -> (r.bleName?.let { "“${shorten(it)}”" } ?: tr("Bluetooth device", "Dispositivo Bluetooth")) + " $addr$v"
         }
     }
 

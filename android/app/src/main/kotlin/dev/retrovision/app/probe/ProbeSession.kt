@@ -316,6 +316,10 @@ class ProbeSession(
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_BEACON)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_RESP)
+                // Clients joining a network: shows who is actually connecting, not only searching.
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_AUTH)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_ASSOC_REQ)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_REASSOC_REQ)
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),

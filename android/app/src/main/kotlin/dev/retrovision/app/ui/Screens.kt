@@ -158,46 +158,7 @@ private fun phaseText(p: Phase) = when (p) {
 // ---------------------------------------------------------------- Devices
 
 @Composable
-fun DevicesScreen(modifier: Modifier) {
-    val analysis by Collector.analysis.collectAsState()
-    var selected by remember { mutableStateOf<EntityReport?>(null) }
-    val list = analysis?.entities.orEmpty()
-
-    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size})", style = MaterialTheme.typography.titleLarge)
-            OutlinedButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Analyse now", "Analizza ora")) }
-        }
-        if (list.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(list.take(200), key = { it.entityId }) { r ->
-                EntityCard(r) { selected = r }
-            }
-        }
-    }
-    selected?.let { DeviceDialog(it) { selected = null } }
-}
-
-@Composable
-fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
-    Card(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                Text("%.0f%%".format(r.score * 100), color = if (r.alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-            }
-            LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
-            Text(
-                "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
-        }
-    }
-}
-
-@Composable
-private fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
+internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val enrichers = remember { Enrichers(app.prefs, app.db.dao()) }
     var output by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -223,7 +184,7 @@ private fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                 Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
                 Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
-                if (r.addresses.size > 1) Text(r.addresses.joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                DeviceDetails(r)
                 queries.forEach { (label, q) ->
                     enrichers.all().filter { it.supports(q) }.forEach { e ->
                         val ready = enrichers.available(q).any { it.id == e.id }

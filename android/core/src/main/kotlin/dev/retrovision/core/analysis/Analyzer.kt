@@ -1,5 +1,10 @@
 package dev.retrovision.core.analysis
 
+import dev.retrovision.core.model.BleAddressKind
+import dev.retrovision.core.identity.MacTrust
+import dev.retrovision.core.identity.DeviceCategory
+import dev.retrovision.core.identity.DeviceCategories
+import dev.retrovision.core.identity.CategoryHints
 import dev.retrovision.core.identity.AdvertisementInfo
 import dev.retrovision.core.identity.MobileAp
 import dev.retrovision.core.identity.TrackerClassifier
@@ -78,9 +83,25 @@ class EntityReport(
     /** Bluetooth SIG company id from the manufacturer data, if any advertisement carried one. */
     val bleCompanyId: Int?,
     val mobileAp: MobileAp.Kind?,
-    /** Chronological (time, place) track, for maps and KML. */
+    /** Chronological (time, place) track. Used only for analysis, never exported or drawn per device. */
     val track: List<Pair<Long, GeoFix>>,
+    /** Best guess of what the device is (phone, watch, router, tracker...). */
+    val category: DeviceCategory = DeviceCategory.BLE_OTHER,
+    /** Least stable address kind seen: rotating addresses cannot be trusted to identify the device. */
+    val macTrust: MacTrust = MacTrust.STABLE,
+    /** Networks this client asked for by name in probe requests: it is looking for them. */
+    val probedSsids: Set<String> = emptySet(),
+    /** Probe requests heard, and how many of them were wildcard (any network). */
+    val probeRequests: Int = 0,
+    val wildcardProbes: Int = 0,
+    /** Authentication/association requests this client sent: it was actually joining these networks. */
+    val joinAttempts: List<JoinAttempt> = emptyList(),
+    /** BLE local name, if it advertised one. */
+    val bleName: String? = null,
 )
+
+/** A client trying to connect to an access point (auth / (re)association request). */
+data class JoinAttempt(val bssid: MacAddress, val ssid: String, val kind: WifiKind, val count: Int, val lastMs: Long)
 
 class AnalysisResult(
     val nowMs: Long,
@@ -169,6 +190,13 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var mobileSsid = ""
         var isAp = false
         var lastPlace = -1
+        val hints = CategoryHints()
+        var trust = MacTrust.STABLE
+        val probed = LinkedHashSet<String>()
+        var probeReqs = 0
+        var wildcard = 0
+        val joins = LinkedHashMap<MacAddress, JoinAttempt>()
+        fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
         for (es in list) {
             val s = es.sighting
@@ -176,6 +204,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             if (s.rssi != 0) maxRssi = maxOf(maxRssi, s.rssi)
             windowIndex(nowMs - s.timeMs)?.let { windows += it }
 
+            if (s.radio == Radio.WIFI && s.address.isLocallyAdministered) lower(MacTrust.ROTATING)
             s.wifi?.let { w ->
                 val text = w.ssidText
                 when (w.kind) {
@@ -189,13 +218,33 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                             }
                         }
                     }
-                    WifiKind.PROBE_REQ -> if (text.isNotEmpty()) ssids += text
+                    WifiKind.PROBE_REQ -> {
+                        probeReqs += maxOf(1, s.mergedCount)
+                        if (text.isNotEmpty()) { ssids += text; probed += text } else wildcard += maxOf(1, s.mergedCount)
+                    }
+                    WifiKind.AUTH, WifiKind.ASSOC_REQ, WifiKind.REASSOC_REQ -> {
+                        // Frames sent by the client (transmitter is not the AP itself).
+                        val ap = w.bssid
+                        if (ap != null && ap != s.address) {
+                            val prev = joins[ap]
+                            val ssid = text.ifEmpty { prev?.ssid.orEmpty() }
+                            val kind = if (w.kind == WifiKind.AUTH && prev != null) prev.kind else w.kind
+                            joins[ap] = JoinAttempt(ap, ssid, kind, (prev?.count ?: 0) + 1, maxOf(prev?.lastMs ?: 0L, s.timeMs))
+                        }
+                    }
                     else -> Unit
                 }
             }
             s.ble?.let { b ->
+                when (b.addressKind) {
+                    BleAddressKind.RANDOM_RESOLVABLE, BleAddressKind.RANDOM_NON_RESOLVABLE -> lower(MacTrust.ROTATING)
+                    BleAddressKind.RANDOM_STATIC -> lower(MacTrust.UNTIL_REBOOT)
+                    else -> Unit
+                }
+                if (b.advType == BleAdvType.SCAN_RSP) hints.add(AdvertisementInfo.of(b.advData))
                 if (b.advType != BleAdvType.SCAN_RSP) {
                     val info = AdvertisementInfo.of(b.advData)
+                    hints.add(info)
                     if (companyId == null) companyId = info.manufacturerId
                     TrackerClassifier.classify(info)?.let { m ->
                         if (tracker == null || TrackerClassifier.isTag(m.kind)) tracker = m.kind
@@ -288,6 +337,17 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             bleCompanyId = companyId,
             mobileAp = mobileAp,
             track = track,
+            category = when (kind) {
+                EntityKind.WIFI_AP -> DeviceCategories.forWifiAp(mobileAp)
+                EntityKind.WIFI_CLIENT -> DeviceCategory.WIFI_CLIENT
+                else -> DeviceCategories.forBle(tk, tk != null && TrackerClassifier.isTag(tk), hints)
+            },
+            macTrust = trust,
+            probedSsids = probed,
+            probeRequests = probeReqs,
+            wildcardProbes = wildcard,
+            joinAttempts = joins.values.sortedByDescending { it.lastMs },
+            bleName = hints.name,
         )
     }
 
