@@ -20,6 +20,8 @@ object MapColors {
     val routine = Color(0xFF7CF29A)
     val me = Color(0xFFFF5C7A)
     val label = Color(0xFF8FA3B8)
+    val stay = Color(0xFFFFC857)
+    val select = Color(0xFFFFFFFF)
 }
 
 private val Dark = darkColorScheme(
