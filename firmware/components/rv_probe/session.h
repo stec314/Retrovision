@@ -4,7 +4,7 @@
 #include "retrovision.pb.h"
 
 #define RV_PROTOCOL_MAJOR 1
-#define RV_PROTOCOL_MINOR 0
+#define RV_PROTOCOL_MINOR 1
 #include "sdkconfig.h"
 
 #if CONFIG_IDF_TARGET_ESP32

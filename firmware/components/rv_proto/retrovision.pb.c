@@ -39,6 +39,9 @@ PB_BIND(retrovision_v1_CustomObservation, retrovision_v1_CustomObservation, 2)
 PB_BIND(retrovision_v1_Command, retrovision_v1_Command, 2)
 
 
+PB_BIND(retrovision_v1_SetLink, retrovision_v1_SetLink, AUTO)
+
+
 PB_BIND(retrovision_v1_GetStatus, retrovision_v1_GetStatus, AUTO)
 
 
@@ -67,6 +70,8 @@ PB_BIND(retrovision_v1_Status, retrovision_v1_Status, AUTO)
 
 
 PB_BIND(retrovision_v1_Log, retrovision_v1_Log, AUTO)
+
+
 
 
 

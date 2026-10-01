@@ -331,7 +331,7 @@ class ProbeSession(
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 0
+        const val PROTOCOL_MINOR = 1
     }
 }
 

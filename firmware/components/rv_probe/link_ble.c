@@ -1,0 +1,267 @@
+// BLE transport: GATT server with the Nordic UART Service layout.
+//   service 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+//   RX 6E400002 (host -> probe, write / write without response, encrypted link required)
+//   TX 6E400003 (probe -> host, notify)
+// Frames are a byte stream: COBS delimiters make notification boundaries irrelevant.
+// Security: LE Secure Connections "just works" bonding encrypts the link against passive
+// sniffing; the HMAC challenge in Hello/HelloAck (pairing key) decides who gets data.
+#include <string.h>
+
+#include "esp_log.h"
+#include "freertos/task.h"
+#include "host/ble_hs.h"
+#include "host/ble_uuid.h"
+#include "link.h"
+#include "link_cfg.h"
+#include "services/gap/ble_svc_gap.h"
+#include "services/gatt/ble_svc_gatt.h"
+
+static const char *TAG = "link_ble";
+
+static const ble_uuid128_t NUS_SVC =
+    BLE_UUID128_INIT(0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, 0x93, 0xf3, 0xa3, 0xb5, 0x01, 0x00, 0x40, 0x6e);
+static const ble_uuid128_t NUS_RX =
+    BLE_UUID128_INIT(0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, 0x93, 0xf3, 0xa3, 0xb5, 0x02, 0x00, 0x40, 0x6e);
+static const ble_uuid128_t NUS_TX =
+    BLE_UUID128_INIT(0x9e, 0xca, 0xdc, 0x24, 0x0e, 0xe5, 0xa9, 0xe0, 0x93, 0xf3, 0xa3, 0xb5, 0x03, 0x00, 0x40, 0x6e);
+
+static uint16_t s_tx_handle;
+static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
+static volatile bool s_subscribed;
+static volatile uint16_t s_mtu = 23;
+static uint8_t s_own_addr_type;
+
+static int gap_event(struct ble_gap_event *ev, void *arg);
+static void advertise(void);
+
+static int rx_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    uint8_t buf[256];
+    uint16_t total = OS_MBUF_PKTLEN(ctxt->om);
+    uint16_t off = 0;
+    while (off < total) {
+        uint16_t n = total - off > sizeof buf ? sizeof buf : total - off;
+        if (os_mbuf_copydata(ctxt->om, off, n, buf) != 0) {
+            return BLE_ATT_ERR_UNLIKELY;
+        }
+        rv_link_feed(RV_T_BLE, buf, n);
+        off += n;
+    }
+    return 0;
+}
+
+static int tx_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
+{
+    return BLE_ATT_ERR_READ_NOT_PERMITTED;
+}
+
+static const struct ble_gatt_svc_def s_svcs[] = {
+    {
+        .type = BLE_GATT_SVC_TYPE_PRIMARY,
+        .uuid = &NUS_SVC.u,
+        .characteristics = (struct ble_gatt_chr_def[]){
+            {
+                .uuid = &NUS_RX.u,
+                .access_cb = rx_access,
+                .flags = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
+            },
+            {
+                .uuid = &NUS_TX.u,
+                .access_cb = tx_access,
+                .val_handle = &s_tx_handle,
+                .flags = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {0},
+        },
+    },
+    {0},
+};
+
+static bool ble_write(const uint8_t *data, size_t len, TickType_t timeout)
+{
+    TickType_t start = xTaskGetTickCount();
+    size_t off = 0;
+    while (off < len) {
+        uint16_t conn = s_conn;
+        if (conn == BLE_HS_CONN_HANDLE_NONE || !s_subscribed) {
+            return false;
+        }
+        size_t chunk = s_mtu > 3 ? s_mtu - 3 : 20;
+        if (chunk > len - off) {
+            chunk = len - off;
+        }
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(data + off, chunk);
+        int rc = om ? ble_gatts_notify_custom(conn, s_tx_handle, om) : BLE_HS_ENOMEM;
+        if (rc == 0) {
+            off += chunk;
+            continue;
+        }
+        if (rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) {
+            ESP_LOGW(TAG, "notify failed: %d", rc);
+            return false;
+        }
+        // Controller buffers full: wait for them to drain.
+        if (xTaskGetTickCount() - start > timeout + pdMS_TO_TICKS(200)) {
+            return false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    return true;
+}
+
+static bool ble_connected(void)
+{
+    return s_conn != BLE_HS_CONN_HANDLE_NONE && s_subscribed;
+}
+
+static void ble_flush(TickType_t timeout)
+{
+    vTaskDelay(pdMS_TO_TICKS(100));
+}
+
+static const rv_transport_ops_t s_ops = {ble_write, ble_connected, ble_flush};
+
+void rv_link_ble_register_gatt(void)
+{
+    // LE Secure Connections, no I/O ("just works"), bonded so the phone reconnects silently.
+    ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_mitm = 0;
+    ble_hs_cfg.sm_sc = 1;
+    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+
+    ble_svc_gap_init();
+    ble_svc_gatt_init();
+    ESP_ERROR_CHECK(ble_gatts_count_cfg(s_svcs));
+    ESP_ERROR_CHECK(ble_gatts_add_svcs(s_svcs));
+    char name[32];
+    snprintf(name, sizeof name, "RV-%s", rv_link_cfg()->name);
+    ble_svc_gap_device_name_set(name);
+    rv_link_register(RV_T_BLE, &s_ops);
+}
+
+static void advertise(void)
+{
+    struct ble_hs_adv_fields f;
+    memset(&f, 0, sizeof f);
+    f.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    f.uuids128 = &NUS_SVC;
+    f.num_uuids128 = 1;
+    f.uuids128_is_complete = 1;
+
+    struct ble_hs_adv_fields rsp;
+    memset(&rsp, 0, sizeof rsp);
+    const char *name = ble_svc_gap_device_name();
+    rsp.name = (const uint8_t *)name;
+    rsp.name_len = strlen(name) > 29 ? 29 : strlen(name);
+    rsp.name_is_complete = strlen(name) <= 29;
+
+#if MYNEWT_VAL(BLE_EXT_ADV)
+    // Extended-advertising builds must use the ext API; a legacy PDU keeps old phones happy.
+    struct ble_gap_ext_adv_params p;
+    memset(&p, 0, sizeof p);
+    p.connectable = 1;
+    p.scannable = 1;
+    p.legacy_pdu = 1;
+    p.own_addr_type = s_own_addr_type;
+    p.primary_phy = BLE_HCI_LE_PHY_1M;
+    p.secondary_phy = BLE_HCI_LE_PHY_1M;
+    p.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
+    p.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
+    p.sid = 0;
+    if (ble_gap_ext_adv_active(0)) {
+        return;
+    }
+    int rc = ble_gap_ext_adv_configure(0, &p, NULL, gap_event, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv configure: %d", rc);
+        return;
+    }
+    struct os_mbuf *data = os_msys_get_pkthdr(BLE_HS_ADV_MAX_SZ, 0);
+    struct os_mbuf *scan = os_msys_get_pkthdr(BLE_HS_ADV_MAX_SZ, 0);
+    if (!data || !scan || ble_hs_adv_set_fields_mbuf(&f, data) != 0 || ble_hs_adv_set_fields_mbuf(&rsp, scan) != 0) {
+        ESP_LOGE(TAG, "adv data");
+        return;
+    }
+    ble_gap_ext_adv_set_data(0, data);
+    ble_gap_ext_adv_rsp_set_data(0, scan);
+    rc = ble_gap_ext_adv_start(0, 0, 0);
+#else
+    if (ble_gap_adv_active()) {
+        return;
+    }
+    ble_gap_adv_set_fields(&f);
+    ble_gap_adv_rsp_set_fields(&rsp);
+    struct ble_gap_adv_params p;
+    memset(&p, 0, sizeof p);
+    p.conn_mode = BLE_GAP_CONN_MODE_UND;
+    p.disc_mode = BLE_GAP_DISC_MODE_GEN;
+    p.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
+    p.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
+    int rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
+#endif
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGE(TAG, "adv start: %d", rc);
+    } else {
+        ESP_LOGI(TAG, "advertising as %s", name);
+    }
+}
+
+static int gap_event(struct ble_gap_event *ev, void *arg)
+{
+    switch (ev->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        if (ev->connect.status == 0) {
+            s_conn = ev->connect.conn_handle;
+            s_subscribed = false;
+            s_mtu = 23;
+            rv_link_reset_rx(RV_T_BLE);
+            ESP_LOGI(TAG, "connected");
+        } else {
+            advertise();
+        }
+        return 0;
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
+        s_conn = BLE_HS_CONN_HANDLE_NONE;
+        s_subscribed = false;
+        rv_link_reset_rx(RV_T_BLE);
+        advertise();
+        return 0;
+    case BLE_GAP_EVENT_ADV_COMPLETE:
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE) {
+            advertise();
+        }
+        return 0;
+    case BLE_GAP_EVENT_SUBSCRIBE:
+        if (ev->subscribe.attr_handle == s_tx_handle) {
+            s_subscribed = ev->subscribe.cur_notify;
+        }
+        return 0;
+    case BLE_GAP_EVENT_MTU:
+        s_mtu = ev->mtu.value;
+        return 0;
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        // The phone forgot the bond (e.g. "forget device"): drop ours and pair again.
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(ev->repeat_pairing.conn_handle, &d) == 0) {
+            ble_store_util_delete_peer(&d.peer_id_addr);
+        }
+        return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
+    default:
+        return 0;
+    }
+}
+
+void rv_link_ble_on_sync(void)
+{
+    if (ble_hs_id_infer_auto(0, &s_own_addr_type) != 0) {
+        s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
+    }
+    advertise();
+}
