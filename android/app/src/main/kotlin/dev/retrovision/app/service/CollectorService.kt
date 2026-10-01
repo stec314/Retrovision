@@ -27,6 +27,8 @@ import dev.retrovision.app.RetrovisionApp
 import dev.retrovision.app.data.FixRow
 import dev.retrovision.app.data.SightingRow
 import dev.retrovision.app.data.toFix
+import dev.retrovision.app.data.toModel
+import dev.retrovision.app.data.FamiliarRow
 import dev.retrovision.app.data.toRow
 import dev.retrovision.app.data.toSighting
 import dev.retrovision.app.probe.ProbeSession
@@ -175,7 +177,7 @@ class CollectorService : Service() {
         // A fix worse than 150 m would smear places together; ignore it.
         if (loc.hasAccuracy() && loc.accuracy > 150f) return
         val now = System.currentTimeMillis()
-        if (now - lastFixWritten < 900) return
+        if (now - lastFixWritten < 5000) return
         lastFixWritten = now
         val fix = dev.retrovision.core.model.GeoFix(
             now, loc.latitude, loc.longitude,
@@ -321,6 +323,7 @@ class CollectorService : Service() {
             rows.map { EntitySighting(it.entityId, it.toSighting()) },
             fixes,
             IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet()),
+            familiar = dao.familiarNow().map { it.toModel() },
         )
         Collector.analysis.value = result
 
@@ -334,8 +337,30 @@ class CollectorService : Service() {
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
         dao.pruneSightings(cutoff)
-        dao.pruneFixes(cutoff)
+        // Fixes are kept longer than sightings: learning routine places needs weeks, not days.
+        dao.pruneFixes(minOf(cutoff, now - 30L * 24 * 3600_000L))
+        if (now - lastLearn > 15 * 60_000L) {
+            lastLearn = now
+            learnFamiliar(now)
+        }
         synchronized(resolver) { resolver.prune(now) }
+    }
+
+    private var lastLearn = 0L
+
+    private suspend fun learnFamiliar(now: Long) {
+        val dao = app.db.dao()
+        val fixes = dao.fixesSampled(now - 30L * 24 * 3600_000L).map { it.toFix() }
+        val known = dao.familiarNow().map { it.toModel() }
+        val offset = java.util.TimeZone.getDefault().getOffset(now).toLong()
+        for (s in dev.retrovision.core.analysis.FamiliarLearner.suggest(fixes, known, offset)) {
+            dao.addFamiliar(
+                FamiliarRow(
+                    lat = s.lat, lon = s.lon, radiusM = 150.0, label = "", state = 0,
+                    kind = s.kind.ordinal, createdMs = now,
+                ),
+            )
+        }
     }
 
     private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {

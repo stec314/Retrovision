@@ -11,6 +11,7 @@ class RetrovisionApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        Thread { dev.retrovision.app.enrich.Vendors.load(this) }.start()
     }
 
     companion object {

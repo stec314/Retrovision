@@ -399,7 +399,7 @@ fun SettingsScreen(modifier: Modifier) {
                 TextButton(onClick = {
                     scope.launch {
                         val dao = app.db.dao()
-                        dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments()
+                        dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar()
                         Collector.analysis.value = null
                         wipe = false
                     }

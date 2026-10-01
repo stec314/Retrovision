@@ -1,5 +1,6 @@
 package dev.retrovision.app.ui
 
+import dev.retrovision.app.enrich.Vendors
 import dev.retrovision.core.analysis.EntityKind
 import dev.retrovision.core.analysis.EntityReport
 import dev.retrovision.core.analysis.Reason
@@ -18,16 +19,31 @@ object Texts {
     fun cannotOpenPort() = tr("Cannot open the serial port", "Impossibile aprire la porta seriale")
     fun alertTitle(label: String) = tr("Seen with you again: $label", "Ti segue? $label")
 
-    fun entityLabel(r: EntityReport): String = when (r.kind) {
-        EntityKind.WIFI_AP -> (r.ssids.firstOrNull() ?: tr("(hidden network)", "(rete nascosta)")) +
-            " · " + r.addresses.first()
-        EntityKind.WIFI_CLIENT -> tr("Wi-Fi device", "Dispositivo Wi-Fi") + " " + r.addresses.first()
-        EntityKind.BLE_TRACKER -> (r.tracker?.label ?: "Tracker") + " · " + r.addresses.first()
-        EntityKind.BLE_DEVICE -> tr("Bluetooth device", "Dispositivo Bluetooth") + " " + r.addresses.first()
+    fun entityLabel(r: EntityReport): String {
+        val addr = r.addresses.first()
+        val vendor = (r.bleCompanyId?.let { Vendors.forCompany(it) } ?: Vendors.forMac(addr))
+            ?.let { shorten(it) }
+        val v = if (vendor != null) " · $vendor" else ""
+        return when (r.kind) {
+            EntityKind.WIFI_AP -> (r.ssids.firstOrNull() ?: tr("(hidden network)", "(rete nascosta)")) + " · $addr$v"
+            EntityKind.WIFI_CLIENT -> tr("Wi-Fi device", "Dispositivo Wi-Fi") + " $addr$v"
+            EntityKind.BLE_TRACKER -> (r.tracker?.label ?: "Tracker") + " · $addr"
+            EntityKind.BLE_DEVICE -> tr("Bluetooth device", "Dispositivo Bluetooth") + " $addr$v"
+        }
     }
+
+    private fun shorten(s: String) = if (s.length > 28) s.take(27) + "…" else s
 
     fun reason(r: Reason): String = when (r) {
         is Reason.SeenAtPlaces -> tr("Seen at ${r.places} different places", "Visto in ${r.places} luoghi diversi")
+        is Reason.FamiliarDiscount -> tr(
+            "${r.familiarPlaces} of those are places you are at all the time (counted for less)",
+            "${r.familiarPlaces} di questi sono luoghi dove sei sempre (contano meno)",
+        )
+        is Reason.MovedWithYou -> tr(
+            "Heard continuously at a steady strength while you moved ${r.meters.toInt()} m",
+            "Sentito di continuo, con segnale stabile, mentre ti spostavi di ${r.meters.toInt()} m",
+        )
         is Reason.PresentInWindows -> tr(
             "Present in ${r.windows} of ${r.of} time windows",
             "Presente in ${r.windows} finestre temporali su ${r.of}",

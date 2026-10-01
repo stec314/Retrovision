@@ -62,6 +62,20 @@ class EnrichRow(
     val fetchedMs: Long,
 )
 
+@Entity(tableName = "familiar_places")
+class FamiliarRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val lat: Double,
+    val lon: Double,
+    val radiusM: Double,
+    val label: String,
+    /** FamiliarPlace.State ordinal */
+    val state: Int,
+    /** FamiliarPlace.Kind ordinal */
+    val kind: Int,
+    val createdMs: Long,
+)
+
 @Dao
 interface AppDao {
     @Insert
@@ -103,6 +117,31 @@ interface AppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun putEnrichment(row: EnrichRow)
 
+    /** Roughly one fix every 30 s, for learning routine places over weeks without loading every row. */
+    @Query("SELECT * FROM fixes WHERE timeMs >= :from AND (timeMs / 5000) % 6 = 0 ORDER BY timeMs")
+    suspend fun fixesSampled(from: Long): List<FixRow>
+
+    @Query("SELECT * FROM familiar_places ORDER BY createdMs DESC")
+    fun familiarPlaces(): Flow<List<FamiliarRow>>
+
+    @Query("SELECT * FROM familiar_places")
+    suspend fun familiarNow(): List<FamiliarRow>
+
+    @Insert
+    suspend fun addFamiliar(row: FamiliarRow): Long
+
+    @Query("UPDATE familiar_places SET state = :state WHERE id = :id")
+    suspend fun setFamiliarState(id: Long, state: Int)
+
+    @Query("UPDATE familiar_places SET label = :label WHERE id = :id")
+    suspend fun setFamiliarLabel(id: Long, label: String)
+
+    @Query("DELETE FROM familiar_places WHERE id = :id")
+    suspend fun deleteFamiliar(id: Long)
+
+    @Query("DELETE FROM familiar_places")
+    suspend fun wipeFamiliar()
+
     @Query("DELETE FROM sightings")
     suspend fun wipeSightings()
 
@@ -114,8 +153,8 @@ interface AppDao {
 }
 
 @Database(
-    entities = [SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class],
-    version = 1,
+    entities = [SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class],
+    version = 2,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -123,6 +162,17 @@ abstract class Db : RoomDatabase() {
 
     companion object {
         private const val NAME = "retrovision.db"
+
+        val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `familiar_places` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `lat` REAL NOT NULL, " +
+                        "`lon` REAL NOT NULL, `radiusM` REAL NOT NULL, `label` TEXT NOT NULL, " +
+                        "`state` INTEGER NOT NULL, `kind` INTEGER NOT NULL, `createdMs` INTEGER NOT NULL)",
+                )
+            }
+        }
 
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
@@ -136,6 +186,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
+                .addMigrations(MIGRATION_1_2)
                 .build()
         }
     }

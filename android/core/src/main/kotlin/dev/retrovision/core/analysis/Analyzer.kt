@@ -1,5 +1,6 @@
 package dev.retrovision.core.analysis
 
+import dev.retrovision.core.identity.AdvertisementInfo
 import dev.retrovision.core.identity.MobileAp
 import dev.retrovision.core.identity.TrackerClassifier
 import dev.retrovision.core.identity.TrackerKind
@@ -23,6 +24,8 @@ data class AnalysisConfig(
     /** Span and travel at which the respective sub-scores saturate. */
     val spanSaturationMs: Long = 30 * 60_000L,
     val travelSaturationM: Double = 2_000.0,
+    /** A place you are at all the time counts this much, relative to an unfamiliar one. */
+    val familiarWeight: Double = 0.3,
 )
 
 /** Things the user told us to ignore: own devices, baseline, own networks. */
@@ -39,6 +42,10 @@ class EntitySighting(val entityId: String, val sighting: Sighting)
 /** Why an entity scored what it scored. Rendered (and localised) by the UI. */
 sealed class Reason {
     data class SeenAtPlaces(val places: Int) : Reason()
+    /** Some of those places are ones you are at all the time (home, work), so they count for less. */
+    /** Seen continuously, at a steady signal strength, while you travelled [meters]. A fixed neighbour cannot do that. */
+    data class MovedWithYou(val meters: Double, val rssiStdDb: Double) : Reason()
+    data class FamiliarDiscount(val familiarPlaces: Int, val unfamiliarPlaces: Int) : Reason()
     data class PresentInWindows(val windows: Int, val of: Int) : Reason()
     data class SeenFor(val durationMs: Long) : Reason()
     data class TravelledWithYou(val meters: Double) : Reason()
@@ -61,11 +68,15 @@ class EntityReport(
     val firstSeenMs: Long,
     val lastSeenMs: Long,
     val sightings: Int,
+    /** Distinct minutes in which it was heard at least once. */
+    val activeMinutes: Int,
     val maxRssi: Int,
     val addresses: Set<MacAddress>,
     /** SSIDs this client asked for (CYT probe analysis) or the AP's own SSID. */
     val ssids: Set<String>,
     val tracker: TrackerKind?,
+    /** Bluetooth SIG company id from the manufacturer data, if any advertisement carried one. */
+    val bleCompanyId: Int?,
     val mobileAp: MobileAp.Kind?,
     /** Chronological (time, place) track, for maps and KML. */
     val track: List<Pair<Long, GeoFix>>,
@@ -97,12 +108,15 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         sightings: List<EntitySighting>,
         fixes: List<GeoFix>,
         ignore: IgnoreList = IgnoreList(),
+        familiar: List<FamiliarPlace> = emptyList(),
     ): AnalysisResult {
         val from = nowMs - config.lookbackMs
         val timeline = FixTimeline(fixes.filter { it.timeMs in from..nowMs }, config.fixMaxGapMs)
         val clusterer = PlaceClusterer(config.placeRadiusM)
         val placeOfFix = HashMap<GeoFix, Place>()
         for (f in timeline.fixes) placeOfFix[f] = clusterer.assign(f)
+        val confirmed = familiar.filter { it.state == FamiliarPlace.State.CONFIRMED }
+        val familiarIds = clusterer.places.filter { p -> confirmed.any { it.contains(p.lat, p.lon) } }.map { it.id }.toSet()
 
         val byEntity = sightings.asSequence()
             .filter { it.sighting.timeMs in from..nowMs }
@@ -115,7 +129,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 ignored++
                 continue
             }
-            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix)
+            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds)
         }
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         return AnalysisResult(nowMs, clusterer.places, reports, ignored)
@@ -138,6 +152,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         nowMs: Long,
         timeline: FixTimeline,
         placeOfFix: Map<GeoFix, Place>,
+        familiarIds: Set<Int>,
     ): EntityReport {
         val first = list.first().sighting.timeMs
         val last = list.last().sighting.timeMs
@@ -148,6 +163,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val track = ArrayList<Pair<Long, GeoFix>>()
         var maxRssi = Int.MIN_VALUE
         var tracker: TrackerKind? = null
+        var companyId: Int? = null
         var separated: Boolean? = null
         var mobileAp: MobileAp.Kind? = null
         var mobileSsid = ""
@@ -179,7 +195,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             }
             s.ble?.let { b ->
                 if (b.advType != BleAdvType.SCAN_RSP) {
-                    TrackerClassifier.classify(b.advData)?.let { m ->
+                    val info = AdvertisementInfo.of(b.advData)
+                    if (companyId == null) companyId = info.manufacturerId
+                    TrackerClassifier.classify(info)?.let { m ->
                         if (tracker == null || TrackerClassifier.isTag(m.kind)) tracker = m.kind
                         if (m.separated == true) separated = true
                         else if (m.separated == false && separated == null) separated = false
@@ -197,6 +215,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             }
         }
 
+        val activeMinutes = list.map { it.sighting.timeMs / 60_000L }.toSet().size
+        val coMove = coMovement(list, timeline)
+
         val placeFixes = track.map { it.second }
         var travel = 0.0
         for (i in placeFixes.indices) for (j in i + 1 until placeFixes.size) {
@@ -204,7 +225,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         }
 
         val nPlaces = places.size
-        val sPlaces = ((nPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
+        val nFamiliar = places.count { it in familiarIds }
+        val nUnfamiliar = nPlaces - nFamiliar
+        // Familiar places still count (a stalker knows where you live) but for less.
+        val effPlaces = nUnfamiliar + config.familiarWeight * nFamiliar
+        val sPlaces = ((effPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
         val sWindows = windows.size.toDouble() / config.windowMinutes.size
         val sSpan = ((last - first).toDouble() / config.spanSaturationMs).coerceIn(0.0, 1.0)
         val sTravel = (travel / config.travelSaturationM).coerceIn(0.0, 1.0)
@@ -212,6 +237,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
 
         val reasons = ArrayList<Reason>()
         if (nPlaces >= 2) reasons += Reason.SeenAtPlaces(nPlaces)
+        if (nFamiliar > 0 && nPlaces >= 2) reasons += Reason.FamiliarDiscount(nFamiliar, nUnfamiliar)
         if (windows.size >= 2) reasons += Reason.PresentInWindows(windows.size, config.windowMinutes.size)
         if (last - first >= 5 * 60_000L) reasons += Reason.SeenFor(last - first)
         if (travel >= 200) reasons += Reason.TravelledWithYou(travel)
@@ -219,16 +245,20 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val tk = tracker
         if (tk != null) {
             reasons += Reason.Tracker(tk, separated)
-            if (nPlaces >= 2 && TrackerClassifier.isTag(tk)) score += if (separated == true) 0.20 else 0.10
+            if (effPlaces >= 2 && TrackerClassifier.isTag(tk)) score += if (separated == true) 0.20 else 0.10
         }
         val ap = mobileAp
         if (ap != null && ap != MobileAp.Kind.WIFI_DIRECT) {
             reasons += Reason.MovingAccessPoint(ap, mobileSsid)
-            if (nPlaces >= 2) score += 0.10
+            if (effPlaces >= 2) score += 0.10
+        }
+        if (coMove != null) {
+            reasons += Reason.MovedWithYou(coMove.first, coMove.second)
+            score += 0.15
         }
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
 
-        if (nPlaces < 2) score = minOf(score, 0.3)
+        if (effPlaces < 2) score = minOf(score, 0.3)
         score = score.coerceIn(0.0, 1.0)
 
         val radio = list.first().sighting.radio
@@ -243,20 +273,54 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             entityId = id,
             kind = kind,
             score = score,
-            alert = score >= config.alertScore && nPlaces >= config.alertMinPlaces,
+            alert = score >= config.alertScore && effPlaces >= config.alertMinPlaces - 1e-9,
             reasons = reasons,
             placeIds = places,
             windows = windows,
             firstSeenMs = first,
             lastSeenMs = last,
             sightings = list.sumOf { maxOf(1, it.sighting.mergedCount) },
+            activeMinutes = activeMinutes,
             maxRssi = if (maxRssi == Int.MIN_VALUE) 0 else maxRssi,
             addresses = addresses,
             ssids = ssids,
             tracker = tk,
+            bleCompanyId = companyId,
             mobileAp = mobileAp,
             track = track,
         )
+    }
+
+    /**
+     * Longest stretch in which the entity was heard without a gap of more than [COMOVE_GAP_MS]
+     * while the phone moved at least [COMOVE_MIN_M], with a steady signal. Returns
+     * (metres travelled, RSSI standard deviation) or null.
+     */
+    private fun coMovement(list: List<EntitySighting>, timeline: FixTimeline): Pair<Double, Double>? {
+        var best: Pair<Double, Double>? = null
+        var start = 0
+        for (i in 1..list.size) {
+            val endOfSegment = i == list.size ||
+                list[i].sighting.timeMs - list[i - 1].sighting.timeMs > COMOVE_GAP_MS
+            if (!endOfSegment) continue
+            val seg = list.subList(start, i)
+            start = i
+            if (seg.size < 4) continue
+            val t0 = seg.first().sighting.timeMs
+            val t1 = seg.last().sighting.timeMs
+            if (t1 - t0 < 120_000) continue
+            val a = timeline.nearest(t0) ?: continue
+            val b = timeline.nearest(t1) ?: continue
+            val d = Geo.distanceM(a, b)
+            if (d < COMOVE_MIN_M) continue
+            val rssi = seg.map { it.sighting.rssi }.filter { it != 0 }
+            if (rssi.size < 4) continue
+            val mean = rssi.average()
+            val std = Math.sqrt(rssi.sumOf { (it - mean) * (it - mean) } / rssi.size)
+            if (mean < -90 || std > COMOVE_MAX_STD) continue
+            if (best == null || d > best.first) best = d to std
+        }
+        return best
     }
 
     /** Index of the CYT window containing `ageMs`, or null if older than the last one. */
@@ -265,5 +329,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val minutes = ageMs / 60_000.0
         val i = config.windowMinutes.indexOfFirst { minutes < it }
         return if (i >= 0) i else null
+    }
+
+    private companion object {
+        const val COMOVE_GAP_MS = 90_000L
+        const val COMOVE_MIN_M = 400.0
+        const val COMOVE_MAX_STD = 7.5
     }
 }

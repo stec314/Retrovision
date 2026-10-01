@@ -38,6 +38,7 @@ private fun AppRoot() {
     val tabs = listOf(
         "📡" to Texts.tr("Status", "Stato"),
         "🔎" to Texts.tr("Devices", "Dispositivi"),
+        "📍" to Texts.tr("Places", "Luoghi"),
         "🔌" to Texts.tr("Probe", "Sonda"),
         "⚙" to Texts.tr("Settings", "Impostazioni"),
     )
@@ -59,7 +60,8 @@ private fun AppRoot() {
         when (tab) {
             0 -> StatusScreen(m)
             1 -> DevicesScreen(m)
-            2 -> ProbeScreen(m)
+            2 -> PlacesScreen(m)
+            3 -> ProbeScreen(m)
             else -> SettingsScreen(m)
         }
     }

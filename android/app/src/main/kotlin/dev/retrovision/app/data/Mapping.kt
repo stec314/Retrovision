@@ -52,3 +52,9 @@ fun SightingRow.toSighting(): Sighting {
 }
 
 fun FixRow.toFix() = GeoFix(timeMs, lat, lon, accuracyM, if (speedMps >= 0) speedMps else null)
+
+fun FamiliarRow.toModel() = dev.retrovision.core.analysis.FamiliarPlace(
+    id, lat, lon, radiusM, label,
+    dev.retrovision.core.analysis.FamiliarPlace.State.entries[state.coerceIn(0, 2)],
+    dev.retrovision.core.analysis.FamiliarPlace.Kind.entries[kind.coerceIn(0, 1)],
+)
