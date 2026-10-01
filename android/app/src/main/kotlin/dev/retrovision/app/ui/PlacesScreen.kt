@@ -1,6 +1,11 @@
 package dev.retrovision.app.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -154,14 +159,14 @@ private fun setState(scope: kotlinx.coroutines.CoroutineScope, r: FamiliarRow, s
     }
 }
 
-/** Tile-less map: your own track, routine places and current position. No network, no other devices. */
+/** Dark, tile-less map: your own track, routine places and current position. No network, no other devices. */
 @Composable
 private fun TrackMap(fixes: List<GeoFix>, routine: List<FamiliarPlace>, here: GeoFix?) {
-    val track = MaterialTheme.colorScheme.primary
-    val ring = MaterialTheme.colorScheme.tertiary
-    val grid = MaterialTheme.colorScheme.outline
-    val me = MaterialTheme.colorScheme.error
-    Canvas(Modifier.fillMaxWidth().height(260.dp)) {
+    Canvas(
+        Modifier.fillMaxWidth().height(280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MapColors.background),
+    ) {
         val all = fixes.map { it.lat to it.lon } + routine.map { it.lat to it.lon } + listOfNotNull(here?.let { it.lat to it.lon })
         if (all.isEmpty()) return@Canvas
         val lat0 = all.map { it.first }.average()
@@ -179,19 +184,44 @@ private fun TrackMap(fixes: List<GeoFix>, routine: List<FamiliarPlace>, here: Ge
         fun px(lon: Double) = size.width / 2 + ((x(lon) - cx) * scale).toFloat()
         fun py(lat: Double) = size.height / 2 - ((y(lat) - cy) * scale).toFloat()
 
-        drawRect(grid, style = Stroke(1f))
+        // metric grid: 100 m minor lines, every 5th is major
+        val stepM = 100.0
+        val stepPx = (stepM * scale).toFloat()
+        if (stepPx > 12f) {
+            val ox = size.width / 2 - (cx * scale).toFloat()
+            val oy = size.height / 2 + (cy * scale).toFloat()
+            var i = -((ox / stepPx).toInt() + 1)
+            while (ox + i * stepPx < size.width) {
+                val gx = ox + i * stepPx
+                drawLine(if (i % 5 == 0) MapColors.gridMajor else MapColors.grid, Offset(gx, 0f), Offset(gx, size.height), 1f)
+                i++
+            }
+            var j = -((oy / stepPx).toInt() + 1)
+            while (oy + j * stepPx < size.height) {
+                val gy = oy + j * stepPx
+                drawLine(if (j % 5 == 0) MapColors.gridMajor else MapColors.grid, Offset(0f, gy), Offset(size.width, gy), 1f)
+                j++
+            }
+        }
         routine.forEach {
-            drawCircle(ring, radius = (it.radiusM * scale).toFloat(), center = Offset(px(it.lon), py(it.lat)), style = Stroke(3f))
+            val c = Offset(px(it.lon), py(it.lat))
+            drawCircle(MapColors.routine.copy(alpha = 0.12f), radius = (it.radiusM * scale).toFloat(), center = c)
+            drawCircle(MapColors.routine, radius = (it.radiusM * scale).toFloat(), center = c, style = Stroke(2f))
         }
         val step = max(1, fixes.size / 800)
         val path = Path()
         fixes.filterIndexed { i, _ -> i % step == 0 }.forEachIndexed { i, f ->
             if (i == 0) path.moveTo(px(f.lon), py(f.lat)) else path.lineTo(px(f.lon), py(f.lat))
         }
-        drawPath(path, track, style = Stroke(3f))
-        here?.let { drawCircle(me, radius = 9f, center = Offset(px(it.lon), py(it.lat))) }
+        drawPath(path, MapColors.trackGlow, style = Stroke(10f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawPath(path, MapColors.track, style = Stroke(3f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+        here?.let {
+            val c = Offset(px(it.lon), py(it.lat))
+            drawCircle(MapColors.me.copy(alpha = 0.25f), radius = 18f, center = c)
+            drawCircle(MapColors.me, radius = 8f, center = c)
+        }
         // 100 m scale bar
-        val bar = (100 * scale)
-        drawLine(Color.Gray, Offset(16f, size.height - 16f), Offset(16f + bar, size.height - 16f), strokeWidth = 4f)
+        val bar = 100 * scale
+        drawLine(MapColors.label, Offset(16f, size.height - 16f), Offset(16f + bar, size.height - 16f), strokeWidth = 4f)
     }
 }
