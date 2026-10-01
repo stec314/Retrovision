@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.LruCache
 import androidx.compose.ui.graphics.ImageBitmap
@@ -101,10 +103,12 @@ object VectorStyle {
     private const val URBAN = 0xFF131A23.toInt()
     private const val INDUSTRIAL = 0xFF16161F.toInt()
     private const val BUILDING = 0xFF1B2430.toInt()
-    private const val ROAD_HIGHWAY = 0xFF4A5F7A.toInt()
-    private const val ROAD_MAJOR = 0xFF34445A.toInt()
-    private const val ROAD_MINOR = 0xFF253140.toInt()
-    private const val ROAD_PATH = 0xFF26303C.toInt()
+    private const val ROAD_HIGHWAY = 0xFF6A84A6.toInt()
+    private const val ROAD_MAJOR = 0xFF4A5E78.toInt()
+    private const val ROAD_MINOR = 0xFF33414F.toInt()
+    private const val ROAD_PATH = 0xFF2C3744.toInt()
+    private const val ROAD_LABEL = 0xFF8FA3B8.toInt()
+    private const val POI_LABEL = 0xFF7F93A8.toInt()
     private const val RAIL = 0xFF2C3340.toInt()
     private const val BOUNDARY = 0xFF4A3F66.toInt()
     private const val LABEL = 0xFF9DB0C4.toInt()
@@ -191,7 +195,7 @@ object VectorStyle {
         lines("boundary") { f -> if (((f.num("admin_level") ?: 2.0)) <= 4) Triple(BOUNDARY, 1.5f, true) else null }
 
         // Roads, drawn minor first so major roads sit on top.
-        fun roadClass(f: Mvt.Feature): Int = when (f.str("kind") ?: f.str("class")) {
+        fun roadClass(f: Mvt.Feature): Int = when (f.str("kind") ?: f.str("pmap:kind") ?: f.str("class")) {
             "highway", "motorway", "trunk" -> 3
             "major_road", "primary", "secondary" -> 2
             "minor_road", "tertiary", "minor", "service", "street", "residential" -> 1
@@ -214,32 +218,126 @@ object VectorStyle {
         lines("transit") { f -> if ((f.str("kind") ?: "") == "rail") Triple(RAIL, w(1.6f), true) else null }
         lines("transportation") { f -> if (roadClass(f) == -1) Triple(RAIL, w(1.6f), true) else null }
 
-        // Place labels only (no road names): enough to orient yourself.
+        val placed = ArrayList<RectF>()
+        fun free(r: RectF): Boolean {
+            if (placed.any { RectF.intersects(it, r) }) return false
+            placed.add(r); return true
+        }
+        fun nameOf(f: Mvt.Feature) = f.str("name:it") ?: f.str("name") ?: f.str("name:latin")
+
+        // Place labels first: they matter most for orientation.
         val places = layers["places"] ?: layers["place"]
         if (places != null) {
             val k = TileCache.PX.toFloat() / places.extent * scale
             text.textAlign = Paint.Align.CENTER
-            for (f in places.features) {
-                if (f.type != Mvt.GeomType.POINT) continue
-                val name = f.str("name") ?: continue
-                val kind = f.str("kind") ?: f.str("class") ?: ""
+            val ordered = places.features.filter { it.type == Mvt.GeomType.POINT }.sortedBy {
+                when (it.str("kind") ?: it.str("pmap:kind") ?: it.str("class")) {
+                    "country" -> 0; "region", "state" -> 1; "locality", "city" -> 2; "town" -> 3; "village" -> 4; else -> 5
+                }
+            }
+            for (f in ordered) {
+                val name = nameOf(f) ?: continue
+                val kind = f.str("kind") ?: f.str("pmap:kind") ?: f.str("class") ?: ""
                 val size = when (kind) {
                     "country" -> 30f
-                    "region", "state" -> if (z <= 8) 26f else continue
-                    "locality", "city", "town" -> 26f
+                    "region", "state" -> if (z <= 9) 26f else continue
+                    "locality", "city" -> 28f
+                    "town" -> 25f
                     "village", "hamlet" -> if (z >= 11) 22f else continue
-                    "neighbourhood", "suburb", "quarter", "macrohood" -> if (z >= 13) 20f else continue
+                    "neighbourhood", "suburb", "quarter", "macrohood", "microhood" -> if (z >= 13) 21f else continue
                     else -> continue
                 }
                 val pt = f.parts.firstOrNull() ?: continue
                 val px = pt[0] * k + ox
                 val py = pt[1] * k + oy
-                if (px < -50 || py < -20 || px > TileCache.PX + 50 || py > TileCache.PX + 20) continue
+                if (px < -60 || py < -20 || px > TileCache.PX + 60 || py > TileCache.PX + 20) continue
                 text.textSize = size
-                text.style = Paint.Style.STROKE; text.strokeWidth = 5f; text.color = HALO
+                text.typeface = if (kind == "neighbourhood" || kind == "suburb" || kind == "quarter") Typeface.create(Typeface.SANS_SERIF, Typeface.ITALIC) else Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                val w = text.measureText(name)
+                if (!free(RectF(px - w / 2 - 4, py - size, px + w / 2 + 4, py + 6))) continue
+                text.style = Paint.Style.STROKE; text.strokeWidth = 6f; text.color = HALO
                 c.drawText(name, px, py, text)
                 text.style = Paint.Style.FILL; text.color = LABEL
                 c.drawText(name, px, py, text)
+            }
+        }
+
+        // Street names along the street, once per name per tile.
+        val roadLayer = layers["roads"]?.let { it to "kind" } ?: layers["transportation_name"]?.let { it to "class" }
+        if (roadLayer != null && z >= 13) {
+            val (l, _) = roadLayer
+            val k = TileCache.PX.toFloat() / l.extent * scale
+            val seen = HashSet<String>()
+            text.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            text.textAlign = Paint.Align.CENTER
+            val rankOf = { f: Mvt.Feature -> roadClass(f) }
+            for (f in l.features.sortedByDescending(rankOf)) {
+                if (f.type != Mvt.GeomType.LINESTRING) continue
+                val rank = rankOf(f)
+                val minZ = when (rank) { 3 -> 13; 2 -> 14; 1 -> 15; 0 -> 17; else -> 99 }
+                if (z < minZ) continue
+                val name = nameOf(f) ?: f.str("ref") ?: continue
+                if (!seen.add(name)) continue
+                val part = f.parts.maxByOrNull { it.size } ?: continue
+                if (part.size < 4) continue
+                val forward = part[0] <= part[part.size - 2]
+                val p = Path()
+                val n = part.size / 2
+                for (i in 0 until n) {
+                    val idx = if (forward) i else n - 1 - i
+                    val x = part[idx * 2] * k + ox; val y = part[idx * 2 + 1] * k + oy
+                    if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+                }
+                text.textSize = if (rank >= 2) 21f else 19f
+                val len = PathMeasure(p, false).length
+                val w = text.measureText(name)
+                if (len < w + 24) continue
+                val start = (len - w) / 2
+                val pm = PathMeasure(p, false)
+                val pos = FloatArray(2)
+                pm.getPosTan(start + w / 2, pos, null)
+                if (!free(RectF(pos[0] - w / 2, pos[1] - 14, pos[0] + w / 2, pos[1] + 14))) continue
+                text.textAlign = Paint.Align.LEFT
+                text.style = Paint.Style.STROKE; text.strokeWidth = 5f; text.color = HALO
+                c.drawTextOnPath(name, p, start, 7f, text)
+                text.style = Paint.Style.FILL; text.color = ROAD_LABEL
+                c.drawTextOnPath(name, p, start, 7f, text)
+                text.textAlign = Paint.Align.CENTER
+            }
+        }
+
+        // A few points of interest at street level: stations, hospitals, police, pharmacies, fuel.
+        val pois = layers["pois"] ?: layers["poi"]
+        if (pois != null && z >= 16) {
+            val k = TileCache.PX.toFloat() / pois.extent * scale
+            text.textSize = 18f
+            text.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+            text.textAlign = Paint.Align.LEFT
+            for (f in pois.features) {
+                if (f.type != Mvt.GeomType.POINT) continue
+                val kind = f.str("kind") ?: f.str("class") ?: continue
+                val glyph = when (kind) {
+                    "station", "train_station", "railway", "subway", "bus_station" -> "🚉"
+                    "hospital", "clinic" -> "🏥"
+                    "police" -> "👮"
+                    "pharmacy" -> "💊"
+                    "fuel" -> "⛽"
+                    "parking" -> "🅿"
+                    "supermarket" -> "🛒"
+                    "school", "university", "college" -> "🎓"
+                    "park" -> "🌳"
+                    else -> continue
+                }
+                val name = nameOf(f) ?: ""
+                val pt = f.parts.firstOrNull() ?: continue
+                val px = pt[0] * k + ox; val py = pt[1] * k + oy
+                val label = if (name.isEmpty()) glyph else "$glyph $name"
+                val w = text.measureText(label)
+                if (!free(RectF(px - 10, py - 16, px + w, py + 6))) continue
+                text.style = Paint.Style.STROKE; text.strokeWidth = 5f; text.color = HALO
+                c.drawText(label, px - 10, py, text)
+                text.style = Paint.Style.FILL; text.color = POI_LABEL
+                c.drawText(label, px - 10, py, text)
             }
         }
         return bmp

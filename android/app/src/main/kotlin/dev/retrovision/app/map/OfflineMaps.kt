@@ -56,6 +56,21 @@ object OfflineMaps {
         }.sortedBy { it.file.name.lowercase() }
     }
 
+    fun directory(): File = dir
+
+    /** Validates a finished file, moves it into place and activates it. */
+    @Synchronized
+    fun adopt(tmp: File, target: File): OfflineMap {
+        val info = open(tmp).use { it.info }
+        if (_active.value?.first?.id == target.name) activate(null)
+        target.delete()
+        if (!tmp.renameTo(target)) throw MapFormatException("Could not store the map")
+        refresh()
+        val m = OfflineMap(target, info)
+        activate(m)
+        return m
+    }
+
     fun open(f: File): TileSource = when {
         f.name.endsWith(".mbtiles", true) -> MbtilesSource(f)
         else -> PmtilesReader.open(f)

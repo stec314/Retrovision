@@ -136,6 +136,10 @@ interface AppDao {
     @Query("UPDATE familiar_places SET label = :label WHERE id = :id")
     suspend fun setFamiliarLabel(id: Long, label: String)
 
+    /** Moves/resizes a place and confirms it (editing a suggestion accepts it). */
+    @Query("UPDATE familiar_places SET lat = :lat, lon = :lon, radiusM = :radiusM, label = :label, state = :state WHERE id = :id")
+    suspend fun updateFamiliarArea(id: Long, lat: Double, lon: Double, radiusM: Double, label: String, state: Int)
+
     @Query("DELETE FROM familiar_places WHERE id = :id")
     suspend fun deleteFamiliar(id: Long)
 

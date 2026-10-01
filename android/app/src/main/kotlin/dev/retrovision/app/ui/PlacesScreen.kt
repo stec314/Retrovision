@@ -2,6 +2,7 @@ package dev.retrovision.app.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -51,15 +52,14 @@ fun PlacesScreen(modifier: Modifier) {
     val rows by remember { app.db.dao().familiarPlaces() }.collectAsState(initial = emptyList())
     val here by Collector.location.collectAsState()
     var fixes by remember { mutableStateOf<List<GeoFix>>(emptyList()) }
-    var windowH by remember { mutableStateOf(24) }
     val mapState = remember { MapUiState() }
     val places = rows.map { it.toModel() }
     val timeFmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
 
-    LaunchedEffect(windowH) {
+    LaunchedEffect(mapState.windowH) {
         while (true) {
             val now = System.currentTimeMillis()
-            fixes = app.db.dao().fixesSince(now - windowH * 3600_000L).map { it.toFix() }
+            fixes = app.db.dao().fixesSince(now - mapState.windowH * 3600_000L).map { it.toFix() }
             delay(30_000)
         }
     }
@@ -78,33 +78,43 @@ fun PlacesScreen(modifier: Modifier) {
             style = MaterialTheme.typography.bodySmall,
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(6 to "6 h", 24 to "24 h", 72 to "3 d", 168 to "7 d").forEach { (h, label) ->
-                FilterChip(
-                    selected = windowH == h,
-                    onClick = { windowH = h; mapState.reset(); mapState.scrub = null; mapState.selection = null },
-                    label = { Text(label) },
-                )
-            }
+        val routinePlaces = places.filter { it.state == FamiliarPlace.State.CONFIRMED }
+        val map: @Composable (Modifier) -> Unit = { m ->
+            TrackMap(
+                fixes = fixes,
+                visits = visits,
+                routine = routinePlaces,
+                here = here,
+                state = mapState,
+                onSaveRoutine = { e -> saveRoutine(scope, e) },
+                onDeleteRoutine = { id -> scope.launch { app.db.dao().setFamiliarState(id, FamiliarPlace.State.REJECTED.ordinal); Collector.analyzeNow.value = System.nanoTime() } },
+                modifier = m,
+            )
         }
-        TrackMap(
-            fixes = fixes,
-            visits = visits,
-            routine = places.filter { it.state == FamiliarPlace.State.CONFIRMED },
-            here = here,
-            state = mapState,
-            onMarkRoutine = { lat, lon -> addRoutine(scope, lat, lon) },
+        if (mapState.fullscreen) {
+            FullscreenMap(content = { map(Modifier.fillMaxSize()) }, onClose = { mapState.fullscreen = false })
+            Box(Modifier.fillMaxWidth().height(380.dp))
+        } else {
+            map(Modifier.fillMaxWidth().height(380.dp))
+        }
+        Text(
+            Texts.tr(
+                "Pinch to zoom · tap a point or stay · long press to pick a spot · ☰ for period, layers and maps",
+                "Pizzica per lo zoom · tocca un punto o una sosta · tieni premuto per scegliere un punto · ☰ per periodo, livelli e mappe",
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        OfflineMapsCard()
 
         OutlinedButton(
             enabled = here != null,
             onClick = {
                 val h = here ?: return@OutlinedButton
-                addRoutine(scope, h.lat, h.lon)
+                mapState.startEdit(RoutineEdit(null, h.lat, h.lon, 150.0, ""))
             },
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(Texts.tr("Mark where I am now as routine", "Segna dove sono ora come luogo di routine")) }
+        ) { Text(Texts.tr("Mark where I am now as routine…", "Segna dove sono ora come luogo di routine…")) }
+        OfflineMapsCard()
 
         val suggestions = rows.filter { it.state == FamiliarPlace.State.SUGGESTED.ordinal }
         if (suggestions.isNotEmpty()) {
@@ -120,6 +130,7 @@ fun PlacesScreen(modifier: Modifier) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { setState(scope, r, FamiliarPlace.State.CONFIRMED) }) { Text(Texts.tr("Yes", "Sì")) }
                             OutlinedButton(onClick = { setState(scope, r, FamiliarPlace.State.REJECTED) }) { Text(Texts.tr("No", "No")) }
+                            TextButton(onClick = { mapState.startEdit(RoutineEdit(r.id, r.lat, r.lon, r.radiusM, r.label)) }) { Text(Texts.tr("Adjust area", "Regola area")) }
                         }
                     }
                 }
@@ -129,8 +140,12 @@ fun PlacesScreen(modifier: Modifier) {
         val confirmed = rows.filter { it.state == FamiliarPlace.State.CONFIRMED.ordinal }
         Text(Texts.tr("Routine places", "Luoghi di routine") + " (${confirmed.size})", style = MaterialTheme.typography.titleMedium)
         confirmed.forEach { r ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(kindText(r) + "  %.4f, %.4f".format(r.lat, r.lon), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(
+                    (r.label.ifEmpty { kindText(r) }) + " · " + Texts.tr("radius", "raggio") + " ${r.radiusM.toInt()} m",
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = { mapState.startEdit(RoutineEdit(r.id, r.lat, r.lon, r.radiusM, r.label)) }) { Text(Texts.tr("Area", "Area")) }
                 // Marked "rejected" rather than deleted, so the learner does not suggest it again.
                 TextButton(onClick = { setState(scope, r, FamiliarPlace.State.REJECTED) }) { Text(Texts.tr("Remove", "Rimuovi")) }
             }
@@ -155,15 +170,20 @@ fun PlacesScreen(modifier: Modifier) {
 private fun kindText(r: FamiliarRow) =
     if (r.kind == FamiliarPlace.Kind.HOME_LIKE.ordinal) Texts.tr("Home-like", "Tipo casa") else Texts.tr("Frequent", "Frequente")
 
-private fun addRoutine(scope: kotlinx.coroutines.CoroutineScope, lat: Double, lon: Double) {
+private fun saveRoutine(scope: kotlinx.coroutines.CoroutineScope, e: RoutineEdit) {
     scope.launch {
-        app.db.dao().addFamiliar(
-            FamiliarRow(
-                lat = lat, lon = lon, radiusM = 150.0, label = "",
-                state = FamiliarPlace.State.CONFIRMED.ordinal,
-                kind = FamiliarPlace.Kind.FREQUENT.ordinal, createdMs = System.currentTimeMillis(),
-            ),
-        )
+        val dao = app.db.dao()
+        if (e.id == null) {
+            dao.addFamiliar(
+                FamiliarRow(
+                    lat = e.lat, lon = e.lon, radiusM = e.radiusM, label = e.label.trim(),
+                    state = FamiliarPlace.State.CONFIRMED.ordinal,
+                    kind = FamiliarPlace.Kind.FREQUENT.ordinal, createdMs = System.currentTimeMillis(),
+                ),
+            )
+        } else {
+            dao.updateFamiliarArea(e.id, e.lat, e.lon, e.radiusM, e.label.trim(), FamiliarPlace.State.CONFIRMED.ordinal)
+        }
         Collector.analyzeNow.value = System.nanoTime()
     }
 }

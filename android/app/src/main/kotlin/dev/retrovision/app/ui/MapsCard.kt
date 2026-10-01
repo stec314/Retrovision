@@ -92,11 +92,13 @@ fun OfflineMapsCard() {
             if (help) {
                 Text(
                     Texts.tr(
-                        "Easiest: on GitHub open Actions → \"offline map\" → Run workflow, pick a region (or type a bounding box). " +
+                        "Easiest: open the map ☰ menu and choose \"Download the map of this area\". " +
+                            "Or on GitHub open Actions → \"offline map\" → Run workflow, pick a region (or type a bounding box). " +
                             "When it finishes, download the .pmtiles from the \"maps\" release and import it here.\n" +
                             "Alternatives: pmtiles extract https://build.protomaps.com/YYYYMMDD.pmtiles out.pmtiles --bbox=W,S,E,N --maxzoom=15, " +
                             "or any raster .mbtiles made with MOBAC or QGIS.",
-                        "Il modo più semplice: su GitHub apri Actions → \"offline map\" → Run workflow, scegli una regione (o scrivi un riquadro). " +
+                        "Il modo più semplice: apri il menu ☰ della mappa e scegli \"Scarica la mappa di quest'area\". " +
+                            "Oppure su GitHub apri Actions → \"offline map\" → Run workflow, scegli una regione (o scrivi un riquadro). " +
                             "Quando finisce, scarica il .pmtiles dalla release \"maps\" e importalo qui.\n" +
                             "In alternativa: pmtiles extract https://build.protomaps.com/AAAAMMGG.pmtiles out.pmtiles --bbox=O,S,E,N --maxzoom=15, " +
                             "oppure un .mbtiles raster fatto con MOBAC o QGIS.",
