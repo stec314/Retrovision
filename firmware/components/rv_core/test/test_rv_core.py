@@ -31,7 +31,7 @@ def build_lib() -> C.CDLL:
     out = Path(tempfile.mkdtemp(prefix="rv_core_")) / "librv_core.so"
     # config.c lives in the firmware app but is portable: compile it here too
     # so -Werror catches mistakes without an ESP-IDF toolchain.
-    srcs = [*CORE.glob("*.c"), HERE / "pb_roundtrip.c", FW / "esp32s3/main/config.c",
+    srcs = [*CORE.glob("*.c"), HERE / "pb_roundtrip.c", FW / "components/rv_probe/config.c",
             FW / "components/rv_proto/retrovision.pb.c",
             *(FW / "components/nanopb").glob("pb_*.c")]
     cmd = [cc, "-std=c99", "-O1", "-g", "-shared", "-fPIC",
@@ -287,7 +287,7 @@ class TestDedup(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
-    """Firmware Config validation (firmware/esp32s3/main/config.c)."""
+    """Firmware Config validation (firmware/components/rv_probe/config.c)."""
 
     @classmethod
     def setUpClass(cls):

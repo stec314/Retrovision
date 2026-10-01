@@ -23,7 +23,7 @@ long rv_test_pb_roundtrip(const uint8_t *in, size_t len, uint8_t *out, size_t ca
 // retrovision.v1.Config and print a summary the Python test can assert on.
 #include <stdio.h>
 
-#include "../../../esp32s3/main/config.h"
+#include "../../rv_probe/config.h"
 
 int rv_test_cfg(const uint8_t *in, size_t len, char *out, size_t cap)
 {
