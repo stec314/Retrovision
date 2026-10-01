@@ -95,6 +95,7 @@ fun PlacesScreen(modifier: Modifier) {
             state = mapState,
             onMarkRoutine = { lat, lon -> addRoutine(scope, lat, lon) },
         )
+        OfflineMapsCard()
 
         OutlinedButton(
             enabled = here != null,

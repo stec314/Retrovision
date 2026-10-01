@@ -49,9 +49,24 @@ import androidx.compose.ui.unit.dp
 import dev.retrovision.core.analysis.FamiliarPlace
 import dev.retrovision.core.analysis.Visit
 import dev.retrovision.core.model.GeoFix
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.runtime.collectAsState
+import dev.retrovision.app.map.OfflineMaps
+import dev.retrovision.app.map.TileCache
+import dev.retrovision.app.map.TileKey
+import dev.retrovision.core.map.MapInfo
+import dev.retrovision.core.map.TileSource
+import dev.retrovision.core.map.TileType
+import dev.retrovision.core.map.WebMercator
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.log2
+import kotlin.math.roundToInt
 import java.text.DateFormat
 import java.util.Date
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 
@@ -77,41 +92,64 @@ class MapUiState {
     fun focusOn(lat: Double, lon: Double) { focus = lat to lon }
 }
 
-/** Local equirectangular projection: metres around a reference point, fitted to the view, then user zoom/pan. */
+/** Web Mercator (world units 0..1, y down) fitted to the view, then user zoom/pan. Matches XYZ map tiles exactly. */
 private class Proj(
-    private val lat0: Double, private val lon0: Double,
     private val cx: Double, private val cy: Double,
     val base: Double, private val w: Float, private val h: Float,
-    zoom: Float, private val pan: Offset,
+    zoom: Float, private val pan: Offset, lat0: Double,
 ) {
-    private val cosL = cos(Math.toRadians(lat0))
+    /** Screen pixels per world unit. */
     val s = base * zoom
-    fun mx(lon: Double) = (lon - lon0) * cosL * K
-    fun my(lat: Double) = (lat - lat0) * K
+    /** Ground metres per screen pixel around the view. */
+    val mPerPx = WebMercator.metresPerUnit(lat0) / s
     fun screen(lat: Double, lon: Double) =
-        Offset(w / 2 + ((mx(lon) - cx) * s).toFloat() + pan.x, h / 2 - ((my(lat) - cy) * s).toFloat() + pan.y)
-    fun geo(p: Offset): Pair<Double, Double> {
-        val x = (p.x - w / 2 - pan.x) / s + cx
-        val y = -(p.y - h / 2 - pan.y) / s + cy
-        return (y / K + lat0) to (x / (cosL * K) + lon0)
-    }
+        Offset(w / 2 + ((WebMercator.x(lon) - cx) * s).toFloat() + pan.x, h / 2 + ((WebMercator.y(lat) - cy) * s).toFloat() + pan.y)
+    fun screenX(wx: Double) = w / 2 + ((wx - cx) * s).toFloat() + pan.x
+    fun screenY(wy: Double) = h / 2 + ((wy - cy) * s).toFloat() + pan.y
+    fun worldX(px: Float) = (px - w / 2 - pan.x) / s + cx
+    fun worldY(py: Float) = (py - h / 2 - pan.y) / s + cy
+    fun geo(p: Offset): Pair<Double, Double> = WebMercator.lat(worldY(p.y)) to WebMercator.lon(worldX(p.x))
+    fun radiusPx(lat: Double, metres: Double) = (metres / WebMercator.metresPerUnit(lat) * s).toFloat()
     /** Pan needed to put (lat, lon) in the centre at the current zoom. */
     fun panToCenter(lat: Double, lon: Double) =
-        Offset(-((mx(lon) - cx) * s).toFloat(), ((my(lat) - cy) * s).toFloat())
-    companion object { const val K = 111_320.0 }
+        Offset(-((WebMercator.x(lon) - cx) * s).toFloat(), -((WebMercator.y(lat) - cy) * s).toFloat())
 }
 
-private class Fit(val lat0: Double, val lon0: Double, val cx: Double, val cy: Double, val spanM: Double)
+private class Fit(val lat0: Double, val lon0: Double, val cx: Double, val cy: Double, val spanW: Double)
 
-private fun fitOf(points: List<Pair<Double, Double>>): Fit? {
-    if (points.isEmpty()) return null
+private fun fitOf(points: List<Pair<Double, Double>>, fallback: MapInfo?): Fit? {
+    if (points.isEmpty()) {
+        val i = fallback ?: return null
+        // Show roughly the archive's suggested view when there is no track yet.
+        val span = 1.0 / (1 shl i.centerZoom.coerceIn(0, 18)) * 3
+        return Fit(i.centerLat, i.centerLon, WebMercator.x(i.centerLon), WebMercator.y(i.centerLat), span)
+    }
     val lat0 = points.map { it.first }.average()
     val lon0 = points.map { it.second }.average()
-    val cosL = cos(Math.toRadians(lat0))
-    val xs = points.map { (it.second - lon0) * cosL * Proj.K }
-    val ys = points.map { (it.first - lat0) * Proj.K }
-    val span = max(max(xs.max() - xs.min(), ys.max() - ys.min()), 300.0) * 1.2
+    val xs = points.map { WebMercator.x(it.second) }
+    val ys = points.map { WebMercator.y(it.first) }
+    val minSpan = 300.0 / WebMercator.metresPerUnit(lat0)
+    val span = max(max(xs.max() - xs.min(), ys.max() - ys.min()), minSpan) * 1.2
     return Fit(lat0, lon0, (xs.max() + xs.min()) / 2, (ys.max() + ys.min()) / 2, span)
+}
+
+/** Dark-mode filter for raster maps: invert, rotate hue 180° (water stays blue), dim. */
+private val RASTER_DARK: ColorFilter = run {
+    val m = android.graphics.ColorMatrix(floatArrayOf(
+        -1f, 0f, 0f, 0f, 255f,
+        0f, -1f, 0f, 0f, 255f,
+        0f, 0f, -1f, 0f, 255f,
+        0f, 0f, 0f, 1f, 0f,
+    ))
+    val c = -1f; val sn = 0f
+    m.postConcat(android.graphics.ColorMatrix(floatArrayOf(
+        0.213f + c * 0.787f - sn * 0.213f, 0.715f - c * 0.715f - sn * 0.715f, 0.072f - c * 0.072f + sn * 0.928f, 0f, 0f,
+        0.213f - c * 0.213f + sn * 0.143f, 0.715f + c * 0.285f + sn * 0.140f, 0.072f - c * 0.072f - sn * 0.283f, 0f, 0f,
+        0.213f - c * 0.213f - sn * 0.787f, 0.715f - c * 0.715f + sn * 0.715f, 0.072f + c * 0.928f + sn * 0.072f, 0f, 0f,
+        0f, 0f, 0f, 1f, 0f,
+    )))
+    m.postConcat(android.graphics.ColorMatrix().apply { setScale(0.75f, 0.8f, 0.9f, 1f) })
+    ColorFilter.colorMatrix(ColorMatrix(m.array))
 }
 
 private val NICE_M = doubleArrayOf(5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5, 2e5, 5e5)
@@ -133,7 +171,7 @@ private fun interpolate(fixes: List<GeoFix>, t: Long): GeoFix? {
 /**
  * Interactive dark map of the user's own movements.
  * Pinch to zoom, drag to pan, double tap to zoom in, tap to inspect, long press to pick a point.
- * Tile-less on purpose: no network request reveals where you are.
+ * Basemap tiles come only from an imported offline file: no network request reveals where you are.
  */
 @Composable
 fun TrackMap(
@@ -146,14 +184,19 @@ fun TrackMap(
 ) {
     val sorted = remember(fixes) { fixes.sortedBy { it.timeMs } }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
-    val fit = remember(sorted, routine, here == null) {
-        fitOf(sorted.map { it.lat to it.lon } + routine.map { it.lat to it.lon } + listOfNotNull(here?.let { it.lat to it.lon }))
+    val basemap by OfflineMaps.active.collectAsState()
+    val tileVersion by TileCache.version.collectAsState()
+    val fit = remember(sorted, routine, here == null, basemap?.first?.id) {
+        fitOf(
+            sorted.map { it.lat to it.lon } + routine.map { it.lat to it.lon } + listOfNotNull(here?.let { it.lat to it.lon }),
+            basemap?.second?.info,
+        )
     }
     fun proj(): Proj? {
         val f = fit ?: return null
         if (viewSize.width == 0) return null
-        val base = min(viewSize.width, viewSize.height) / f.spanM
-        return Proj(f.lat0, f.lon0, f.cx, f.cy, base, viewSize.width.toFloat(), viewSize.height.toFloat(), state.zoom, state.pan)
+        val base = min(viewSize.width, viewSize.height) / f.spanW
+        return Proj(f.cx, f.cy, base, viewSize.width.toFloat(), viewSize.height.toFloat(), state.zoom, state.pan, f.lat0)
     }
     val t0 = sorted.firstOrNull()?.timeMs ?: 0L
     val t1 = sorted.lastOrNull()?.timeMs ?: 0L
@@ -216,7 +259,7 @@ fun TrackMap(
                                 val stay = visits.minByOrNull { (pr.screen(it.lat, it.lon) - p).getDistance() }
                                     ?.takeIf { (pr.screen(it.lat, it.lon) - p).getDistance() < hitPx }
                                 val place = routine.firstOrNull {
-                                    (pr.screen(it.lat, it.lon) - p).getDistance() < max(hitPx, (it.radiusM * pr.s).toFloat())
+                                    (pr.screen(it.lat, it.lon) - p).getDistance() < max(hitPx, pr.radiusPx(it.lat, it.radiusM))
                                 }
                                 val fix = sorted.minByOrNull { (pr.screen(it.lat, it.lon) - p).getDistance() }
                                     ?.takeIf { (pr.screen(it.lat, it.lon) - p).getDistance() < hitPx }
@@ -231,12 +274,15 @@ fun TrackMap(
                     },
             ) {
                 val pr = proj() ?: return@Canvas
-                val mPerPx = 1.0 / pr.s
+                val mPerPx = pr.mPerPx
+                if (tileVersion < 0) return@Canvas // reading it makes new tiles trigger a redraw
+
+                basemap?.let { (m, src) -> drawTiles(pr, m.id, src) }
 
                 // Adaptive metric grid; every 5th line brighter.
                 val step = niceStep(mPerPx, 90.0)
-                val stepPx = (step * pr.s).toFloat()
-                if (stepPx > 8f) {
+                val stepPx = (step / mPerPx).toFloat()
+                if (stepPx > 8f && basemap == null) {
                     val origin = pr.screen(fit!!.lat0, fit.lon0)
                     var i = -((origin.x / stepPx).toInt() + 1)
                     while (origin.x + i * stepPx < size.width) {
@@ -254,7 +300,7 @@ fun TrackMap(
 
                 routine.forEach {
                     val c = pr.screen(it.lat, it.lon)
-                    val r = max(6f, (it.radiusM * pr.s).toFloat())
+                    val r = max(6f, pr.radiusPx(it.lat, it.radiusM))
                     drawCircle(MapColors.routine.copy(alpha = 0.10f), radius = r, center = c)
                     drawCircle(MapColors.routine, radius = r, center = c, style = Stroke(2f))
                 }
@@ -304,7 +350,7 @@ fun TrackMap(
                 when (val s = state.selection) {
                     is MapSel.Fix -> drawCircle(MapColors.select, 12f, pr.screen(s.fix.lat, s.fix.lon), style = Stroke(3f))
                     is MapSel.Stay -> drawCircle(MapColors.select, 20f, pr.screen(s.visit.lat, s.visit.lon), style = Stroke(3f))
-                    is MapSel.Place -> drawCircle(MapColors.select, max(14f, (s.place.radiusM * pr.s).toFloat()), pr.screen(s.place.lat, s.place.lon), style = Stroke(3f))
+                    is MapSel.Place -> drawCircle(MapColors.select, max(14f, pr.radiusPx(s.place.lat, s.place.radiusM)), pr.screen(s.place.lat, s.place.lon), style = Stroke(3f))
                     is MapSel.Point -> {
                         val c = pr.screen(s.lat, s.lon)
                         drawLine(MapColors.select, c - Offset(14f, 0f), c + Offset(14f, 0f), 3f)
@@ -315,7 +361,7 @@ fun TrackMap(
 
                 // Scale bar
                 val bar = niceStep(mPerPx, 160.0)
-                val barPx = (bar * pr.s).toFloat()
+                val barPx = (bar / mPerPx).toFloat()
                 val y = size.height - 28f
                 drawLine(MapColors.label, Offset(24f, y), Offset(24f + barPx, y), 4f)
                 drawLine(MapColors.label, Offset(24f, y - 8f), Offset(24f, y + 8f), 3f)
@@ -328,6 +374,19 @@ fun TrackMap(
                     Texts.tr("No positions yet. Start the collector with location on.", "Ancora nessuna posizione. Avvia la raccolta con la posizione attiva."),
                     color = MapColors.label, style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                )
+            }
+
+            basemap?.let { (m, _) ->
+                Text(
+                    "© OpenStreetMap",
+                    color = MapColors.label, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                )
+                Text(
+                    m.file.nameWithoutExtension,
+                    color = MapColors.label, style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
                 )
             }
 
@@ -419,4 +478,38 @@ fun TrackMap(
 @Composable
 private fun MapButton(label: String, onClick: () -> Unit) {
     FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(40.dp)) { Text(label) }
+}
+
+/** Draws the offline basemap tiles under the track. Missing tiles fall back to a scaled-up ancestor while they render. */
+private fun DrawScope.drawTiles(pr: Proj, mapId: String, src: TileSource) {
+    val info = src.info
+    val z = floor(log2(pr.s / 384.0)).toInt().coerceIn(max(0, info.minZoom), min(22, info.maxZoom + 5))
+    val n = 1 shl z
+    val tilePx = pr.s / n
+    val x0 = floor(pr.worldX(0f) * n).toInt().coerceIn(0, n - 1)
+    val x1 = floor(pr.worldX(size.width) * n).toInt().coerceIn(0, n - 1)
+    val y0 = floor(pr.worldY(0f) * n).toInt().coerceIn(0, n - 1)
+    val y1 = floor(pr.worldY(size.height) * n).toInt().coerceIn(0, n - 1)
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 96) return
+    val filter = if (info.type == TileType.MVT) null else RASTER_DARK
+    for (ty in y0..y1) for (tx in x0..x1) {
+        val left = pr.screenX(tx.toDouble() / n)
+        val top = pr.screenY(ty.toDouble() / n)
+        val dst = IntSize(ceil(tilePx).toInt() + 1, ceil(tilePx).toInt() + 1)
+        val dstOff = IntOffset(left.roundToInt(), top.roundToInt())
+        val img = TileCache.get(TileKey(mapId, z, tx, ty), src)
+        if (img != null) {
+            drawImage(img, srcOffset = IntOffset.Zero, srcSize = IntSize(img.width, img.height), dstOffset = dstOff, dstSize = dst, colorFilter = filter)
+            continue
+        }
+        for (d in 1..4) {
+            if (z - d < 0) break
+            val parent = TileCache.peek(TileKey(mapId, z - d, tx shr d, ty shr d)) ?: continue
+            val sub = parent.width shr d
+            if (sub < 1) break
+            val so = IntOffset((tx - ((tx shr d) shl d)) * sub, (ty - ((ty shr d) shl d)) * sub)
+            drawImage(parent, srcOffset = so, srcSize = IntSize(sub, sub), dstOffset = dstOff, dstSize = dst, colorFilter = filter)
+            break
+        }
+    }
 }

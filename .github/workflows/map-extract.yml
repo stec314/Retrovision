@@ -1,0 +1,90 @@
+name: offline map
+
+# Cuts a region out of the latest Protomaps daily build (OpenStreetMap data, ODbL)
+# and publishes it as a .pmtiles asset of the "maps" release, ready to import in the app.
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: Preset region (ignored if bbox is set)
+        type: choice
+        default: emilia-romagna
+        options: [bologna, emilia-romagna, nord-italia, italia]
+      bbox:
+        description: "Custom bounding box west,south,east,north (e.g. 11.15,44.40,11.50,44.60)"
+        required: false
+        default: ""
+      maxzoom:
+        description: Max zoom (15 = street level; each level roughly doubles the size)
+        type: choice
+        default: "15"
+        options: ["12", "13", "14", "15"]
+      name:
+        description: File name without extension (default = region)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Resolve region
+        id: r
+        run: |
+          case "${{ inputs.region }}" in
+            bologna)        BBOX="11.15,44.40,11.50,44.60" ;;
+            emilia-romagna) BBOX="9.19,43.73,12.76,45.14" ;;
+            nord-italia)    BBOX="6.62,43.70,13.92,47.10" ;;
+            italia)         BBOX="6.60,35.40,18.60,47.10" ;;
+          esac
+          if [ -n "${{ inputs.bbox }}" ]; then BBOX="${{ inputs.bbox }}"; fi
+          if ! echo "$BBOX" | grep -Eq '^-?[0-9.]+,-?[0-9.]+,-?[0-9.]+,-?[0-9.]+$'; then echo "::error::bad bbox '$BBOX'"; exit 1; fi
+          NAME="${{ inputs.name }}"; [ -z "$NAME" ] && NAME="${{ inputs.bbox != '' && 'custom' || inputs.region }}"
+          NAME="$(echo "$NAME" | tr -c 'A-Za-z0-9_-' '-' | sed 's/-*$//')-z${{ inputs.maxzoom }}"
+          echo "bbox=$BBOX" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Install pmtiles CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          URL=$(gh api repos/protomaps/go-pmtiles/releases/latest --jq '.assets[] | select(.name | test("Linux_x86_64")) | .browser_download_url' | head -1)
+          echo "pmtiles from $URL"
+          curl -fsSL "$URL" -o pmtiles.tgz
+          tar xzf pmtiles.tgz pmtiles
+          ./pmtiles version || true
+
+      - name: Find latest daily build
+        id: b
+        run: |
+          for i in $(seq 0 14); do
+            D=$(date -u -d "-$i day" +%Y%m%d)
+            if curl -fsI "https://build.protomaps.com/$D.pmtiles" >/dev/null; then
+              echo "url=https://build.protomaps.com/$D.pmtiles" >> "$GITHUB_OUTPUT"; echo "date=$D" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          done
+          echo "::error::no Protomaps build found in the last 15 days"; exit 1
+
+      - name: Extract
+        run: |
+          ./pmtiles extract "${{ steps.b.outputs.url }}" "${{ steps.r.outputs.name }}.pmtiles" \
+            --bbox="${{ steps.r.outputs.bbox }}" --maxzoom=${{ inputs.maxzoom }} --download-threads=8
+          ./pmtiles show "${{ steps.r.outputs.name }}.pmtiles" | head -30
+          ls -la *.pmtiles
+
+      - name: Publish to the "maps" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          F="${{ steps.r.outputs.name }}.pmtiles"
+          gh release view maps -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create maps -R "$GITHUB_REPOSITORY" --prerelease --title "Offline maps" \
+              --notes "Offline basemaps for Retrovision. Data © OpenStreetMap contributors (ODbL), tiles by Protomaps. Import the .pmtiles in the app: Places → Offline map → Import."
+          gh release upload maps "$F" -R "$GITHUB_REPOSITORY" --clobber
+          echo "### Map ready: $F ($(du -h "$F" | cut -f1))" >> "$GITHUB_STEP_SUMMARY"
+          echo "Build ${{ steps.b.outputs.date }}, bbox ${{ steps.r.outputs.bbox }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://github.com/$GITHUB_REPOSITORY/releases/download/maps/$F" >> "$GITHUB_STEP_SUMMARY"

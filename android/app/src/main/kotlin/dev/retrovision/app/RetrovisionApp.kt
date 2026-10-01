@@ -12,6 +12,7 @@ class RetrovisionApp : Application() {
         super.onCreate()
         instance = this
         Thread { dev.retrovision.app.enrich.Vendors.load(this) }.start()
+        Thread { dev.retrovision.app.map.OfflineMaps.init(this) }.start()
     }
 
     companion object {
