@@ -180,7 +180,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         title = { Text(Texts.entityLabel(r)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("%.0f%%".format(r.score * 100) + " · ${r.placeIds.size} ${Texts.tr("places", "luoghi")}")
+                Text("%.0f%%".format(r.score * 100) + " · " + Texts.presence(r))
                 Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
                 Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }

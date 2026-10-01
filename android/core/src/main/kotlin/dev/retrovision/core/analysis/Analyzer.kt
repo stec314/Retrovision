@@ -31,6 +31,15 @@ data class AnalysisConfig(
     val travelSaturationM: Double = 2_000.0,
     /** A place you are at all the time counts this much, relative to an unfamiliar one. */
     val familiarWeight: Double = 0.3,
+    /** A stay of at least this long within [placeRadiusM] is a stop; shorter ones are part of the journey. */
+    val stopMinDwellMs: Long = 3 * 60_000L,
+    /** Sightings this close to arriving at or leaving a stop do not count as being at that stop. */
+    val stopEdgeMs: Long = 2 * 60_000L,
+    /**
+     * Up to this many devices moving with you on one leg is normal (a car, friends on a walk).
+     * Beyond it, each one's co-movement counts for crowdRef / n: on a full bus nobody stands out.
+     */
+    val crowdRef: Double = 3.0,
 )
 
 /** Things the user told us to ignore: own devices, baseline, own networks. */
@@ -46,10 +55,21 @@ class EntitySighting(val entityId: String, val sighting: Sighting)
 
 /** Why an entity scored what it scored. Rendered (and localised) by the UI. */
 sealed class Reason {
+    /** Seen at [places] different places where you stopped (not just passed by). */
     data class SeenAtPlaces(val places: Int) : Reason()
+    /**
+     * Seen continuously, at a steady signal strength, while you travelled [meters], on [legs]
+     * separate legs of your journey. A fixed neighbour cannot do that. [othersMoving] is the most
+     * other devices that moved with you on one of those legs: when it is high you were probably
+     * on public transport, and the co-movement counts for less.
+     */
+    data class MovedWithYou(
+        val meters: Double,
+        val rssiStdDb: Double,
+        val legs: Int = 1,
+        val othersMoving: Int = 0,
+    ) : Reason()
     /** Some of those places are ones you are at all the time (home, work), so they count for less. */
-    /** Seen continuously, at a steady signal strength, while you travelled [meters]. A fixed neighbour cannot do that. */
-    data class MovedWithYou(val meters: Double, val rssiStdDb: Double) : Reason()
     data class FamiliarDiscount(val familiarPlaces: Int, val unfamiliarPlaces: Int) : Reason()
     data class PresentInWindows(val windows: Int, val of: Int) : Reason()
     data class SeenFor(val durationMs: Long) : Reason()
@@ -83,7 +103,7 @@ class EntityReport(
     /** Bluetooth SIG company id from the manufacturer data, if any advertisement carried one. */
     val bleCompanyId: Int?,
     val mobileAp: MobileAp.Kind?,
-    /** Chronological (time, place) track. Used only for analysis, never exported or drawn per device. */
+    /** Chronological (time, stop) track. Used only for analysis, never exported or drawn per device. */
     val track: List<Pair<Long, GeoFix>>,
     /** Best guess of what the device is (phone, watch, router, tracker...). */
     val category: DeviceCategory = DeviceCategory.BLE_OTHER,
@@ -98,6 +118,10 @@ class EntityReport(
     val joinAttempts: List<JoinAttempt> = emptyList(),
     /** BLE local name, if it advertised one. */
     val bleName: String? = null,
+    /** Stops (stays, not places) at which it was around. */
+    val stopsPresent: Int = 0,
+    /** Legs of your journey on which it moved with you. */
+    val legsMovedWith: Int = 0,
 )
 
 /** A client trying to connect to an access point (auth / (re)association request). */
@@ -117,9 +141,16 @@ class AnalysisResult(
  * Persistence / following analysis (CYT surveillance_detector + multi-location
  * tracking, extended with trackers and moving APs).
  *
- * score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel (+ bonuses), each
- * sub-score in [0,1]. An entity seen at a single place is capped at 0.3: being
- * near you for a long time in one spot is a neighbour, not a follower.
+ * Your own track is split into stops and legs ([Journey]). The evidence that something
+ * follows you is:
+ *  - being around at several of your stops (in the middle of the stay, not as you arrive or leave);
+ *  - moving with you, at a steady signal, on separate legs. Each such leg counts as one more
+ *    place, divided by how many devices were moving with you at the time ([AnalysisConfig.crowdRef]).
+ *
+ * effPlaces = unfamiliar stops' places + familiarWeight·familiar ones + Σ leg credits
+ * score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel (+ tracker / moving-AP bonuses),
+ * each sub-score in [0,1]. Below two effective places the score is capped at 0.3: being near
+ * you in one spot, or on one bus ride, is a neighbour or a fellow passenger, not a follower.
  * Every contribution is reported as a [Reason] so the user can judge it.
  */
 class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
@@ -133,27 +164,39 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
     ): AnalysisResult {
         val from = nowMs - config.lookbackMs
         val timeline = FixTimeline(fixes.filter { it.timeMs in from..nowMs }, config.fixMaxGapMs)
-        val clusterer = PlaceClusterer(config.placeRadiusM)
-        val placeOfFix = HashMap<GeoFix, Place>()
-        for (f in timeline.fixes) placeOfFix[f] = clusterer.assign(f)
+        val journey = Journey.of(timeline.fixes, config.placeRadiusM, config.stopMinDwellMs, config.stopEdgeMs)
         val confirmed = familiar.filter { it.state == FamiliarPlace.State.CONFIRMED }
-        val familiarIds = clusterer.places.filter { p -> confirmed.any { it.contains(p.lat, p.lon) } }.map { it.id }.toSet()
+        val familiarIds = journey.places.filter { p -> confirmed.any { it.contains(p.lat, p.lon) } }.map { it.id }.toSet()
 
         val byEntity = sightings.asSequence()
             .filter { it.sighting.timeMs in from..nowMs }
             .groupBy { it.entityId }
 
         var ignored = 0
-        val reports = ArrayList<EntityReport>(byEntity.size)
+        val kept = ArrayList<Pair<String, List<EntitySighting>>>(byEntity.size)
         for ((id, list) in byEntity) {
             if (isIgnored(id, list, ignore)) {
                 ignored++
                 continue
             }
-            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds)
+            kept += id to list.sortedBy { it.sighting.timeMs }
+        }
+
+        // First pass: who moved with you on which leg. The count per leg is the crowd.
+        val moves = HashMap<String, Map<Int, LegMove>>(kept.size)
+        val crowd = IntArray(journey.legs.size)
+        for ((id, list) in kept) {
+            val m = legMoves(list, journey, timeline)
+            moves[id] = m
+            for (leg in m.keys) crowd[leg]++
+        }
+
+        val reports = ArrayList<EntityReport>(kept.size)
+        for ((id, list) in kept) {
+            reports += score(id, list, nowMs, journey, moves[id].orEmpty(), crowd, familiarIds)
         }
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
-        return AnalysisResult(nowMs, clusterer.places, reports, ignored)
+        return AnalysisResult(nowMs, journey.places, reports, ignored)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
@@ -171,8 +214,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         id: String,
         list: List<EntitySighting>,
         nowMs: Long,
-        timeline: FixTimeline,
-        placeOfFix: Map<GeoFix, Place>,
+        journey: Journey,
+        moves: Map<Int, LegMove>,
+        crowd: IntArray,
         familiarIds: Set<Int>,
     ): EntityReport {
         val first = list.first().sighting.timeMs
@@ -180,6 +224,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val addresses = LinkedHashSet<MacAddress>()
         val ssids = LinkedHashSet<String>()
         val places = LinkedHashSet<Int>()
+        val stopsPresent = LinkedHashSet<Int>()
         val windows = HashSet<Int>()
         val track = ArrayList<Pair<Long, GeoFix>>()
         var maxRssi = Int.MIN_VALUE
@@ -189,7 +234,6 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var mobileAp: MobileAp.Kind? = null
         var mobileSsid = ""
         var isAp = false
-        var lastPlace = -1
         val hints = CategoryHints()
         var trust = MacTrust.STABLE
         val probed = LinkedHashSet<String>()
@@ -254,30 +298,44 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 }
             }
 
-            timeline.nearest(s.timeMs)?.let { fix ->
-                val p = placeOfFix[fix] ?: return@let
-                places += p.id
-                if (p.id != lastPlace) {
-                    track += s.timeMs to fix
-                    lastPlace = p.id
+            journey.stopAt(s.timeMs)?.let { stop ->
+                if (stopsPresent.add(stop.index)) {
+                    places += stop.placeId
+                    track += stop.startMs to stop.fix
                 }
             }
         }
 
         val activeMinutes = list.map { it.sighting.timeMs / 60_000L }.toSet().size
-        val coMove = coMovement(list, timeline)
 
-        val placeFixes = track.map { it.second }
-        var travel = 0.0
-        for (i in placeFixes.indices) for (j in i + 1 until placeFixes.size) {
-            travel = maxOf(travel, Geo.distanceM(placeFixes[i], placeFixes[j]))
+        // Co-movement: each leg on which it moved with you, steadily, counts as one more place,
+        // shared out among everyone who moved with you on that leg.
+        var legCredit = 0.0
+        var legTravel = 0.0
+        var coMove: LegMove? = null
+        var legsMoved = 0
+        var othersMoving = 0
+        for ((leg, m) in moves) {
+            if (!m.steady) continue
+            val w = minOf(1.0, config.crowdRef / crowd[leg])
+            legCredit += w
+            legTravel = maxOf(legTravel, m.meters * w)
+            legsMoved++
+            othersMoving = maxOf(othersMoving, crowd[leg] - 1)
+            if (coMove == null || m.meters > coMove.meters) coMove = m
+        }
+
+        val stopFixes = track.map { it.second }
+        var travel = legTravel
+        for (i in stopFixes.indices) for (j in i + 1 until stopFixes.size) {
+            travel = maxOf(travel, Geo.distanceM(stopFixes[i], stopFixes[j]))
         }
 
         val nPlaces = places.size
         val nFamiliar = places.count { it in familiarIds }
         val nUnfamiliar = nPlaces - nFamiliar
         // Familiar places still count (a stalker knows where you live) but for less.
-        val effPlaces = nUnfamiliar + config.familiarWeight * nFamiliar
+        val effPlaces = nUnfamiliar + config.familiarWeight * nFamiliar + legCredit
         val sPlaces = ((effPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
         val sWindows = windows.size.toDouble() / config.windowMinutes.size
         val sSpan = ((last - first).toDouble() / config.spanSaturationMs).coerceIn(0.0, 1.0)
@@ -301,10 +359,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             reasons += Reason.MovingAccessPoint(ap, mobileSsid)
             if (effPlaces >= 2) score += 0.10
         }
-        if (coMove != null) {
-            reasons += Reason.MovedWithYou(coMove.first, coMove.second)
-            score += 0.15
-        }
+        if (coMove != null) reasons += Reason.MovedWithYou(coMove.meters, coMove.rssiStdDb, legsMoved, othersMoving)
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
 
         if (effPlaces < 2) score = minOf(score, 0.3)
@@ -348,23 +403,31 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             wildcardProbes = wildcard,
             joinAttempts = joins.values.sortedByDescending { it.lastMs },
             bleName = hints.name,
+            stopsPresent = stopsPresent.size,
+            legsMovedWith = legsMoved,
         )
     }
 
+    /** How an entity moved with you on one leg: its longest continuous stretch there. */
+    class LegMove(val meters: Double, val rssiStdDb: Double, val steady: Boolean)
+
     /**
-     * Longest stretch in which the entity was heard without a gap of more than [COMOVE_GAP_MS]
-     * while the phone moved at least [COMOVE_MIN_M], with a steady signal. Returns
-     * (metres travelled, RSSI standard deviation) or null.
+     * For every leg, the longest stretch (by distance) in which the entity was heard without a gap
+     * of more than [COMOVE_GAP_MS] while the phone moved at least [COMOVE_MIN_M]. Any such stretch
+     * makes the entity part of that leg's crowd; it is evidence only with a steady, audible signal
+     * (a fixed access point you walk past fades in and out). Legs with no such stretch are absent.
      */
-    private fun coMovement(list: List<EntitySighting>, timeline: FixTimeline): Pair<Double, Double>? {
-        var best: Pair<Double, Double>? = null
+    private fun legMoves(list: List<EntitySighting>, journey: Journey, timeline: FixTimeline): Map<Int, LegMove> {
+        val out = HashMap<Int, LegMove>()
         var start = 0
         for (i in 1..list.size) {
             val endOfSegment = i == list.size ||
-                list[i].sighting.timeMs - list[i - 1].sighting.timeMs > COMOVE_GAP_MS
+                list[i].sighting.timeMs - list[i - 1].sighting.timeMs > COMOVE_GAP_MS ||
+                journey.legAt(list[i].sighting.timeMs) != journey.legAt(list[i - 1].sighting.timeMs)
             if (!endOfSegment) continue
             val seg = list.subList(start, i)
             start = i
+            val leg = journey.legAt(seg.first().sighting.timeMs) ?: continue
             if (seg.size < 4) continue
             val t0 = seg.first().sighting.timeMs
             val t1 = seg.last().sighting.timeMs
@@ -374,13 +437,20 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             val d = Geo.distanceM(a, b)
             if (d < COMOVE_MIN_M) continue
             val rssi = seg.map { it.sighting.rssi }.filter { it != 0 }
-            if (rssi.size < 4) continue
-            val mean = rssi.average()
-            val std = Math.sqrt(rssi.sumOf { (it - mean) * (it - mean) } / rssi.size)
-            if (mean < -90 || std > COMOVE_MAX_STD) continue
-            if (best == null || d > best.first) best = d to std
+            var std = Double.MAX_VALUE
+            var steady = false
+            if (rssi.size >= 4) {
+                val mean = rssi.average()
+                std = Math.sqrt(rssi.sumOf { (it - mean) * (it - mean) } / rssi.size)
+                steady = mean >= -90 && std <= COMOVE_MAX_STD
+            }
+            val prev = out[leg.index]
+            // Prefer a steady stretch over an unsteady one, then the longer one.
+            if (prev == null || (steady && !prev.steady) || (steady == prev.steady && d > prev.meters)) {
+                out[leg.index] = LegMove(d, std, steady)
+            }
         }
-        return best
+        return out
     }
 
     /** Index of the CYT window containing `ageMs`, or null if older than the last one. */

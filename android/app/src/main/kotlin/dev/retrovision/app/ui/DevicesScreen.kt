@@ -222,7 +222,7 @@ fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
                     }
                 }
                 Text(
-                    "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
+                    Texts.presence(r) + " · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
