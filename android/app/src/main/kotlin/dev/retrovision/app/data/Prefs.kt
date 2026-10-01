@@ -39,6 +39,11 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("beaconDb", false)
         set(v) = p.edit().putBoolean("beaconDb", v).apply()
 
+    /** Entities marked as field-test targets (a device you carry on purpose). */
+    var targets: Set<String>
+        get() = p.getStringSet("targets", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("targets", v).apply()
+
     fun ownSsidSet(): Set<String> =
         ownSsids.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 }

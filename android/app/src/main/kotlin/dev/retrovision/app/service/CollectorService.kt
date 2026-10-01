@@ -25,6 +25,7 @@ import dev.retrovision.app.Link
 import dev.retrovision.app.R
 import dev.retrovision.app.RetrovisionApp
 import dev.retrovision.app.data.FixRow
+import dev.retrovision.app.data.SessionRecorder
 import dev.retrovision.app.data.SightingRow
 import dev.retrovision.app.data.toFix
 import dev.retrovision.app.data.toModel
@@ -91,6 +92,7 @@ class CollectorService : Service() {
     }
 
     override fun onDestroy() {
+        SessionRecorder.stop()
         Collector.running.value = false
         Collector.session = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
@@ -185,6 +187,7 @@ class CollectorService : Service() {
             if (loc.hasSpeed()) loc.speed else null,
         )
         Collector.location.value = fix
+        SessionRecorder.write(fix)
         scope.launch {
             app.db.dao().insertFix(FixRow(fix.timeMs, fix.lat, fix.lon, fix.accuracyM, fix.speedMps ?: -1f))
         }
@@ -193,6 +196,7 @@ class CollectorService : Service() {
     // ---- probe link ------------------------------------------------------------
 
     private fun onSighting(s: Sighting) {
+        SessionRecorder.write(s)
         val res = synchronized(resolver) { resolver.resolve(s) }
         queue.trySend(s.toRow(res.entityId)) // full queue: drop rather than block the USB thread
     }

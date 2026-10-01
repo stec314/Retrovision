@@ -171,24 +171,29 @@ fun DevicesScreen(modifier: Modifier) {
         if (list.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(list.take(200), key = { it.entityId }) { r ->
-                Card(Modifier.fillMaxWidth().clickable { selected = r }) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                            Text("%.0f%%".format(r.score * 100), color = if (r.alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
-                        }
-                        LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
-                        Text(
-                            "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
-                    }
-                }
+                EntityCard(r) { selected = r }
             }
         }
     }
     selected?.let { DeviceDialog(it) { selected = null } }
+}
+
+@Composable
+fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
+    Card(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text("%.0f%%".format(r.score * 100), color = if (r.alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            }
+            LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
+            Text(
+                "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
+        }
+    }
 }
 
 @Composable
@@ -242,6 +247,11 @@ private fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         ) { Text("${e.label}: $label" + if (!ready) Texts.tr("  (set up in Settings)", "  (configura in Impostazioni)") else "") }
                     }
                 }
+                val isTarget = r.entityId in app.prefs.targets
+                OutlinedButton(onClick = {
+                    app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
+                    onClose()
+                }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
                 output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
             }
         },
@@ -386,6 +396,9 @@ fun SettingsScreen(modifier: Modifier) {
                 TextButton(onClick = { scope.launch { app.db.dao().removeIgnore(ig.entityId) } }) { Text(Texts.tr("Remove", "Rimuovi")) }
             }
         }
+
+        SessionsSection()
+        FieldTestSection()
 
         OutlinedButton(onClick = { wipe = true }, modifier = Modifier.fillMaxWidth()) { Text(Texts.tr("Delete all collected data", "Elimina tutti i dati raccolti")) }
     }
