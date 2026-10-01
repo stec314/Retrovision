@@ -99,15 +99,19 @@ jobs:
           if-no-files-found: error
 
       - name: Publish dev build
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+        if: >-
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/'))
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           gh release view dev-latest >/dev/null 2>&1 || \
-            gh release create dev-latest --prerelease --target "$GITHUB_SHA" \
+            gh release create dev-latest --prerelease --target "$SHA" \
               --title "Dev build (latest)" --notes "placeholder"
           gh release upload dev-latest Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS --clobber
-          gh release edit dev-latest --prerelease --notes "Automatic build of ${GITHUB_SHA::7} (${GITHUB_REF_NAME}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
+          gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
 
       - name: Publish tagged release
         if: startsWith(github.ref, 'refs/tags/v')
