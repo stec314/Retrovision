@@ -19,6 +19,11 @@ on:
 permissions:
   contents: read
 
+# One build per branch at a time: push and pull_request runs of the same commit must not race on the release.
+concurrency:
+  group: android-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   firmware:
     uses: ./.github/workflows/firmware.yml
@@ -53,7 +58,7 @@ jobs:
           d=android/app/src/main/assets/firmware
           mkdir -p "$d"
           cp "$bin" "$d/"
-          ver=$(git describe --tags --always --dirty)
+          ver="0.1.0-r${{ github.run_number }}"
           python3 - "$ver" <<'PY'
           import json, sys
           json.dump({"version": sys.argv[1], "images": [
