@@ -135,7 +135,7 @@ fun FieldTestSection() {
     val analysis by Collector.analysis.collectAsState()
     val targets = app.prefs.targets
     val rows = analysis?.entities.orEmpty().filter { e ->
-        e.entityId in targets || e.ssids.any { it.startsWith("RV-TARGET") }
+        e.entityId in targets || e.ssids.any { it.startsWith("RV-TARGET") } || e.bleName?.startsWith("RV-TARGET") == true
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(Texts.tr("Field test", "Test sul campo"), style = MaterialTheme.typography.titleMedium)

@@ -47,7 +47,7 @@ jobs:
       - name: Fetch firmware built from this commit
         uses: actions/download-artifact@v4
         with:
-          pattern: retrovision-esp32*
+          pattern: retrovision-*
           path: fw
 
       - name: Bundle firmware into the APK
@@ -55,7 +55,7 @@ jobs:
           set -e
           d=android/app/src/main/assets/firmware
           mkdir -p "$d"
-          for t in esp32s3 esp32; do
+          for t in esp32s3 esp32 target-esp32s3 target-esp32; do
             bin=$(find fw -name "retrovision-$t-merged.bin" | head -1)
             [ -n "$bin" ] || { echo "::error::merged $t firmware image not found in artifacts"; exit 1; }
             cp "$bin" "$d/"
@@ -64,10 +64,14 @@ jobs:
           python3 - "$ver" <<'PY'
           import json, sys
           json.dump({"version": sys.argv[1], "images": [
-              {"id": "esp32s3", "chip": "ESP32-S3", "offset": 0,
+              {"id": "esp32s3", "role": "probe", "chip": "ESP32-S3", "offset": 0,
                "file": "retrovision-esp32s3-merged.bin"},
-              {"id": "esp32", "chip": "ESP32", "offset": 4096,
-               "file": "retrovision-esp32-merged.bin"}]},
+              {"id": "esp32", "role": "probe", "chip": "ESP32", "offset": 4096,
+               "file": "retrovision-esp32-merged.bin"},
+              {"id": "target-esp32s3", "role": "target", "chip": "ESP32-S3", "offset": 0,
+               "file": "retrovision-target-esp32s3-merged.bin"},
+              {"id": "target-esp32", "role": "target", "chip": "ESP32", "offset": 4096,
+               "file": "retrovision-target-esp32-merged.bin"}]},
               open("android/app/src/main/assets/firmware/manifest.json", "w"), indent=2)
           PY
           echo "RV_VERSION_NAME=$ver" >> "$GITHUB_ENV"
@@ -118,17 +122,17 @@ jobs:
         run: |
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           cp "$apk" "Retrovision-${RV_VERSION_NAME}.apk"
-          for t in esp32s3 esp32; do
+          for t in esp32s3 esp32 target-esp32s3 target-esp32; do
             cp "$(find fw -name retrovision-$t-merged.bin | head -1)" "retrovision-$t-${RV_VERSION_NAME}.bin"
           done
-          sha256sum Retrovision-*.apk retrovision-esp32*.bin | tee SHA256SUMS
+          sha256sum Retrovision-*.apk retrovision-*.bin | tee SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: retrovision-apk
           path: |
             Retrovision-*.apk
-            retrovision-esp32*.bin
+            retrovision-*.bin
             SHA256SUMS
           if-no-files-found: error
 
@@ -148,7 +152,7 @@ jobs:
           for a in $(gh release view dev-latest --json assets -q '.assets[].name'); do
             gh release delete-asset dev-latest "$a" -y
           done
-          gh release upload dev-latest Retrovision-*.apk retrovision-esp32*.bin SHA256SUMS --clobber
+          gh release upload dev-latest Retrovision-*.apk retrovision-*.bin SHA256SUMS --clobber
           gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
 
       - name: Publish tagged release
@@ -156,4 +160,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --generate-notes Retrovision-*.apk retrovision-esp32*.bin SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --generate-notes Retrovision-*.apk retrovision-*.bin SHA256SUMS

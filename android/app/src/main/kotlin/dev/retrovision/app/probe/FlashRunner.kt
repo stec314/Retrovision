@@ -30,7 +30,7 @@ object FlashRunner {
     /** Flashes whichever of [images] matches the chip found on the board. */
     fun start(ctx: Context, images: List<FirmwareImage>) {
         if (Collector.flash.value.running || images.isEmpty()) return
-        Collector.flash.value = FlashUi(running = true, stage = "Preparazione")
+        Collector.flash.value = FlashUi(running = true, stage = "Preparazione", target = images.first().role == FirmwareRole.TARGET)
         scope.launch { run(ctx.applicationContext, images) }
     }
 

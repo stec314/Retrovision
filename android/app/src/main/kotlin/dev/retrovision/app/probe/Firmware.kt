@@ -4,9 +4,18 @@ import android.content.Context
 import dev.retrovision.core.flash.Chip
 import org.json.JSONObject
 
+/** What a firmware image turns the board into. */
+enum class FirmwareRole {
+    /** The Retrovision probe, streaming to this app. */
+    PROBE,
+    /** A field-test target: BLE beacon + Wi-Fi access point named RV-TARGET-xxxx, to carry around. */
+    TARGET,
+}
+
 /** One flashable image bundled in the APK by CI (assets/firmware/manifest.json). */
 class FirmwareImage(
     val id: String,
+    val role: FirmwareRole,
     val chip: Chip,
     val offset: Int,
     val version: String,
@@ -24,6 +33,7 @@ object FirmwareAssets {
             val chip = Chip.fromId(o.getString("chip")) ?: return@mapNotNull null
             FirmwareImage(
                 id = o.getString("id"),
+                role = if (o.optString("role", "probe") == "target") FirmwareRole.TARGET else FirmwareRole.PROBE,
                 chip = chip,
                 offset = o.optInt("offset", 0),
                 version = version,

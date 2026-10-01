@@ -1,0 +1,25 @@
+# Retrovision field-test target (both boards). Board specifics in sdkconfig.defaults.<chip>.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# Wi-Fi + BLE does not fit the default 1 MB app slot.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+CONFIG_LOG_COLORS=n
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- Wi-Fi: access point only, nothing stored -----------------------------
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+
+# --- BLE: broadcaster only (NimBLE) ---------------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+# Legacy advertising: every probe (also the BT 4.2 classic ESP32) can hear it.
+CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+CONFIG_ESP_TASK_WDT_EN=y

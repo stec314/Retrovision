@@ -4,6 +4,7 @@
 |---|---|
 | `esp32s3/` | ESP-IDF app for the **Seeed Studio XIAO ESP32-S3** (native USB link) |
 | `esp32/` | ESP-IDF app for **classic ESP32** boards: NodeMCU-32S, ESP32-DevKitC, WROOM-32 (UART link at 921600 baud via CP210x/CH340) |
+| `target/` | **Field-test target** (not a probe): BLE beacon + Wi-Fi AP named `RV-TARGET-xxxx`, both boards from one source |
 | `components/rv_probe/` | The probe firmware itself, shared by both boards |
 | `components/rv_core/` | Portable C core: framing, 802.11 parser, BLE helpers, dedup. Host-tested |
 | `components/rv_proto/` | nanopb code generated from `proto/`. **Do not edit**; run `tools/gen_proto.sh` |
@@ -62,3 +63,15 @@ The code has so far been built in CI only. These points need a real board:
 - Capture quality under `COEX`, and whether `TIME_SLICED` is worth implementing.
 - `Reboot{into_bootloader}` → ROM download mode.
 - Whether chained extended-advertising reports arrive fragmented from NimBLE. They are reassembled, but this has not been observed yet.
+
+## Field-test target (`target/`)
+
+A board to carry on purpose, to check the probe and the analysis end to end. It advertises over BLE every 100 ms (non-connectable, public address, name `RV-TARGET-xxxx`) and runs a Wi-Fi access point with the same name on channel 6 (WPA2, random password: nobody can join). `xxxx` = last two bytes of the chip MAC. The LED blinks once every 2 s. It does not speak the probe protocol.
+
+The app flashes it from *Probe → Field-test target*; the Sessions screen picks up anything named `RV-TARGET*` automatically. CI publishes `retrovision-target-esp32s3-merged.bin` (0x0) and `retrovision-target-esp32-merged.bin` (0x1000).
+
+```sh
+cd firmware/target
+idf.py set-target esp32      # or esp32s3
+idf.py build flash
+```
