@@ -135,14 +135,14 @@ fun FieldTestSection() {
     val analysis by Collector.analysis.collectAsState()
     val targets = app.prefs.targets
     val rows = analysis?.entities.orEmpty().filter { e ->
-        e.entityId in targets || e.ssids.any { it.startsWith("RV-TARGET") }
+        e.entityId in targets || e.ssids.any { it.startsWith("RV-TARGET") } || e.bleName?.startsWith("RV-TARGET") == true
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         Text(Texts.tr("Field test", "Test sul campo"), style = MaterialTheme.typography.titleMedium)
         Text(
             Texts.tr(
-                "Carry a device you control (the retrovision-target firmware, or any phone/tag), mark it from the Devices tab, then go about your day. Detection % is the share of minutes in which it was heard; the score should cross the alert threshold once you have been to enough different places. If it does not, the weights need tuning.",
-                "Porta con te un dispositivo che controlli (il firmware retrovision-target, o un telefono/tag), segnalo dalla scheda Dispositivi e vai in giro. Rilevamento % è la quota di minuti in cui è stato sentito; il punteggio dovrebbe superare la soglia dopo abbastanza luoghi diversi. Se non succede, i pesi vanno tarati.",
+                "Carry a device you control (the retrovision-target firmware, or any phone/tag), mark it from the Devices tab, then go about your day. Detection % is the share of minutes in which it was heard; the score should cross the alert threshold once it has been with you at enough different stops (stay at least 5 minutes at each; passing by does not count). If it does not, the weights need tuning.",
+                "Porta con te un dispositivo che controlli (il firmware retrovision-target, o un telefono/tag), segnalo dalla scheda Dispositivi e vai in giro. Rilevamento % è la quota di minuti in cui è stato sentito; il punteggio dovrebbe superare la soglia dopo abbastanza soste in luoghi diversi (fermati almeno 5 minuti in ognuno; passarci davanti non conta). Se non succede, i pesi vanno tarati.",
             ),
             style = MaterialTheme.typography.bodySmall,
         )
@@ -153,7 +153,7 @@ fun FieldTestSection() {
             Text(
                 "${Texts.entityLabel(e)}\n" +
                     Texts.tr("detection", "rilevamento") + " %.0f%% (%d/%d min) · ".format(pct, e.activeMinutes, span) +
-                    "${e.placeIds.size} ${Texts.tr("places", "luoghi")} · " +
+                    Texts.presence(e) + " · " +
                     Texts.tr("score", "punteggio") + " %.0f%%".format(e.score * 100) +
                     if (e.alert) " · ${Texts.tr("ALERT", "ALLERTA")}" else "",
                 style = MaterialTheme.typography.bodySmall,

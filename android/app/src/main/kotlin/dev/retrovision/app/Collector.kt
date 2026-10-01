@@ -24,6 +24,8 @@ data class FlashUi(
     val log: List<String> = emptyList(),
     val error: String = "",
     val success: Boolean = false,
+    /** The image being written is the field-test target, not the probe. */
+    val target: Boolean = false,
 )
 
 /** Process-wide state shared between the service and the UI. */

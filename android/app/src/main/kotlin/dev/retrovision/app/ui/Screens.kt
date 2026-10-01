@@ -52,6 +52,7 @@ import dev.retrovision.app.enrich.EnrichException
 import dev.retrovision.app.enrich.Enrichers
 import dev.retrovision.app.enrich.Query
 import dev.retrovision.app.probe.FirmwareAssets
+import dev.retrovision.app.probe.FirmwareRole
 import dev.retrovision.app.probe.FlashRunner
 import dev.retrovision.app.probe.Phase
 import dev.retrovision.app.service.CollectorService
@@ -180,7 +181,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         title = { Text(Texts.entityLabel(r)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("%.0f%%".format(r.score * 100) + " · ${r.placeIds.size} ${Texts.tr("places", "luoghi")}")
+                Text("%.0f%%".format(r.score * 100) + " · " + Texts.presence(r))
                 Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
                 Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
@@ -236,8 +237,11 @@ fun ProbeScreen(modifier: Modifier) {
     val ctx = LocalContext.current
     val conn by Collector.connection.collectAsState()
     val flash by Collector.flash.collectAsState()
-    val images = remember { FirmwareAssets.load(ctx) }
+    val allImages = remember { FirmwareAssets.load(ctx) }
+    val images = remember(allImages) { allImages.filter { it.role == FirmwareRole.PROBE } }
+    val targetImages = remember(allImages) { allImages.filter { it.role == FirmwareRole.TARGET } }
     var confirmAll by remember { mutableStateOf(false) }
+    var confirmTarget by remember { mutableStateOf(false) }
 
     val view = LocalView.current
     DisposableEffect(flash.running) {
@@ -277,6 +281,30 @@ fun ProbeScreen(modifier: Modifier) {
                 }
             }
         }
+        if (targetImages.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(Texts.tr("Field-test target", "Bersaglio di prova"), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        Texts.tr(
+                            "Turns a spare ESP32 into a device that is easy to recognise: a Bluetooth beacon and a Wi-Fi network both named RV-TARGET-xxxx. " +
+                                "Power it from a power bank and give it to someone who follows you, or carry it yourself, to check that the probe hears it and that the analysis flags it. " +
+                                "It does not talk to this app and nobody can join its network.",
+                            "Trasforma un ESP32 di scorta in un dispositivo facile da riconoscere: un beacon Bluetooth e una rete Wi-Fi, entrambi chiamati RV-TARGET-xxxx. " +
+                                "Alimentalo con un powerbank e dallo a chi ti segue, o portalo tu, per verificare che la sonda lo senta e che l'analisi lo segnali. " +
+                                "Non comunica con questa app e nessuno può collegarsi alla sua rete.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    targetImages.forEach { img ->
+                        Text("• ${img.chip.label} · ${img.data.size / 1024} KiB", style = MaterialTheme.typography.bodySmall)
+                    }
+                    OutlinedButton(enabled = !flash.running, onClick = { confirmTarget = true }) {
+                        Text(Texts.tr("Flash as test target", "Flasha come bersaglio di prova"))
+                    }
+                }
+            }
+        }
         Text(
             Texts.tr(
                 "Use the phone's USB-C port (OTG) and keep this screen open while flashing. The chip is verified before anything is erased, and the written image is checked by MD5. " +
@@ -292,7 +320,13 @@ fun ProbeScreen(modifier: Modifier) {
             else if (flash.running) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
         if (flash.error.isNotEmpty()) Text(flash.error, color = MaterialTheme.colorScheme.error)
-        if (flash.success) Text(Texts.tr("Done. Unplug and replug the probe if it does not reconnect in a few seconds.", "Fatto. Se la sonda non si riconnette in pochi secondi, scollega e ricollega."))
+        if (flash.success && !flash.target) Text(Texts.tr("Done. Unplug and replug the probe if it does not reconnect in a few seconds.", "Fatto. Se la sonda non si riconnette in pochi secondi, scollega e ricollega."))
+        if (flash.success && flash.target) Text(
+            Texts.tr(
+                "Target ready. Unplug it and power it from a power bank: the LED blinks every 2 s. It shows up as RV-TARGET-xxxx and is picked up automatically in Sessions → Field test. To turn it back into a probe, plug it in and flash the probe firmware.",
+                "Bersaglio pronto. Scollegalo e alimentalo con un powerbank: il LED lampeggia ogni 2 s. Compare come RV-TARGET-xxxx e viene riconosciuto da solo in Sessioni → Test sul campo. Per farlo tornare sonda, ricollegalo e flasha il firmware della sonda.",
+            ),
+        )
         flash.log.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
     }
 
@@ -303,6 +337,22 @@ fun ProbeScreen(modifier: Modifier) {
             text = { Text(Texts.tr("This overwrites the firmware on the connected board.", "Sovrascrive il firmware della scheda collegata.")) },
             confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, images); confirmAll = false }) { Text(Texts.tr("Flash", "Flasha")) } },
             dismissButton = { TextButton(onClick = { confirmAll = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
+        )
+    }
+    if (confirmTarget) {
+        AlertDialog(
+            onDismissRequest = { confirmTarget = false },
+            title = { Text(Texts.tr("Make this board a test target?", "Trasformare la scheda in bersaglio di prova?")) },
+            text = {
+                Text(
+                    Texts.tr(
+                        "This overwrites the firmware on the connected board: it will no longer work as a probe until you flash the probe firmware again.",
+                        "Sovrascrive il firmware della scheda collegata: non funzionerà più come sonda finché non ci rimetti il firmware della sonda.",
+                    ),
+                )
+            },
+            confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, targetImages); confirmTarget = false }) { Text(Texts.tr("Flash", "Flasha")) } },
+            dismissButton = { TextButton(onClick = { confirmTarget = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
     }
 }

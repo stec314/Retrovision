@@ -34,8 +34,18 @@ object Texts {
 
     private fun shorten(s: String) = if (s.length > 28) s.take(27) + "…" else s
 
+    /** "3 places · 2 legs": where you stopped and it was there, and legs on which it moved with you. */
+    fun presence(r: EntityReport): String {
+        val places = "${r.placeIds.size} ${tr("places", "luoghi")}"
+        if (r.legsMovedWith == 0) return places
+        return places + " · ${r.legsMovedWith} " + if (r.legsMovedWith == 1) tr("leg", "tratto") else tr("legs", "tratti")
+    }
+
     fun reason(r: Reason): String = when (r) {
-        is Reason.SeenAtPlaces -> tr("Seen at ${r.places} different places", "Visto in ${r.places} luoghi diversi")
+        is Reason.SeenAtPlaces -> tr(
+            "Around at ${r.places} different places where you stopped",
+            "Presente in ${r.places} luoghi diversi delle tue soste",
+        )
         is Reason.FamiliarDiscount -> tr(
             "${r.familiarPlaces} of those are places you are at all the time (counted for less)",
             "${r.familiarPlaces} di questi sono luoghi dove sei sempre (contano meno)",
@@ -43,7 +53,11 @@ object Texts {
         is Reason.MovedWithYou -> tr(
             "Heard continuously at a steady strength while you moved ${r.meters.toInt()} m",
             "Sentito di continuo, con segnale stabile, mentre ti spostavi di ${r.meters.toInt()} m",
-        )
+        ) + (if (r.legs > 1) tr(", on ${r.legs} separate legs", ", in ${r.legs} tratti separati") else "") +
+            if (r.othersMoving >= 3) tr(
+                " (with ${r.othersMoving} other devices: public transport? counts for less)",
+                " (insieme ad altri ${r.othersMoving} dispositivi: mezzo pubblico? conta meno)",
+            ) else ""
         is Reason.PresentInWindows -> tr(
             "Present in ${r.windows} of ${r.of} time windows",
             "Presente in ${r.windows} finestre temporali su ${r.of}",

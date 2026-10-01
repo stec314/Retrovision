@@ -39,19 +39,16 @@ class AnalyzerTest {
 
     private fun fourPlaceSightings(id: String) = listOf(5L, 15L, 25L, 35L).map { ble(id, it * min) }
 
-    @Test fun followerAcrossFourPlacesAlerts() {
-        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min)).entities.single()
+    @Test fun followerAtFourStopsAlerts() {
+        val r = Scenarios.followerOnFoot().run()
         assertTrue(r.alert)
         assertEquals(4, r.placeIds.size)
+        assertEquals(4, r.stopsPresent)
         assertTrue(r.reasons.any { it is Reason.SeenAtPlaces })
     }
 
     @Test fun placesYouAreAtAllTheTimeCountForLess() {
-        val familiar = listOf(5L, 15L, 25L).map { m ->
-            val f = at(m * min)
-            FamiliarPlace(m, f.lat, f.lon, 150.0, "x")
-        }
-        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min), familiar = familiar).entities.single()
+        val r = Scenarios.followerAtFamiliarPlaces().run()
         // 1 unfamiliar + 3 * 0.3 = 1.9 effective places: below the "seen elsewhere" threshold
         assertFalse(r.alert)
         assertTrue(r.score <= 0.3 + 1e-9)
@@ -59,13 +56,21 @@ class AnalyzerTest {
     }
 
     @Test fun suggestedOrRejectedPlacesDoNotCount() {
-        val f = at(5 * min)
+        val base = Scenarios.followerOnFoot()
+        val v = VisitTimeline.build(base.route.fixes).first()
         val notConfirmed = listOf(
-            FamiliarPlace(1, f.lat, f.lon, 150.0, state = FamiliarPlace.State.SUGGESTED),
-            FamiliarPlace(2, f.lat, f.lon, 150.0, state = FamiliarPlace.State.REJECTED),
+            FamiliarPlace(1, v.lat, v.lon, 150.0, state = FamiliarPlace.State.SUGGESTED),
+            FamiliarPlace(2, v.lat, v.lon, 150.0, state = FamiliarPlace.State.REJECTED),
         )
-        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min), familiar = notConfirmed).entities.single()
+        val r = Scenario("x", "follower", true, base.route, base.air, notConfirmed).run()
         assertTrue(r.alert)
+    }
+
+    @Test fun walkingPastSomethingIsNotBeingAtAPlace() {
+        // A continuous walk has no stops: being heard along it is not "seen at places".
+        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min)).entities.single()
+        assertTrue(r.placeIds.isEmpty())
+        assertFalse(r.alert)
     }
 
     @Test fun steadyHeardWhileTravellingIsFlagged() {

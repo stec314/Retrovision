@@ -100,8 +100,16 @@ object VisitTimeline {
     /**
      * Consecutive fixes that stay within [radiusM] of the stay's centroid form one visit;
      * stays shorter than [minDwellMs] are travel and are dropped.
+     *
+     * With [outlierToleranceMs] > 0, fixes that jump out of the radius (indoor network fixes,
+     * multipath) do not end the visit as long as a fix back inside comes within that time.
      */
-    fun build(fixes: List<GeoFix>, radiusM: Double = 100.0, minDwellMs: Long = 3 * 60_000L): List<Visit> {
+    fun build(
+        fixes: List<GeoFix>,
+        radiusM: Double = 100.0,
+        minDwellMs: Long = 3 * 60_000L,
+        outlierToleranceMs: Long = 0L,
+    ): List<Visit> {
         val sorted = fixes.sortedBy { it.timeMs }
         val out = ArrayList<Visit>()
         var i = 0
@@ -109,18 +117,26 @@ object VisitTimeline {
             var lat = sorted[i].lat
             var lon = sorted[i].lon
             var n = 1
+            var lastIn = i
             var j = i + 1
-            while (j < sorted.size && Geo.distanceM(sorted[j].lat, sorted[j].lon, lat, lon) <= radiusM &&
-                sorted[j].timeMs - sorted[j - 1].timeMs <= 10 * 60_000L
-            ) {
-                n++
-                lat += (sorted[j].lat - lat) / n
-                lon += (sorted[j].lon - lon) / n
-                j++
+            fun inside(f: GeoFix) = Geo.distanceM(f.lat, f.lon, lat, lon) <= radiusM
+            while (j < sorted.size && sorted[j].timeMs - sorted[lastIn].timeMs <= 10 * 60_000L) {
+                if (inside(sorted[j])) {
+                    n++
+                    lat += (sorted[j].lat - lat) / n
+                    lon += (sorted[j].lon - lon) / n
+                    lastIn = j
+                    j++
+                    continue
+                }
+                if (outlierToleranceMs <= 0) break
+                var k = j + 1
+                while (k < sorted.size && sorted[k].timeMs - sorted[j].timeMs <= outlierToleranceMs && !inside(sorted[k])) k++
+                if (k < sorted.size && sorted[k].timeMs - sorted[j].timeMs <= outlierToleranceMs) j = k else break
             }
-            val v = Visit(lat, lon, sorted[i].timeMs, sorted[j - 1].timeMs)
+            val v = Visit(lat, lon, sorted[i].timeMs, sorted[lastIn].timeMs)
             if (v.durationMs >= minDwellMs) out += v
-            i = j
+            i = lastIn + 1
         }
         return out
     }
