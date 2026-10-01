@@ -1,0 +1,153 @@
+name: android
+
+on:
+  push:
+    branches: [main, "release/**"]
+    tags: ["v*"]
+    paths:
+      - "android/**"
+      - "proto/**"
+      - "firmware/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - "proto/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One build per branch at a time: push and pull_request runs of the same commit must not race on the release.
+concurrency:
+  group: android-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    uses: ./.github/workflows/firmware.yml
+
+  build:
+    name: Test core + build APK
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # publish the dev-build release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Fetch firmware built from this commit
+        uses: actions/download-artifact@v4
+        with:
+          name: retrovision-esp32s3
+          path: fw
+
+      - name: Bundle firmware into the APK
+        run: |
+          set -e
+          bin=$(find fw -name retrovision-esp32s3-merged.bin | head -1)
+          [ -n "$bin" ] || { echo "::error::merged firmware image not found in artifact"; exit 1; }
+          d=android/app/src/main/assets/firmware
+          mkdir -p "$d"
+          cp "$bin" "$d/"
+          ver="0.1.0-r${{ github.run_number }}"
+          python3 - "$ver" <<'PY'
+          import json, sys
+          json.dump({"version": sys.argv[1], "images": [
+              {"id": "esp32s3", "chip": "ESP32-S3", "offset": 0,
+               "file": "retrovision-esp32s3-merged.bin"}]},
+              open("android/app/src/main/assets/firmware/manifest.json", "w"), indent=2)
+          PY
+          echo "RV_VERSION_NAME=$ver" >> "$GITHUB_ENV"
+          echo "RV_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      # Vendor names come from public registries at build time, so no registry data lives in the repo.
+      # A failed download only means the APK has no vendor names; it never fails the build.
+      - name: Vendor tables (IEEE OUI, Bluetooth SIG company ids)
+        run: |
+          d=android/app/src/main/assets/vendors
+          mkdir -p "$d" vend
+          ua="Mozilla/5.0 (Retrovision CI)"
+          ok=1
+          for f in oui/oui.csv:oui.csv oui28/mam.csv:mam.csv oui36/oui36.csv:oui36.csv; do
+            curl -fsSL --retry 3 -A "$ua" "https://standards-oui.ieee.org/${f%%:*}" -o "vend/${f##*:}" || ok=0
+          done
+          if [ "$ok" = 1 ]; then
+            python3 tools/build_vendors.py oui "$d/oui.tsv" vend/oui.csv vend/mam.csv vend/oui36.csv
+          else
+            echo "::warning::IEEE OUI download failed; APK will have no Wi-Fi vendor names"
+          fi
+          if curl -fsSL --retry 3 "https://raw.githubusercontent.com/NordicSemiconductor/bluetooth-numbers-database/master/v1/company_ids.json" -o vend/company_ids.json; then
+            python3 tools/build_vendors.py ble "$d/ble_companies.tsv" vend/company_ids.json
+          else
+            echo "::warning::company id download failed"
+          fi
+          ls -la "$d" || true
+
+      - name: Core unit tests
+        working-directory: android
+        run: set -o pipefail; ./gradlew --no-daemon :core:test 2>&1 | tee ../gradle-test.log
+
+      - name: Build release APK
+        working-directory: android
+        run: set -o pipefail; ./gradlew --no-daemon :app:assembleRelease 2>&1 | tee ../gradle-app.log
+
+      # Make compiler errors readable without log access.
+      - name: Report build errors
+        if: failure()
+        run: |
+          for f in gradle-test.log gradle-app.log; do
+            [ -f "$f" ] || continue
+            grep -nE "^e: |error:|What went wrong|Execution failed|FAILED|Could not " "$f" \
+              | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
+          done
+
+      - name: Name the APK
+        run: |
+          apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          cp "$apk" "Retrovision-${RV_VERSION_NAME}.apk"
+          cp "$(find fw -name retrovision-esp32s3-merged.bin | head -1)" "retrovision-esp32s3-${RV_VERSION_NAME}.bin"
+          sha256sum Retrovision-*.apk retrovision-esp32s3-*.bin | tee SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retrovision-apk
+          path: |
+            Retrovision-*.apk
+            retrovision-esp32s3-*.bin
+            SHA256SUMS
+          if-no-files-found: error
+
+      - name: Publish dev build
+        if: >-
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))) ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'release/'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          gh release view dev-latest >/dev/null 2>&1 || \
+            gh release create dev-latest --prerelease --target "$SHA" \
+              --title "Dev build (latest)" --notes "placeholder"
+          # Remove assets of older builds so the release only ever holds the latest APK.
+          for a in $(gh release view dev-latest --json assets -q '.assets[].name'); do
+            gh release delete-asset dev-latest "$a" -y
+          done
+          gh release upload dev-latest Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS --clobber
+          gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --generate-notes Retrovision-*.apk retrovision-esp32s3-*.bin SHA256SUMS
