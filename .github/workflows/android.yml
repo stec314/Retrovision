@@ -21,7 +21,7 @@ permissions:
 
 # One build per branch at a time: push and pull_request runs of the same commit must not race on the release.
 concurrency:
-  group: android-${{ github.head_ref || github.ref }}
+  group: android-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
