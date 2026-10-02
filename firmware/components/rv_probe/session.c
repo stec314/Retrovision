@@ -22,7 +22,7 @@
 #include "freertos/task.h"
 #include "link.h"
 #include "rv_framing.h"
-#if !CONFIG_IDF_TARGET_ESP32
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2
 #include "soc/rtc_cntl_reg.h"
 #endif
 #include "soc/soc.h"
@@ -198,14 +198,14 @@ static void reboot(bool into_bootloader)
 {
     rv_capture_stop();
     rv_link_flush(pdMS_TO_TICKS(200));
-#if !CONFIG_IDF_TARGET_ESP32
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2
     if (into_bootloader) {
         // Next reset boots the ROM download mode (esptool / web flasher).
         REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
     }
 #else
-    // The classic ESP32 can only enter download mode through the GPIO0 strap:
-    // the host does that with DTR/RTS (auto-reset circuit) after this plain reboot.
+    // Classic ESP32 and C5: enter download mode via the auto-reset circuit
+    // (DTR/RTS) or the BOOT strap; this is a plain reboot.
     (void)into_bootloader;
 #endif
     esp_restart();
