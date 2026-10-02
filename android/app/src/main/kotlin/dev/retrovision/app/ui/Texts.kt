@@ -45,6 +45,10 @@ object Texts {
             "Heard continuously at a steady strength while you moved ${r.meters.toInt()} m",
             "Sentito di continuo, con segnale stabile, mentre ti spostavi di ${r.meters.toInt()} m",
         )
+        is Reason.SeenAcrossPeriods -> tr(
+            "Reappeared in ${r.periods} different time periods",
+            "Ricomparso in ${r.periods} fasce orarie diverse",
+        )
         is Reason.PresentInWindows -> tr(
             "Present in ${r.windows} of ${r.of} time windows",
             "Presente in ${r.windows} finestre temporali su ${r.of}",

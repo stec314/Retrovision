@@ -159,6 +159,8 @@ fun StatusScreen(modifier: Modifier) {
                 alerts.take(5).forEach { Text("• ${Texts.entityLabel(it)}  ${"%.0f".format(it.score * 100)}%") }
             }
         }
+
+        RetrospectiveCard()
     }
 }
 

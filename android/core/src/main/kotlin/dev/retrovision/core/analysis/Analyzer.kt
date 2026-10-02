@@ -31,6 +31,32 @@ data class AnalysisConfig(
     val travelSaturationM: Double = 2_000.0,
     /** A place you are at all the time counts this much, relative to an unfamiliar one. */
     val familiarWeight: Double = 0.3,
+    /**
+     * Retrospective mode. When set, the "presence" sub-score counts the number of DISTINCT
+     * time buckets of this size in which the entity reappeared (recurrence across the span),
+     * instead of the recency windows anchored to "now". Use for offline review of saved data.
+     */
+    val periodBucketMs: Long? = null,
+    /** Buckets at which the recurrence sub-score saturates (retrospective mode). */
+    val periodBucketTarget: Int = 6,
+)
+
+/** A tuned config for reviewing all saved data over [spanMs]: rewards recurring, travelling presence. */
+fun retrospectiveConfig(
+    spanMs: Long,
+    alertScore: Double = 0.7,
+    alertMinPlaces: Int = 3,
+    familiarWeight: Double = 0.3,
+): AnalysisConfig = AnalysisConfig(
+    lookbackMs = spanMs,
+    alertScore = alertScore,
+    alertMinPlaces = alertMinPlaces,
+    familiarWeight = familiarWeight,
+    // Presence across the day matters here: let span and travel saturate over the whole review.
+    spanSaturationMs = (spanMs / 4).coerceIn(30 * 60_000L, 6 * 3600_000L),
+    travelSaturationM = 3_000.0,
+    periodBucketMs = 60 * 60_000L,
+    periodBucketTarget = 6,
 )
 
 /** Things the user told us to ignore: own devices, baseline, own networks. */
@@ -52,6 +78,8 @@ sealed class Reason {
     data class MovedWithYou(val meters: Double, val rssiStdDb: Double) : Reason()
     data class FamiliarDiscount(val familiarPlaces: Int, val unfamiliarPlaces: Int) : Reason()
     data class PresentInWindows(val windows: Int, val of: Int) : Reason()
+    /** Retrospective: reappeared in this many distinct time periods (e.g. hours) across the review. */
+    data class SeenAcrossPeriods(val periods: Int) : Reason()
     data class SeenFor(val durationMs: Long) : Reason()
     data class TravelledWithYou(val meters: Double) : Reason()
     data class Tracker(val kind: TrackerKind, val separatedFromOwner: Boolean?) : Reason()
@@ -202,7 +230,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             val s = es.sighting
             addresses += s.address
             if (s.rssi != 0) maxRssi = maxOf(maxRssi, s.rssi)
-            windowIndex(nowMs - s.timeMs)?.let { windows += it }
+            if (config.periodBucketMs != null) {
+                windows += (s.timeMs / config.periodBucketMs).toInt()
+            } else {
+                windowIndex(nowMs - s.timeMs)?.let { windows += it }
+            }
 
             if (s.radio == Radio.WIFI && s.address.isLocallyAdministered) lower(MacTrust.ROTATING)
             s.wifi?.let { w ->
@@ -279,7 +311,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         // Familiar places still count (a stalker knows where you live) but for less.
         val effPlaces = nUnfamiliar + config.familiarWeight * nFamiliar
         val sPlaces = ((effPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
-        val sWindows = windows.size.toDouble() / config.windowMinutes.size
+        val sWindows = if (config.periodBucketMs != null) {
+            (windows.size.toDouble() / config.periodBucketTarget).coerceIn(0.0, 1.0)
+        } else {
+            windows.size.toDouble() / config.windowMinutes.size
+        }
         val sSpan = ((last - first).toDouble() / config.spanSaturationMs).coerceIn(0.0, 1.0)
         val sTravel = (travel / config.travelSaturationM).coerceIn(0.0, 1.0)
         var score = 0.40 * sPlaces + 0.20 * sWindows + 0.15 * sSpan + 0.25 * sTravel
@@ -287,7 +323,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val reasons = ArrayList<Reason>()
         if (nPlaces >= 2) reasons += Reason.SeenAtPlaces(nPlaces)
         if (nFamiliar > 0 && nPlaces >= 2) reasons += Reason.FamiliarDiscount(nFamiliar, nUnfamiliar)
-        if (windows.size >= 2) reasons += Reason.PresentInWindows(windows.size, config.windowMinutes.size)
+        if (config.periodBucketMs != null) {
+            if (windows.size >= 2) reasons += Reason.SeenAcrossPeriods(windows.size)
+        } else if (windows.size >= 2) {
+            reasons += Reason.PresentInWindows(windows.size, config.windowMinutes.size)
+        }
         if (last - first >= 5 * 60_000L) reasons += Reason.SeenFor(last - first)
         if (travel >= 200) reasons += Reason.TravelledWithYou(travel)
 
