@@ -252,6 +252,15 @@ class CollectorService : Service() {
 
     private fun onSighting(s: Sighting) {
         SessionRecorder.write(s)
+        // "Identify my phone": a scan was just triggered; this phone's probe requests are the loudest.
+        if (System.currentTimeMillis() < Collector.calibrateUntilMs && s.probeId != dev.retrovision.app.phone.PHONE_SOURCE) {
+            val w = s.wifi
+            if (w != null && w.kind == dev.retrovision.core.model.WifiKind.PROBE_REQ && s.rssi >= -45) {
+                dev.retrovision.core.identity.WifiFingerprint.of(w.ies)?.let { fp ->
+                    Collector.calibrated.value = Collector.calibrated.value + fp
+                }
+            }
+        }
         val res = synchronized(resolver) { resolver.resolve(s) }
         if (s.rssi != 0) {
             val fix = Collector.location.value
@@ -440,6 +449,8 @@ class CollectorService : Service() {
         val rows = dao.sightingsSince(from)
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
+        // "False alarm" feedback snoozes that device's alerts for a day.
+        val snoozed = dao.falseAlarmsSince(now - 24 * 3600_000L).toSet()
         val conn = checkWifiConnection(now)
         val here = Collector.location.value
         // Connected to one of your own networks = you're at a routine place, even indoors without GPS.
@@ -451,13 +462,14 @@ class CollectorService : Service() {
             now,
             rows.map { EntitySighting(it.entityId, it.toSighting()) },
             fixes,
-            IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet()),
+            IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
             familiar = familiar,
             residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
         )
         Collector.analysis.value = result
         learnBaseline(result, now)
         learnCompanions(result, now)
+        recordFieldTest(result, now)
 
         // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
         val recentWifi = rows.asSequence()
@@ -510,6 +522,7 @@ class CollectorService : Service() {
         if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
             for (a in result.alerts) {
+                if (a.entityId in snoozed) continue
                 val last = notifiedAt[a.entityId]
                 val lastScore = notifiedScore[a.entityId]
                 // A clear escalation (+15 pts) always breaks through the cooldown.
@@ -623,6 +636,15 @@ class CollectorService : Service() {
             .setCategory(NotificationCompat.CATEGORY_ERROR)
             .build()
         nm.notify(("ap" + ssid + bssid).hashCode(), n)
+    }
+
+    /** Field test: remember when each marked target first crossed the alert threshold. */
+    private fun recordFieldTest(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val targets = prefs.targets
+        if (targets.isEmpty()) return
+        val done = prefs.testFirstAlerts.map { it.substringBefore('|') }.toSet()
+        val fresh = result.alerts.filter { it.entityId in targets && it.entityId !in done }
+        if (fresh.isNotEmpty()) prefs.testFirstAlerts = prefs.testFirstAlerts + fresh.map { "${it.entityId}|$now" }
     }
 
     private suspend fun learnFamiliar(now: Long) {

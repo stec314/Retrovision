@@ -30,7 +30,7 @@ object Replay {
                 alertMinPlaces = prefs.alertMinPlaces,
             )
             val result = Analyzer(cfg).analyze(
-                end, es, rec.fixes, IgnoreList(apSsids = prefs.ownSsidSet()), familiar,
+                end, es, rec.fixes, IgnoreList(apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints), familiar,
             )
             Outcome(result, rec.sightings.size, rec.fixes.size, end - start)
         }

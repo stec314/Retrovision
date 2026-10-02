@@ -155,7 +155,12 @@ fun FieldTestSection() {
                     Texts.tr("detection", "rilevamento") + " %.0f%% (%d/%d min) · ".format(pct, e.activeMinutes, span) +
                     "${e.placeIds.size} ${Texts.tr("places", "luoghi")} · " +
                     Texts.tr("score", "punteggio") + " %.0f%%".format(e.score * 100) +
-                    if (e.alert) " · ${Texts.tr("ALERT", "ALLERTA")}" else "",
+                    (if (e.alert) " · ${Texts.tr("ALERT", "ALLERTA")}" else "") +
+                    (app.prefs.testFirstAlerts.firstOrNull { it.startsWith(e.entityId + "|") }?.substringAfter('|')?.toLongOrNull()?.let { t ->
+                        "\n" + Texts.tr("first alert ", "prima allerta ") + "${(t - e.firstSeenMs).coerceAtLeast(0) / 60_000} min " +
+                            Texts.tr("after first sighting", "dopo il primo avvistamento")
+                    } ?: "") +
+                    "\n" + e.reasons.joinToString("; ") { Texts.reason(it) },
                 style = MaterialTheme.typography.bodySmall,
             )
         }

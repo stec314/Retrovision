@@ -299,6 +299,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
                     onClose()
                 }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
+                FeedbackRowUi(r, onClose)
                 output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
             }
         },
@@ -464,6 +465,8 @@ fun SettingsScreen(modifier: Modifier) {
         NotificationsSection()
 
         TrustedApsSection()
+        OwnPhoneSection()
+        FeedbackStatsSection()
 
         Text(Texts.tr("Phone sensors", "Sensori del telefono"), style = MaterialTheme.typography.titleMedium)
         var bleMode by remember { mutableIntStateOf(prefs.phoneBleMode) }
@@ -804,5 +807,99 @@ private fun TrustedApsSection() {
         TextButton(onClick = { prefs.trustedAps = emptySet(); trusted = emptySet() }) {
             Text(Texts.tr("Forget trusted access points", "Dimentica gli access point fidati"))
         }
+    }
+}
+
+
+/** Ground truth: what you say about a device trains nothing automatically, but makes tuning possible. */
+@Composable
+private fun FeedbackRowUi(r: EntityReport, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val dao = app.db.dao()
+    fun send(label: Int) = scope.launch {
+        dao.addFeedback(
+            dev.retrovision.app.data.FeedbackRow(
+                entityId = r.entityId, label = label, score = r.score,
+                reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
+            ),
+        )
+        if (label == 1) dao.addIgnore(IgnoreRow(r.entityId, Texts.entityLabel(r), System.currentTimeMillis()))
+        Collector.analyzeNow.value = System.nanoTime()
+        onClose()
+    }
+    Text(Texts.tr("Your verdict (helps tune the thresholds):", "Il tuo giudizio (serve a tarare le soglie):"), style = MaterialTheme.typography.labelMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(onClick = { send(0) }) { Text(Texts.tr("False alarm", "Falso allarme")) }
+        OutlinedButton(onClick = { send(2) }) { Text(Texts.tr("Suspicious", "Sospetto")) }
+    }
+    Text(
+        Texts.tr("False alarm silences its alerts for 24 h. “Ignore (mine)” below records it as yours.", "Falso allarme silenzia le sue allerte per 24 h. “Ignora (è mio)” qui sotto lo registra come tuo."),
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+/** Teach the app which probe requests are your own phone's, so "asked for your network" ignores it. */
+@Composable
+private fun OwnPhoneSection() {
+    val prefs = app.prefs
+    val ctx = LocalContext.current
+    val got by Collector.calibrated.collectAsState()
+    var saved by remember { mutableStateOf(prefs.ownFingerprints) }
+    var running by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Text(Texts.tr("Your phone's Wi-Fi fingerprint", "Impronta Wi-Fi del tuo telefono"), style = MaterialTheme.typography.titleMedium)
+    Text(
+        Texts.tr(
+            "Your own phone asks for your networks by name too. With the probe connected and close, tap below: the phone runs a Wi-Fi scan and the loudest probe requests are recorded as yours. Same-model phones share the fingerprint, so theirs won't trigger \"asked for your network\" either.",
+            "Anche il tuo telefono cerca le tue reti per nome. Con la sonda collegata e vicina, tocca qui sotto: il telefono fa una scansione Wi-Fi e le probe request più forti vengono registrate come tue. I telefoni dello stesso modello hanno la stessa impronta, quindi anche i loro non faranno scattare \"ha cercato la tua rete\".",
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(enabled = !running, onClick = {
+            running = true
+            Collector.calibrated.value = emptySet()
+            Collector.calibrateUntilMs = System.currentTimeMillis() + 8_000L
+            @Suppress("DEPRECATION")
+            runCatching { ctx.applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)?.startScan() }
+            scope.launch {
+                kotlinx.coroutines.delay(8_500)
+                running = false
+                val fps = Collector.calibrated.value
+                if (fps.isNotEmpty()) { prefs.ownFingerprints = prefs.ownFingerprints + fps; saved = prefs.ownFingerprints }
+            }
+        }) { Text(if (running) Texts.tr("Listening…", "In ascolto…") else Texts.tr("Identify my phone", "Riconosci il mio telefono")) }
+        if (saved.isNotEmpty()) TextButton(onClick = { prefs.ownFingerprints = emptySet(); saved = emptySet() }) { Text(Texts.tr("Forget", "Dimentica")) }
+    }
+    Text(
+        when {
+            running -> Texts.tr("Heard ${got.size} so far…", "Sentite ${got.size} finora…")
+            saved.isEmpty() -> Texts.tr("Not identified yet.", "Non ancora riconosciuto.")
+            else -> Texts.tr("${saved.size} fingerprint(s) saved.", "${saved.size} impronte salvate.")
+        },
+        style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+/** Counts of your verdicts and which reasons show up most in false alarms: where tuning should start. */
+@Composable
+private fun FeedbackStatsSection() {
+    val list by remember { app.db.dao().feedback() }.collectAsState(initial = emptyList())
+    if (list.isEmpty()) return
+    Text(Texts.tr("Your verdicts", "I tuoi giudizi"), style = MaterialTheme.typography.titleMedium)
+    val n = IntArray(3)
+    list.forEach { if (it.label in 0..2) n[it.label]++ }
+    Text(
+        Texts.tr("False alarms ${n[0]} · yours ${n[1]} · suspicious ${n[2]}", "Falsi allarmi ${n[0]} · tuoi ${n[1]} · sospetti ${n[2]}"),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    val top = list.filter { it.label == 0 }.flatMap { it.reasons.split(',') }.filter { it.isNotBlank() }
+        .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(4)
+    if (top.isNotEmpty()) {
+        Text(
+            Texts.tr("Most common reasons in false alarms: ", "Motivi più frequenti nei falsi allarmi: ") +
+                top.joinToString { "${it.key} (${it.value})" },
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }

@@ -22,6 +22,16 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("trustedAps", emptySet()) ?: emptySet()
         set(v) = p.edit().putStringSet("trustedAps", v).apply()
 
+    /** Probe-request fingerprints of this phone (from "identify my phone"). */
+    var ownFingerprints: Set<String>
+        get() = p.getStringSet("ownFingerprints", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("ownFingerprints", v).apply()
+
+    /** Field test: "entityId|firstAlertMs" for targets that crossed the alert threshold. */
+    var testFirstAlerts: Set<String>
+        get() = p.getStringSet("testFirstAlerts", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("testFirstAlerts", v).apply()
+
     /** Notify when a drone is heard nearby. */
     var droneAlerts: Boolean
         get() = p.getBoolean("droneAlerts", true)

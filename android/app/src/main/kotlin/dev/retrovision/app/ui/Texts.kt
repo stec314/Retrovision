@@ -153,6 +153,18 @@ object Texts {
             "Stayed with you through ${r.turns} of your ${r.of} turns",
             "Rimasto con te in ${r.turns} delle tue ${r.of} svolte",
         )
+        is Reason.ProbesForYourNetwork -> tr(
+            "Away from your routine places, it asked for YOUR network by name (${r.ssids.joinToString()}): it has been on it",
+            "Lontano dai tuoi luoghi abituali ha cercato per nome la TUA rete (${r.ssids.joinToString()}): ci è già stato collegato",
+        )
+        is Reason.LinkedByNetworks -> tr(
+            "${r.addresses} rotating addresses linked: they ask for the same ${r.sharedSsids} rare networks",
+            "${r.addresses} indirizzi casuali collegati: cercano le stesse ${r.sharedSsids} reti rare",
+        )
+        is Reason.TravelsInGroup -> tr(
+            "Moves together with ${r.size - 1} other device(s): same places, same times",
+            "Si muove insieme ad altri ${r.size - 1} dispositivi: stessi luoghi, stessi orari",
+        )
         is Reason.Notable -> tr(
             "Looks like: ${r.name} (${notableKind(r.kind)}) — a pattern match, not proof",
             "Sembra: ${r.name} (${notableKind(r.kind)}) — somiglianza, non prova",

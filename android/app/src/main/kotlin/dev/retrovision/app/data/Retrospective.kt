@@ -44,7 +44,7 @@ object Retrospective {
                 now,
                 rows.map { EntitySighting(it.entityId, it.toSightingLight()) },
                 fixes,
-                IgnoreList(entityIds = ignoreIds, apSsids = app.prefs.ownSsidSet()),
+                IgnoreList(entityIds = ignoreIds, apSsids = app.prefs.ownSsidSet(), ownFingerprints = app.prefs.ownFingerprints),
                 familiar = dao.familiarNow().map { it.toModel() },
             )
             Result(result, spanMs, rows.size, sampledFrom = if (stride > 1) total else 0)

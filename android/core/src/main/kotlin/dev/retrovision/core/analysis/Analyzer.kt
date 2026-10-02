@@ -77,6 +77,8 @@ data class IgnoreList(
     val addresses: Set<MacAddress> = emptySet(),
     /** Access points with these SSIDs (your own networks) are ignored. */
     val apSsids: Set<String> = emptySet(),
+    /** Probe-request fingerprints of YOUR phone (calibrated), so its own probes don't count as "someone else". */
+    val ownFingerprints: Set<String> = emptySet(),
 )
 
 /** One sighting already attributed to an entity by the EntityResolver. */
@@ -105,6 +107,12 @@ sealed class Reason {
     data class JoinedAfterYou(val stops: Int) : Reason()
     /** Heard right before and right after [turns] of your [of] changes of direction. */
     data class StayedThroughTurns(val turns: Int, val of: Int) : Reason()
+    /** Away from your routine places it asked by name for one of YOUR networks: it has been on it. */
+    data class ProbesForYourNetwork(val ssids: Set<String>) : Reason()
+    /** Several randomised addresses linked because they ask for the same rare networks. */
+    data class LinkedByNetworks(val addresses: Int, val sharedSsids: Int) : Reason()
+    /** Moves together with [size] − 1 other devices (same places, same times): one person or vehicle? */
+    data class TravelsInGroup(val size: Int, val groupId: String) : Reason()
     /** A drone: [remoteId] true when it broadcast Remote ID ([id] is then its serial). */
     data class Drone(val id: String?, val remoteId: Boolean) : Reason()
 }
@@ -155,7 +163,17 @@ class EntityReport(
     /** Remote ID serial, when it is a drone broadcasting one. */
     val droneId: String? = null,
     val isDrone: Boolean = false,
-)
+    /** Unfamiliar places + familiarWeight × familiar ones (what the alert rule uses). */
+    val effectivePlaces: Double = 0.0,
+    /** 5-minute time buckets in which it was heard (for co-occurrence). */
+    val buckets: Set<Long> = emptySet(),
+) {
+    fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
+        entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
+        maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
+        wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
+    )
+}
 
 /** A client trying to connect to an access point (auth / (re)association request). */
 data class JoinAttempt(val bssid: MacAddress, val ssid: String, val kind: WifiKind, val count: Int, val lastMs: Long)
@@ -205,9 +223,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val confirmed = familiar.filter { it.state == FamiliarPlace.State.CONFIRMED }
         val familiarIds = clusterer.places.filter { p -> confirmed.any { it.contains(p.lat, p.lon) } }.map { it.id }.toSet()
 
-        val byEntity = sightings.asSequence()
-            .filter { it.sighting.timeMs in from..nowMs }
-            .groupBy { it.entityId }
+        val inWindow = sightings.filter { it.sighting.timeMs in from..nowMs }
+        val links = NetworkLinker.link(inWindow, ignore.apSsids)
+        val byEntity = inWindow.groupBy { links.root[it.entityId] ?: it.entityId }
 
         // Your route: stops and turns, and when the receivers were hearing anything at all.
         val stops = Route.stops(timeline.fixes, { placeOfFix[it]?.id })
@@ -223,12 +241,17 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var ignored = 0
         val reports = ArrayList<EntityReport>(byEntity.size)
         for ((id, list) in byEntity) {
-            if (isIgnored(id, list, ignore)) {
+            if (isIgnored(id, list, ignore) || list.any { it.entityId != id && it.entityId in ignore.entityIds }) {
                 ignored++
                 continue
             }
-            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route)
+            val r = score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route, ignore)
+            reports += links.shared[id]?.let { sh ->
+                val n = list.map { it.sighting.address }.toSet().size
+                r.with(r.score, r.alert, r.reasons + Reason.LinkedByNetworks(n, sh))
+            } ?: r
         }
+        groups(reports)
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         return AnalysisResult(nowMs, clusterer.places, reports, ignored, turns.size, stops.size)
     }
@@ -253,6 +276,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         familiarIds: Set<Int>,
         isResident: Boolean,
         route: RouteContext,
+        ignore: IgnoreList = IgnoreList(),
     ): EntityReport {
         val first = list.first().sighting.timeMs
         val last = list.last().sighting.timeMs
@@ -277,6 +301,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val joins = LinkedHashMap<MacAddress, JoinAttempt>()
         val notable = LinkedHashSet<NotableSignature>()
         val notableChecked = HashSet<Any>()
+        val ownNetProbes = ArrayList<Long>() // times it asked for one of your networks (not your phone)
+        val ownNetNames = LinkedHashSet<String>()
         var remoteId = false
         var droneId: String? = null
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
@@ -306,6 +332,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                         }
                     }
                     WifiKind.PROBE_REQ -> {
+                        if (text.isNotEmpty() && text in ignore.apSsids &&
+                            (ignore.ownFingerprints.isEmpty() || dev.retrovision.core.identity.WifiFingerprint.of(w.ies) !in ignore.ownFingerprints)
+                        ) { ownNetProbes += s.timeMs; ownNetNames += text }
                         probeReqs += maxOf(1, s.mergedCount)
                         if (text.isNotEmpty()) { ssids += text; probed += text } else wildcard += maxOf(1, s.mergedCount)
                     }
@@ -410,6 +439,15 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         }
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
 
+        // Asked for one of your networks while you were away from your routine places.
+        val awayOwnProbes = ownNetProbes.count { t ->
+            timeline.nearest(t)?.let { f -> placeOfFix[f]?.id?.let { it !in familiarIds } } == true
+        }
+        if (awayOwnProbes > 0) {
+            reasons += Reason.ProbesForYourNetwork(ownNetNames)
+            score += 0.10
+        }
+
         // How it behaved around your stops and turns.
         val b = Route.behaviour(
             LongArray(list.size) { list[it].sighting.timeMs }, route.stops, route.turns, route.elsewhere, route.sensorActive,
@@ -479,7 +517,37 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             notable = notable.toList(),
             droneId = droneId,
             isDrone = drone,
+            effectivePlaces = effPlaces,
+            buckets = list.map { it.sighting.timeMs / 300_000L }.toSet(),
         )
+    }
+
+    /**
+     * Devices that keep turning up together (same places, same times) are probably carried by one
+     * person or vehicle. A group survives one member rotating its address, so it's extra evidence.
+     */
+    private fun groups(reports: MutableList<EntityReport>) {
+        val cand = reports.indices.filter { reports[it].placeIds.size >= 3 && reports[it].reasons.none { r -> r is Reason.KnownAtRoutine } }
+        if (cand.size < 2) return
+        val parent = IntArray(reports.size) { it }
+        fun find(x: Int): Int { var y = x; while (parent[y] != y) { parent[y] = parent[parent[y]]; y = parent[y] }; return y }
+        fun jac(a: Set<*>, b: Set<*>) = if (a.isEmpty() && b.isEmpty()) 0.0 else a.intersect(b).size.toDouble() / a.union(b).size
+        for (x in cand.indices) for (y in x + 1 until cand.size) {
+            val a = reports[cand[x]]; val b = reports[cand[y]]
+            if (jac(a.placeIds, b.placeIds) >= GROUP_PLACES_J && jac(a.buckets, b.buckets) >= GROUP_TIME_J) {
+                parent[find(cand[x])] = find(cand[y])
+            }
+        }
+        val members = cand.groupBy { find(it) }.filterValues { it.size >= 2 }
+        for ((_, idx) in members) {
+            val gid = idx.map { reports[it].entityId }.min()
+            for (i in idx) {
+                val r = reports[i]
+                val s = (r.score + if (r.effectivePlaces >= 2) 0.05 else 0.0).coerceIn(0.0, 1.0)
+                reports[i] = r.with(s, s >= config.alertScore && r.effectivePlaces >= config.alertMinPlaces - 1e-9, r.reasons + Reason.TravelsInGroup(idx.size, gid))
+            }
+        }
+        reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
     }
 
     class RouteContext(
@@ -535,5 +603,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         const val COMOVE_GAP_MS = 90_000L
         const val COMOVE_MIN_M = 400.0
         const val COMOVE_MAX_STD = 7.5
+        const val GROUP_PLACES_J = 0.75
+        const val GROUP_TIME_J = 0.4
     }
 }

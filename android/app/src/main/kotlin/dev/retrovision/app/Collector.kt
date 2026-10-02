@@ -81,6 +81,10 @@ object Collector {
     val phoneStill = MutableStateFlow(false)
     val driftRejected = MutableStateFlow(0L)
 
+    /** "Identify my phone": until this time, strong probe requests are taken as this phone's own. */
+    @Volatile var calibrateUntilMs = 0L
+    val calibrated = MutableStateFlow<Set<String>>(emptySet())
+
     /** The Wi-Fi network the phone is connected to (null when none / unknown). */
     val wifiConnection = MutableStateFlow<WifiConn?>(null)
 
