@@ -32,6 +32,25 @@ class DriftGuardTest {
         assertTrue(g.accept(fix(5_000, 100.0, speed = 20f), still = true))
     }
 
+    @Test fun handheldOnSofaStillRejectsDrift() {
+        val g = DriftGuard()
+        g.accept(fix(0, 0.0), still = true)
+        // drift wanders back and forth: never "steadily away", so never escapes
+        assertFalse(g.accept(fix(5_000, 90.0), still = true))
+        assertFalse(g.accept(fix(10_000, 60.0), still = true))
+        assertFalse(g.accept(fix(15_000, 95.0), still = true))
+        assertFalse(g.accept(fix(20_000, 70.0), still = true))
+    }
+
+    @Test fun slowWalkMisreadAsStillEscapes() {
+        val g = DriftGuard()
+        g.accept(fix(0, 0.0), still = true)
+        // Doppler 0.5 m/s (below threshold) but the fixes keep getting further away
+        assertFalse(g.accept(fix(30_000, 40.0, speed = 0.5f), still = true))
+        assertFalse(g.accept(fix(60_000, 70.0, speed = 0.5f), still = true))
+        assertTrue(g.accept(fix(90_000, 100.0, speed = 0.5f), still = true))
+    }
+
     @Test fun anchorResetsAfterMoving() {
         val g = DriftGuard()
         g.accept(fix(0, 0.0), still = true)

@@ -226,6 +226,7 @@ class CollectorService : Service() {
         motion = dev.retrovision.app.phone.MotionMonitor(this).also { m ->
             m.start()
             scope.launch { m.still.collect { Collector.phoneStill.value = it } }
+            scope.launch { m.state.collect { Collector.phoneMotion.value = it } }
         }
         val ble = dev.retrovision.app.phone.PhoneBle(this, ::onSighting).also { phoneBle = it }
         scope.launch { ble.active.collect { Collector.phoneBleActive.value = it } }

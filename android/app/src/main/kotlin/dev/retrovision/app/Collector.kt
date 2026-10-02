@@ -79,6 +79,7 @@ object Collector {
     val phoneBleHeard = MutableStateFlow(0L)
     val phoneCodedPhy = MutableStateFlow(false)
     val phoneStill = MutableStateFlow(false)
+    val phoneMotion = MutableStateFlow(dev.retrovision.app.phone.MotionState.UNKNOWN)
     val driftRejected = MutableStateFlow(0L)
 
     /** "Identify my phone": until this time, strong probe requests are taken as this phone's own. */

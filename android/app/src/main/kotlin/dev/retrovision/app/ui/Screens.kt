@@ -679,7 +679,7 @@ private fun PhoneCard(probeStreaming: Boolean, running: Boolean) {
     val bleOn by Collector.phoneBleActive.collectAsState()
     val heard by Collector.phoneBleHeard.collectAsState()
     val coded by Collector.phoneCodedPhy.collectAsState()
-    val still by Collector.phoneStill.collectAsState()
+    val motion by Collector.phoneMotion.collectAsState()
     val drift by Collector.driftRejected.collectAsState()
     var classic by remember { mutableStateOf(false) }
     Card(Modifier.fillMaxWidth()) {
@@ -691,7 +691,12 @@ private fun PhoneCard(probeStreaming: Boolean, running: Boolean) {
                 style = MaterialTheme.typography.bodySmall,
             )
             Text(
-                Texts.tr("Motion: ", "Movimento: ") + (if (still) Texts.tr("still", "fermo") else Texts.tr("moving", "in movimento")) +
+                Texts.tr("Motion: ", "Movimento: ") + when (motion) {
+                    dev.retrovision.app.phone.MotionState.RESTING -> Texts.tr("still (resting)", "fermo (appoggiato)")
+                    dev.retrovision.app.phone.MotionState.HANDHELD -> Texts.tr("still (in hand)", "fermo (in mano)")
+                    dev.retrovision.app.phone.MotionState.MOVING -> Texts.tr("walking / moving", "cammini / in movimento")
+                    dev.retrovision.app.phone.MotionState.UNKNOWN -> Texts.tr("measuring…", "misuro…")
+                } +
                     (if (drift > 0) Texts.tr(" · $drift drifting GPS fixes rejected", " · $drift posizioni GPS in deriva scartate") else ""),
                 style = MaterialTheme.typography.bodySmall,
             )

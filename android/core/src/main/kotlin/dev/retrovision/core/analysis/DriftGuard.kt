@@ -17,10 +17,15 @@ import dev.retrovision.core.model.GeoFix
 class DriftGuard(
     /** Distance from the anchor beyond which a fix taken while still is considered drift. */
     private val maxStillDriftM: Double = 30.0,
-    /** Doppler speed above which we trust the fix regardless of the accelerometer (m/s). */
-    private val movingSpeedMps: Float = 1.5f,
+    /** Doppler speed above which we trust the fix regardless of the accelerometer (m/s). Slow walking is ~1 m/s. */
+    private val movingSpeedMps: Float = 0.8f,
+    /** Rejected fixes moving steadily away from the anchor this many times in a row = real movement. */
+    private val escapeAfter: Int = 3,
+    private val escapeStepM: Double = 10.0,
 ) {
     private var anchor: GeoFix? = null
+    private var streak = 0
+    private var lastRejectedD = 0.0
 
     var rejected: Long = 0
         private set
@@ -34,6 +39,7 @@ class DriftGuard(
         val moving = !still || (speed != null && speed >= movingSpeedMps)
         if (moving) {
             anchor = null
+            streak = 0
             return true
         }
         val a = anchor
@@ -46,6 +52,15 @@ class DriftGuard(
         val tol = maxOf(maxStillDriftM, a.accuracyM.toDouble())
         if (d <= tol) {
             if (fix.accuracyM > 0 && (a.accuracyM == 0f || fix.accuracyM < a.accuracyM)) anchor = fix
+            streak = 0
+            return true
+        }
+        // Drift jumps around; real movement the sensors missed keeps getting further away.
+        streak = if (streak == 0 || d >= lastRejectedD + escapeStepM) streak + 1 else 1
+        lastRejectedD = d
+        if (streak >= escapeAfter) {
+            anchor = fix
+            streak = 0
             return true
         }
         rejected++

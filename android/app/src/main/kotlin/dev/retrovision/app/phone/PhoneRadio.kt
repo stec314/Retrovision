@@ -127,18 +127,28 @@ class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> U
     }
 }
 
+/** What the accelerometer says about you. RESTING and HANDHELD both mean "not going anywhere". */
+enum class MotionState { UNKNOWN, RESTING, HANDHELD, MOVING }
+
 /**
- * "Is the phone physically still?" from the accelerometer: the spread of acceleration magnitude
- * over the last [windowMs]. Carried, walked or driven, it never stays this flat.
+ * "Are you going anywhere?" from the accelerometer: the spread of acceleration magnitude over
+ * the last [windowMs].
+ *  - resting on a table: almost flat (< 0.12 m/s²);
+ *  - in your hand on the sofa: tremor and taps, but small (< 0.8 m/s²);
+ *  - walking: every step is a jolt of 1–3 m/s², the spread is well above that.
+ * Driving can look calm: that's why the drift guard also requires a low GPS Doppler speed.
  */
 class MotionMonitor(ctx: Context) : SensorEventListener {
     private val sm = ctx.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val acc: Sensor? = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     private val samples = ArrayDeque<Pair<Long, Float>>()
     private val windowMs = 20_000L
-    private val stillStd = 0.12f // m/s²
+    private val restingStd = 0.12 // m/s²
+    private val handheldStd = 0.8 // m/s²
 
+    /** True when you are not travelling (resting or handheld). */
     val still = MutableStateFlow(false)
+    val state = MutableStateFlow(MotionState.UNKNOWN)
     val available get() = acc != null
 
     fun start() {
@@ -156,11 +166,17 @@ class MotionMonitor(ctx: Context) : SensorEventListener {
         while (samples.isNotEmpty() && now - samples.first().first > windowMs) samples.removeFirst()
         if (samples.size < 20 || now - samples.first().first < windowMs * 3 / 4) {
             still.value = false
+            state.value = MotionState.UNKNOWN
             return
         }
         val mean = samples.sumOf { it.second.toDouble() } / samples.size
         val std = sqrt(samples.sumOf { (it.second - mean) * (it.second - mean) } / samples.size)
-        still.value = std < stillStd
+        state.value = when {
+            std < restingStd -> MotionState.RESTING
+            std < handheldStd -> MotionState.HANDHELD
+            else -> MotionState.MOVING
+        }
+        still.value = state.value != MotionState.MOVING
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
