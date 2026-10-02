@@ -71,23 +71,42 @@ fun RetrospectiveCard() {
             }
 
             result?.let { res ->
-                val suspects = res.analysis.entities.filter { it.score >= 0.5 }.take(20)
-                Text(
-                    Texts.tr(
-                        "${res.sightings} sightings reviewed · ${res.analysis.entities.size} devices · ${suspects.size} worth a look",
-                        "${res.sightings} avvistamenti esaminati · ${res.analysis.entities.size} dispositivi · ${suspects.size} da guardare",
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                )
-                if (suspects.isEmpty()) {
-                    Text(Texts.tr("Nothing stands out across this span.", "Niente spicca in questo periodo."))
-                } else {
+                val an = res.analysis
+                if (res.error != null || an == null) {
                     Text(
-                        Texts.tr("Most likely to have followed you (tap for details):", "Più probabile ti abbiano seguito (tocca per i dettagli):"),
-                        style = MaterialTheme.typography.bodySmall,
+                        when (res.error) {
+                            "out_of_memory" -> Texts.tr("Too much data to review at once. Try a shorter span.", "Troppi dati da esaminare in una volta. Prova un periodo più breve.")
+                            else -> Texts.tr("Analysis failed: ", "Analisi fallita: ") + (res.error ?: "?")
+                        },
+                        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
                     )
-                    suspects.forEach { EntityCard(it) { selected = it } }
+                } else {
+                    val suspects = an.entities.filter { it.score >= 0.5 }.take(20)
+                    Text(
+                        Texts.tr(
+                            "${res.sightings} sightings reviewed · ${an.entities.size} devices · ${suspects.size} worth a look",
+                            "${res.sightings} avvistamenti esaminati · ${an.entities.size} dispositivi · ${suspects.size} da guardare",
+                        ),
+                        style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium,
+                    )
+                    if (res.sampledFrom > 0) {
+                        Text(
+                            Texts.tr(
+                                "Sampled from ${res.sampledFrom} sightings to stay fast.",
+                                "Campionati da ${res.sampledFrom} avvistamenti per restare veloce.",
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                    if (suspects.isEmpty()) {
+                        Text(Texts.tr("Nothing stands out across this span.", "Niente spicca in questo periodo."))
+                    } else {
+                        Text(
+                            Texts.tr("Most likely to have followed you (tap for details):", "Più probabile ti abbiano seguito (tocca per i dettagli):"),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        suspects.forEach { EntityCard(it) { selected = it } }
+                    }
                 }
             }
         }

@@ -87,6 +87,13 @@ interface AppDao {
     @Query("SELECT * FROM sightings WHERE timeMs >= :from ORDER BY timeMs")
     suspend fun sightingsSince(from: Long): List<SightingRow>
 
+    @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from")
+    suspend fun sightingCountSince(from: Long): Long
+
+    /** Memory-safe sampling for retrospective review: every :stride-th row by id. */
+    @Query("SELECT * FROM sightings WHERE timeMs >= :from AND (id % :stride) = 0 ORDER BY timeMs")
+    suspend fun sightingsSinceSampled(from: Long, stride: Int): List<SightingRow>
+
     @Query("SELECT * FROM fixes WHERE timeMs >= :from ORDER BY timeMs")
     suspend fun fixesSince(from: Long): List<FixRow>
 

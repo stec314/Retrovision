@@ -51,6 +51,28 @@ fun SightingRow.toSighting(): Sighting {
     }
 }
 
+/** Like [toSighting] but drops raw IEs (unused by analysis) to save memory on bulk loads. */
+fun SightingRow.toSightingLight(): Sighting {
+    val mac = MacAddress(address)
+    return if (radio == 0) {
+        Sighting(
+            timeMs, Radio.WIFI, mac, rssi, merged,
+            wifi = WifiDetail(
+                WifiKind.entries[wifiKind.coerceIn(0, WifiKind.entries.size - 1)], channel, ssid,
+                if (bssid >= 0) MacAddress(bssid) else null, seq, ByteArray(0),
+            ),
+        )
+    } else {
+        Sighting(
+            timeMs, Radio.BLE, mac, rssi, merged,
+            ble = BleDetail(
+                BleAddressKind.entries[bleAddrKind.coerceIn(0, BleAddressKind.entries.size - 1)],
+                advType, advData, txPower,
+            ),
+        )
+    }
+}
+
 fun FixRow.toFix() = GeoFix(timeMs, lat, lon, accuracyM, if (speedMps >= 0) speedMps else null)
 
 fun FamiliarRow.toModel() = dev.retrovision.core.analysis.FamiliarPlace(
