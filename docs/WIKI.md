@@ -108,9 +108,12 @@ Retrovision groups sightings into **entities** with these rules, which are conse
 1. **Same IE fingerprint.** A hash of the capability elements in the probe request (supported rates, HT/VHT capabilities, extended capabilities, vendor elements, in order), skipping per-request fields (SSID, channel) and random ones (WPS UUID). The idea comes from Vanhoef et al., *Why MAC Address Randomization is not Enough* (2016). The fingerprint is **not unique**: every phone of the same model and OS shares it.
 2. **Time adjacency.** The entity's last probe was ≤ 2 minutes ago.
 3. **Sequence-number continuity.** 802.11 frames carry a 12-bit counter. The new frame must continue it: 1 ≤ (seq − last) mod 4096 ≤ 64.
-4. **No ambiguity.** Exactly one candidate matches. If two do, nothing is linked.
+4. **Comparable signal.** |ΔRSSI| ≤ 20 dB. Two phones of the *same model* share a fingerprint, so if their sequence numbers happened to line up they could otherwise be merged into a false "follower". A real rotation keeps a similar signal; a second phone at another distance jumps. The tolerance is loose (probe RSSI is noisy and a rotation can span two minutes of walking), so it only rejects gross mismatches.
+5. **No ambiguity.** Exactly one candidate matches. If two do, nothing is linked.
 
-Some OSes reset the sequence counter when they rotate the address. Those rotations are **missed, never mis-linked**.
+Some OSes reset the sequence counter when they rotate the address, and recent devices increasingly reset it **per burst** (Puig et al., 2026). Those rotations are **missed, never mis-linked**: the link gets more conservative over time, which is the safe direction for a counter-surveillance tool.
+
+**What the HT capabilities tell you.** For a Wi-Fi client, the device details show the decoded 802.11 HT capabilities (e.g. "HT 20MHz · LDPC · SGI20 · 1×RxSTBC") — the PHY/driver features the device advertises. It is a **model-level clue, shared by every identical phone**, shown for transparency, not used to link rotations. Research shows these fields can be *decomposed* into subfields to cluster devices across a whole population (Puig et al., 2026, up to ~90% in a 22-device lab); Retrovision deliberately does not do that — population de-anonymisation is a tracking technique, the opposite of this tool's job, and it cannot tell two same-model phones apart anyway.
 
 **Randomised BLE addresses.** A new address is stitched to a previous one ("carry-over") only if:
 - the advertisement has a **distinctive, serial-like local name** (≥ 10 characters, or ≥ 4 with a digit, e.g. a fitness band broadcasting its serial), and
@@ -472,7 +475,7 @@ The map shows **your** places and **your** movement. By design it does not draw 
 
 This is the honest list. Read it before trusting a result.
 
-1. **Randomised phones are mostly invisible across time.** A modern phone that isn't connected to a network rotates its Wi-Fi and BLE addresses. Wi-Fi rotations are linked only when the sequence counter continues, and anonymous BLE phones are never linked. A person carrying only a well-randomised phone may appear as many short entities that never score high. **This is the biggest gap, and it is fundamental, not a bug.**
+1. **Randomised phones are mostly invisible across time.** A modern phone that isn't connected to a network rotates its Wi-Fi and BLE addresses. Wi-Fi rotations are linked only when the sequence counter continues (increasingly rare — recent phones reset it per burst, Puig et al. 2026) and the signal is comparable, and anonymous BLE phones are never linked. A person carrying only a well-randomised phone may appear as many short entities that never score high. **This is the biggest gap, and it is fundamental, not a bug.** Published research can re-link some of these (IE/HT-subfield fingerprinting, inter-frame timing), but only at population scale and only well for chatty devices — that is a tracking technique, and Retrovision deliberately does not implement it.
 2. **What *does* stay identifiable**: devices with stable addresses (many laptops, cars, IoT devices, older phones), access points (hotspots, cars, cameras), trackers, and BLE devices broadcasting serial-like names (bands, earbuds). These are where the tool is strongest.
 3. **Shared routes cause real persistence.** Commuters, bus passengers and people walking the same way genuinely travel with you. The reasons show it, but you have to judge.
 4. **One antenna, one channel at a time.** Coverage is a sample, not a complete picture. Busy places produce probe drops (shown on the probe card).
@@ -521,5 +524,7 @@ Retrovision is free software under the **GNU GPL, version 3 or later** (`GPL-3.0
 
 - [Wire protocol](protocol.md)
 - Vanhoef et al., *Why MAC Address Randomization is not Enough*, AsiaCCS 2016
+- Matte, Cunche, Rousseau, Vanhoef, *Defeating MAC Address Randomization Through Timing Attacks*, ACM WiSec 2016
+- Puig, Michaelides, Pintor, Bellalta, Wilhelmi, *Can Machine Learning Break Wi-Fi Privacy? A Study on MAC Address Randomization*, arXiv:2606.25788, 2026
 - [AirGuard](https://github.com/seemoo-lab/AirGuard): tracker detection on Android
 - [Chasing Your Tail NG](https://github.com/ArgeliusLabs/Chasing-Your-Tail-NG)

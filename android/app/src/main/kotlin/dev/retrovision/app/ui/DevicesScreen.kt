@@ -259,6 +259,21 @@ fun DeviceDetails(r: EntityReport) {
         }
         Text(r.addresses.joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
 
+        r.htProfile?.let { ht ->
+            Text(
+                "📡 $ht",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+            )
+            Text(
+                Texts.tr(
+                    "Hardware capabilities the device advertises. A model-level clue, shared by every identical phone, not an identity.",
+                    "Capacità hardware dichiarate dal dispositivo. Un indizio a livello di modello, condiviso da ogni telefono identico, non un'identità.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         if (r.probeRequests > 0) {
             Text(Texts.tr("Network search", "Ricerca di reti"), style = MaterialTheme.typography.titleSmall, color = SEARCH)
             Text(

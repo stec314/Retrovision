@@ -176,12 +176,14 @@ class EntityReport(
      * and alert cooldowns should follow all of them: the merged id can change between analyses.
      */
     val memberIds: Set<String> = setOf(entityId),
+    /** Decoded HT capabilities summary (Wi-Fi clients), for transparency only — never drives linking. */
+    val htProfile: String? = null,
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
-        memberIds,
+        memberIds, htProfile,
     )
 }
 
@@ -263,6 +265,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 r0.sightings, r0.activeMinutes, r0.maxRssi, r0.addresses, r0.ssids, r0.tracker, r0.bleCompanyId, r0.mobileAp,
                 r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
                 r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
+                r0.htProfile,
             ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
@@ -318,6 +321,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val probed = LinkedHashSet<String>()
         var probeReqs = 0
         var wildcard = 0
+        var htProfile: String? = null
         val joins = LinkedHashMap<MacAddress, JoinAttempt>()
         val notable = LinkedHashSet<NotableSignature>()
         val ownNetProbes = ArrayList<Long>() // times it asked for one of your networks (not your phone)
@@ -354,6 +358,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                         if (text.isNotEmpty() && text in ignore.apSsids &&
                             (ignore.ownFingerprints.isEmpty() || dev.retrovision.core.identity.WifiFingerprint.of(w.ies) !in ignore.ownFingerprints)
                         ) { ownNetProbes += s.timeMs; ownNetNames += text }
+                        if (htProfile == null) dev.retrovision.core.identity.HtCaps.fromIes(w.ies)?.let { htProfile = it.summary() }
                         probeReqs += maxOf(1, s.mergedCount)
                         if (text.isNotEmpty()) { ssids += text; probed += text } else wildcard += maxOf(1, s.mergedCount)
                     }
@@ -537,6 +542,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             isDrone = drone,
             effectivePlaces = effPlaces,
             buckets = list.map { it.sighting.timeMs / 300_000L }.toSet(),
+            htProfile = htProfile,
         )
     }
 
