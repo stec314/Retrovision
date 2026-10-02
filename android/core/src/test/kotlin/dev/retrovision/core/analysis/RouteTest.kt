@@ -46,6 +46,17 @@ class RouteTest {
         assertTrue(!s[1].closed)
     }
 
+    @Test fun stayNearAPlaceBoundaryIsOneStop() {
+        // 20 min sitting where GPS alternates between two neighbouring 100 m places (110 m apart)
+        val f = (0..20).map { at(it * 60_000L, if (it % 2 == 0) 0.0 else 110.0, 0.0) }
+        val cl = PlaceClusterer(100.0)
+        val place = f.associateWith { cl.assign(it).id }
+        assertEquals(2, place.values.toSet().size)
+        val s = Route.stops(f, { place[it] })
+        assertEquals(1, s.size)
+        assertEquals(20 * 60_000L, s[0].leaveMs - s[0].arriveMs)
+    }
+
     private fun probe(id: Int, t: Long) = EntitySighting(
         "dev$id",
         Sighting(t, Radio.WIFI, MacAddress(0x12_00_00_00_00_00L + id), -60, wifi = WifiDetail(WifiKind.PROBE_REQ, 6, ByteArray(0), null, 0, ByteArray(0))),

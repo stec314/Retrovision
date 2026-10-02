@@ -58,7 +58,7 @@ object Drones {
         val sigOnly = HashMap<MacAddress, Acc>()
         val checked = HashSet<Any>()
         for (s in sightings.sortedBy { it.timeMs }) {
-            val rid = RemoteId.decode(s)
+            val rid = dev.retrovision.core.identity.FactsCache.of(s).remoteId
             val addr = s.wifi?.bssid?.takeIf { s.wifi.kind == dev.retrovision.core.model.WifiKind.BEACON } ?: s.address
             if (rid != null) {
                 val a = byAddr.getOrPut(addr) { Acc(addr.toString()) }
@@ -69,7 +69,7 @@ object Drones {
             }
             // Signature-only: match each distinct payload once.
             val key = Triple(s.address, s.wifi?.ssidText, s.ble?.advData?.contentHashCode())
-            val sig = if (checked.add(key)) NotableCatalog.match(s).firstOrNull { it.kind == NotableKind.DRONE } else null
+            val sig = if (checked.add(key)) dev.retrovision.core.identity.FactsCache.of(s).notable.firstOrNull { it.kind == NotableKind.DRONE } else null
             val known = sigOnly[s.address]
             if (sig != null) {
                 val a = known ?: Acc(s.address.toString()).also { sigOnly[s.address] = it }

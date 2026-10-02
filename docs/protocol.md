@@ -153,6 +153,15 @@ Because the BLE key includes the payload, a tracker that rotates its payload but
 - The app ships with a table of the minimum firmware version per `probe_type`. When `Hello.firmware_version` is older, or the major version does not match, the app offers an update through the web flasher (planned, `web/`).
 - Evolution rules are listed at the top of the `.proto` file. In short: never renumber, and use `reserved` for removed fields.
 
+### Version history
+
+| Version | Change | Compatibility |
+|---|---|---|
+| 1.0 | Initial protocol | — |
+| 1.1 | `WifiFrame.tsf_us` (field 10): beacon / probe-response timestamp, the AP's uptime | Additive. A 1.0 probe never sends it (reads as 0 = absent); a 1.0 host ignores it |
+
+The experimental branch `wip/wireless-links` once used "1.1" for its own additions. That branch is not part of the mainline; if any of it is ever revived, it must take the next free minor (1.2 or later), never 1.1.
+
 ## 11. Security notes
 
 - **USB (v1)**: physical access equals trust. There is no authentication, and that is deliberate.

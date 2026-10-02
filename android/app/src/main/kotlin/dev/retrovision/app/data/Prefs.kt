@@ -6,6 +6,48 @@ import android.content.Context
 class Prefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    // ---- sensitive settings: encrypted with a Keystore key (network names, tokens, access points) ----
+    private val secretCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    private fun secret(key: String): String {
+        secretCache[key]?.let { return it }
+        val sealed = p.getString("enc_$key", null)
+        val v = if (sealed != null) {
+            KeyVault.open(sealed) ?: ""
+        } else {
+            // Migrate a value stored in clear by an older version.
+            val plain = p.getString(key, null)
+            if (plain != null) {
+                p.edit().remove(key).apply()
+                // Keep the old value even if the Keystore fails right now (it is re-sealed on next write).
+                KeyVault.seal(plain)?.let { p.edit().putString("enc_$key", it).apply() }
+                    ?: p.edit().putString(key, plain).apply()
+            }
+            plain ?: ""
+        }
+        secretCache[key] = v
+        return v
+    }
+
+    private fun setSecret(key: String, v: String) {
+        secretCache[key] = v
+        val sealed = KeyVault.seal(v)
+        if (sealed != null) p.edit().putString("enc_$key", sealed).remove(key).apply()
+        else p.edit().putString(key, v).apply() // Keystore unavailable: better than losing the setting
+    }
+
+    private fun secretSet(key: String): Set<String> {
+        // Sets stored in clear by older versions live under the same key as a StringSet.
+        if (p.getString("enc_$key", null) == null && p.contains(key)) {
+            val old = runCatching { p.getStringSet(key, emptySet()) }.getOrNull() ?: emptySet()
+            p.edit().remove(key).apply()
+            setSecret(key, old.joinToString(SEP))
+        }
+        return secret(key).split(SEP).filter { it.isNotEmpty() }.toSet()
+    }
+
+    private fun setSecretSet(key: String, v: Set<String>) = setSecret(key, v.joinToString(SEP))
+
     /** GPS fixes less accurate than this (metres) are ignored by the analysis (indoor/car drift). */
     /** Phone Bluetooth as a receiver: 0 off, 1 only while no probe is streaming, 2 always. */
     var phoneBleMode: Int
@@ -19,13 +61,13 @@ class Prefs(ctx: Context) {
 
     /** "ssid|bssid" pairs your phone has joined for your own networks (trust on first use). */
     var trustedAps: Set<String>
-        get() = p.getStringSet("trustedAps", emptySet()) ?: emptySet()
-        set(v) = p.edit().putStringSet("trustedAps", v).apply()
+        get() = secretSet("trustedAps")
+        set(v) = setSecretSet("trustedAps", v)
 
     /** Probe-request fingerprints of this phone (from "identify my phone"). */
     var ownFingerprints: Set<String>
-        get() = p.getStringSet("ownFingerprints", emptySet()) ?: emptySet()
-        set(v) = p.edit().putStringSet("ownFingerprints", v).apply()
+        get() = secretSet("ownFingerprints")
+        set(v) = setSecretSet("ownFingerprints", v)
 
     /** Field test: "entityId|firstAlertMs" for targets that crossed the alert threshold. */
     var testFirstAlerts: Set<String>
@@ -59,16 +101,16 @@ class Prefs(ctx: Context) {
 
     /** Comma/newline separated SSIDs of your own networks: access points with these names are ignored. */
     var ownSsids: String
-        get() = p.getString("ownSsids", "") ?: ""
-        set(v) = p.edit().putString("ownSsids", v).apply()
+        get() = secret("ownSsids")
+        set(v) = setSecret("ownSsids", v)
 
     var wigleName: String
-        get() = p.getString("wigleName", "") ?: ""
-        set(v) = p.edit().putString("wigleName", v.trim()).apply()
+        get() = secret("wigleName")
+        set(v) = setSecret("wigleName", v.trim())
 
     var wigleToken: String
-        get() = p.getString("wigleToken", "") ?: ""
-        set(v) = p.edit().putString("wigleToken", v.trim()).apply()
+        get() = secret("wigleToken")
+        set(v) = setSecret("wigleToken", v.trim())
 
     var beaconDbEnabled: Boolean
         get() = p.getBoolean("beaconDb", false)
@@ -140,4 +182,8 @@ class Prefs(ctx: Context) {
 
     fun ownSsidSet(): Set<String> =
         ownSsids.split(',', '\n').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+
+    private companion object {
+        const val SEP = "\u0000"
+    }
 }

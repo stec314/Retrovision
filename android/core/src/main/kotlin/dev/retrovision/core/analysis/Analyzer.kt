@@ -169,11 +169,17 @@ class EntityReport(
     val effectivePlaces: Double = 0.0,
     /** 5-minute time buckets in which it was heard (for co-occurrence). */
     val buckets: Set<Long> = emptySet(),
+    /**
+     * The resolver ids merged into this report (rare-network or AP-uptime links). Snoozes, verdicts
+     * and alert cooldowns should follow all of them: the merged id can change between analyses.
+     */
+    val memberIds: Set<String> = setOf(entityId),
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
+        memberIds,
     )
 }
 
@@ -237,7 +243,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         for (list in byEntity.values) for (es in list) activeMinutes += es.sighting.timeMs / 60_000L
         val route = RouteContext(
             stops, turns,
-            elsewhere = { t, place -> timeline.nearest(t)?.let { placeOfFix[it]?.id != place } ?: false },
+            elsewhere = { t, stop -> timeline.nearest(t)?.let { Geo.distanceM(it.lat, it.lon, stop.lat, stop.lon) > Route.Config().stopMergeM } ?: false },
             sensorActive = { t -> (t / 60_000L) in activeMinutes },
         )
 
@@ -248,7 +254,14 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 ignored++
                 continue
             }
-            val r = score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route, ignore)
+            val r0 = score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route, ignore)
+            val members = list.map { it.entityId }.toSet()
+            val r = if (members.size > 1) EntityReport(
+                r0.entityId, r0.kind, r0.score, r0.alert, r0.reasons, r0.placeIds, r0.windows, r0.firstSeenMs, r0.lastSeenMs,
+                r0.sightings, r0.activeMinutes, r0.maxRssi, r0.addresses, r0.ssids, r0.tracker, r0.bleCompanyId, r0.mobileAp,
+                r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
+                r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
+            ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
                 r.with(r.score, r.alert, r.reasons + Reason.LinkedByNetworks(n, sh))
@@ -305,7 +318,6 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var wildcard = 0
         val joins = LinkedHashMap<MacAddress, JoinAttempt>()
         val notable = LinkedHashSet<NotableSignature>()
-        val notableChecked = HashSet<Any>()
         val ownNetProbes = ArrayList<Long>() // times it asked for one of your networks (not your phone)
         val ownNetNames = LinkedHashSet<String>()
         var remoteId = false
@@ -362,12 +374,13 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                     BleAddressKind.RANDOM_STATIC -> lower(MacTrust.UNTIL_REBOOT)
                     else -> Unit
                 }
-                if (b.advType == BleAdvType.SCAN_RSP) hints.add(AdvertisementInfo.of(b.advData))
+                val facts = dev.retrovision.core.identity.FactsCache.of(s)
+                val info = facts.info!!
+                if (b.advType == BleAdvType.SCAN_RSP) hints.add(info)
                 if (b.advType != BleAdvType.SCAN_RSP) {
-                    val info = AdvertisementInfo.of(b.advData)
                     hints.add(info)
                     if (companyId == null) companyId = info.manufacturerId
-                    TrackerClassifier.classify(info)?.let { m ->
+                    facts.tracker?.let { m ->
                         if (tracker == null || TrackerClassifier.isTag(m.kind)) tracker = m.kind
                         if (m.separated == true) separated = true
                         else if (m.separated == false && separated == null) separated = false
@@ -375,13 +388,10 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 }
             }
 
-            // Notable signatures: once per distinct payload (names/adverts repeat constantly).
-            if (notableChecked.size < 64 && notableChecked.add(Triple(s.address, s.wifi?.ssidText, s.ble?.advData?.contentHashCode()))) {
-                notable += NotableCatalog.match(s)
-            }
-            if (s.radio == Radio.BLE || s.wifi?.kind == WifiKind.BEACON) {
-                RemoteId.decode(s)?.let { r -> remoteId = true; r.uasId?.let { droneId = it } }
-            }
+            // Decoded once per distinct payload across analyses (FactsCache).
+            val f = dev.retrovision.core.identity.FactsCache.of(s)
+            notable += f.notable
+            f.remoteId?.let { r -> remoteId = true; r.uasId?.let { droneId = it } }
 
             timeline.nearest(s.timeMs)?.let { fix ->
                 val p = placeOfFix[fix] ?: return@let
@@ -559,7 +569,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
     class RouteContext(
         val stops: List<Route.Stop>,
         val turns: List<Route.Turn>,
-        val elsewhere: (Long, Int) -> Boolean,
+        val elsewhere: (Long, Route.Stop) -> Boolean,
         val sensorActive: (Long) -> Boolean,
     )
 

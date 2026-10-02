@@ -23,7 +23,8 @@ object SessionRecorder {
     fun start(ctx: Context) {
         if (writer != null) return
         val name = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".rvsl"
-        writer = SessionLog.Writer(FileOutputStream(File(dir(ctx), name)))
+        // Encrypted at rest; if the Keystore is unavailable, don't record at all rather than in clear.
+        writer = runCatching { SessionLog.Writer(SessionFiles.openWrite(ctx, File(dir(ctx), name))) }.getOrNull() ?: return
         recording.value = name
     }
 

@@ -22,10 +22,10 @@ permissions:
 jobs:
   host-tests:
     name: Protocol + core tests (host)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install generators
@@ -42,7 +42,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }} firmware
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: host-tests
     strategy:
       fail-fast: false
@@ -58,7 +58,7 @@ jobs:
           - target: esp32c5
             offset: "0x0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0   # git describe -> firmware version
       - name: idf.py build + merged image
@@ -84,7 +84,7 @@ jobs:
             | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
           tail -30 "$f" | while IFS= read -r l; do echo "::warning::${l//%/%25}"; done
       - name: Upload firmware
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: retrovision-${{ matrix.target }}
           path: |

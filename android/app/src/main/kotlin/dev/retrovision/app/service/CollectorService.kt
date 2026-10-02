@@ -92,6 +92,7 @@ class CollectorService : Service() {
         Collector.probeLedOn.value = app.prefs.probeLedOn
         Collector.captureDataFrames.value = app.prefs.captureDataFrames
         startLocation()
+        registerWifiCallback()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
         scope.launch { analysisLoop() }
@@ -109,6 +110,7 @@ class CollectorService : Service() {
         runCatching { locationManager?.removeUpdates(locationListener) }
         phoneBle?.stop()
         motion?.stop()
+        netCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         scope.cancel()
         super.onDestroy()
     }
@@ -254,7 +256,31 @@ class CollectorService : Service() {
     private val radarLock = Any()
     private val radarBuf = HashMap<String, ArrayDeque<RSample>>()
 
+    /** (address, payload) -> arrival time of BLE adverts heard by the probe, for phone de-duplication. */
+    private val probeHeard = HashMap<Long, Long>()
+    private var probeHeardPrune = 0L
+
+    /** True if this is a phone advert the probe already delivered: same bytes, same device, ≤ 2 s ago. */
+    private fun duplicateOfProbe(s: Sighting): Boolean {
+        val b = s.ble ?: return false
+        val key = s.address.bits * 1_000_003L + b.advData.contentHashCode()
+        val now = android.os.SystemClock.elapsedRealtime()
+        synchronized(probeHeard) {
+            if (now - probeHeardPrune > 10_000L) {
+                probeHeardPrune = now
+                probeHeard.values.removeAll { now - it > 5_000L }
+            }
+            if (s.probeId != dev.retrovision.app.phone.PHONE_SOURCE) {
+                probeHeard[key] = now
+                return false
+            }
+            val t = probeHeard[key] ?: return false
+            return now - t <= 2_000L
+        }
+    }
+
     private fun onSighting(s: Sighting) {
+        if (duplicateOfProbe(s)) return
         SessionRecorder.write(s)
         // "Identify my phone": a scan was just triggered; this phone's probe requests are the loudest.
         if (System.currentTimeMillis() < Collector.calibrateUntilMs && s.probeId != dev.retrovision.app.phone.PHONE_SOURCE) {
@@ -529,16 +555,16 @@ class CollectorService : Service() {
         if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
             for (a in result.alerts) {
-                if (a.entityId in snoozed) continue
-                val last = notifiedAt[a.entityId]
-                val lastScore = notifiedScore[a.entityId]
+                // Merged entities: snooze, cooldown and last score follow every member id.
+                if (a.memberIds.any { it in snoozed }) continue
+                val last = a.memberIds.mapNotNull { notifiedAt[it] }.maxOrNull()
+                val lastScore = a.memberIds.mapNotNull { notifiedScore[it] }.maxOrNull()
                 // A clear escalation (+15 pts) always breaks through the cooldown.
                 val escalated = lastScore != null && a.score >= lastScore + 0.15
                 val cooldownOk = last == null || now - last >= cooldownMs
                 val risesOk = !prefs.alertOnlyIfScoreRises || lastScore == null || a.score + 1e-9 >= lastScore
                 if (escalated || (cooldownOk && risesOk)) {
-                    notifiedAt[a.entityId] = now
-                    notifiedScore[a.entityId] = a.score
+                    for (m in a.memberIds) { notifiedAt[m] = now; notifiedScore[m] = a.score }
                     notifyAlert(a)
                 }
             }
@@ -595,15 +621,39 @@ class CollectorService : Service() {
         }
     }
 
+    /** Latest Wi-Fi association from the network callback (Android 12+ needs it to see SSID/BSSID). */
+    @Volatile private var cbWifi: android.net.wifi.WifiInfo? = null
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
+    private fun registerWifiCallback() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val req = android.net.NetworkRequest.Builder().addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI).build()
+        val cb = if (Build.VERSION.SDK_INT >= 31) {
+            object : android.net.ConnectivityManager.NetworkCallback(android.net.ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(n: android.net.Network, c: android.net.NetworkCapabilities) {
+                    cbWifi = c.transportInfo as? android.net.wifi.WifiInfo
+                }
+                override fun onLost(n: android.net.Network) { cbWifi = null }
+            }
+        } else {
+            object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onLost(n: android.net.Network) { cbWifi = null }
+            }
+        }
+        runCatching { cm.registerNetworkCallback(req, cb) }.onSuccess { netCallback = cb }
+    }
+
     /**
-     * Reads the phone's own Wi-Fi association. For your networks, the first access point seen is
-     * trusted; later ones from the same vendor (mesh nodes, extenders) too. Joining your network
-     * through an unknown access point means an evil twin got YOUR phone, not just the air.
+     * Reads the phone's own Wi-Fi association. For each of your networks, only the very first
+     * access point is trusted automatically; any other one alerts until you confirm it in Settings
+     * (no automatic trust by vendor: a common router brand would let an impersonator straight in).
+     * Joining your network through an unknown access point means an evil twin got YOUR phone.
      */
     @Suppress("DEPRECATION")
     private fun checkWifiConnection(now: Long): dev.retrovision.app.WifiConn? {
-        val wm = applicationContext.getSystemService(android.net.wifi.WifiManager::class.java) ?: return null
-        val info = runCatching { wm.connectionInfo }.getOrNull() ?: run { Collector.wifiConnection.value = null; return null }
+        val info = cbWifi ?: runCatching {
+            applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)?.connectionInfo
+        }.getOrNull() ?: run { Collector.wifiConnection.value = null; return null }
         val ssid = info.ssid?.removeSurrounding("\"")?.takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
         val bssid = info.bssid?.lowercase()?.takeIf { it != "02:00:00:00:00:00" && it != "00:00:00:00:00:00" }
         if (ssid == null || bssid == null) { Collector.wifiConnection.value = null; return null }
@@ -611,10 +661,9 @@ class CollectorService : Service() {
         var trusted = true
         if (own) {
             val known = prefs.trustedAps.filter { it.startsWith("$ssid|") }.map { it.substringAfter('|') }
-            fun oui(b: String) = b.split(':').take(3).mapIndexed { i, o -> if (i == 0) "%02x".format(o.toInt(16) and 0xFD) else o }.joinToString(":")
             trusted = when {
                 bssid in known -> true
-                known.isEmpty() || known.any { oui(it) == oui(bssid) } -> { prefs.trustedAps = prefs.trustedAps + "$ssid|$bssid"; true }
+                known.isEmpty() -> { prefs.trustedAps = prefs.trustedAps + "$ssid|$bssid"; true }
                 else -> false
             }
             if (!trusted && prefs.alertsEnabled) {
@@ -632,8 +681,8 @@ class CollectorService : Service() {
     private fun notifyUntrustedAp(ssid: String, bssid: String) {
         val nm = getSystemService(NotificationManager::class.java)
         val text = Texts.tr(
-            "Your phone joined “$ssid” through an access point it has never used ($bssid). If you didn't add a router or extender, someone may be impersonating your network. Settings → trust it if it's yours.",
-            "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Se non hai aggiunto router o ripetitori, qualcuno potrebbe impersonare la tua rete. Impostazioni → fidati se è tuo.",
+            "Your phone joined “$ssid” through an access point it has never used ($bssid). A mesh node or extender of yours also looks like this the first time: if it's yours, confirm it in Settings. If not, someone may be impersonating your network.",
+            "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Anche un nodo mesh o un ripetitore tuo appare così la prima volta: se è tuo, confermalo in Impostazioni. Se no, qualcuno potrebbe impersonare la tua rete.",
         )
         val n = NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)

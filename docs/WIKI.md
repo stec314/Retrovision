@@ -227,7 +227,7 @@ Base = 0.78. Co-movement +0.15, moving AP +0.10 → **1.00 (clamped). Alert.**
 
 Being "often near you" does not separate a follower from someone who simply takes the same road. Two signals look at **how** a device behaves around your own movements.
 
-**Stops.** From your fixes, a stop is a stay of **≥ 5 minutes** at one place, with an arrival and a departure time. For each finished stop, the device is classed as:
+**Stops.** From your fixes, a stop is a stay of **≥ 5 minutes** at one place, with an arrival and a departure time. Fixes within **150 m** of where the stop began belong to it, even when they fall in a neighbouring 100 m place: sitting near a place boundary does not split one stay into fragments, and "you left" means you moved more than 150 m away. For each finished stop, the device is classed as:
 - *there already, or came with you*: heard within **2 min** of your arrival;
 - **arrived after you**: first heard **≥ 3 min** after you arrived;
 - **left with you**: heard again within **5 min** after you left, while you were already elsewhere;
@@ -262,6 +262,8 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 **Phone-only mode.** Without a probe: trackers, Bluetooth drones, BLE spam and notable Bluetooth devices work. Probe requests, Wi-Fi attacks and Wi-Fi Remote ID need the probe. The Status screen says which mode you are in.
 
+**No double counting.** When the probe is streaming, phone adverts identical to one the probe delivered in the last 2 s (same device, same bytes) are dropped. What only the phone hears (Long Range, a moment the probe was on another channel) is kept. If the phone happens to deliver first, both copies are kept.
+
 **Signal levels are per receiver.** The phone's antenna and the probe's read different dBm, so "steady signal" (co-movement) and "one transmitter" (BLE spam) are judged on one receiver at a time.
 
 **Silent GPS drift.** The accuracy filter only catches fixes the receiver *admits* are bad; indoors it often claims ±20 m while wandering 100 m. While the accelerometer says you are **not travelling** **and** the GPS Doppler speed is under **0.8 m/s**, fixes more than **30 m** (or the anchor's accuracy) from where stillness began are rejected. "Not travelling" is the spread of acceleration over 20 s: under 0.12 m/s² = resting on a table, under 0.8 m/s² = in your hand (tremor and taps, but no steps); walking jolts 1–3 m/s² at every step. If fixes the guard rejected keep getting **further away 3 times in a row** (≥ 10 m each), that is real movement the sensors missed: the guard accepts it and starts over there. Drift jumps back and forth, so it never escapes this way. Doppler speed comes from carrier frequency shifts, not positions, so it stays near zero during drift and stays right in a smooth car where the accelerometer looks calm.
@@ -272,7 +274,9 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 **Trackers and drones are never proposed.** A tracker planted on you also "travels with you every day": auto-ignoring would hide exactly the threat the app exists for.
 
-**Your phone joining an unknown access point.** For your own networks, the app remembers the access points your phone joins (the first one is trusted, and so are others from the same vendor, such as mesh nodes and extenders). If your phone joins your network through an access point from another vendor, it alerts: that is an evil twin that got **your** phone, not just one in the air. If it's yours (a new router), trust it in Settings.
+**Your phone joining an unknown access point.** For each of your own networks, only the **first** access point your phone uses is trusted automatically. Any other one raises an alert (at most every 6 hours per access point) until you **confirm it in Settings**: a mesh node or extender of yours triggers this once each. There is no automatic trust by vendor, because a common router brand would let an impersonator straight in. An unconfirmed access point is what an evil twin that got **your** phone looks like.
+
+Weak spot: the very first access point is trusted blindly. If the first time you add a network an evil twin is already answering, it becomes "trusted". Check the list in Settings once after setup.
 
 ## Your verdicts and field tests
 
@@ -439,8 +443,8 @@ The map shows **your** places and **your** movement. By design it does not draw 
 - **Encrypted at rest.** The database uses SQLCipher. Its key is wrapped by a key held in the Android Keystore, which cannot be exported.
 - **Retention.** Sightings are deleted after the number of days you set (1–30). GPS fixes are kept for up to 30 days, because learning routine places needs weeks.
 - **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached.
-- **Session recordings** (Sessions screen, when you start one) are local files you control; they can be replayed. They are compressed but **not encrypted** (they live in the app's private storage). Delete them when you no longer need them.
-- **Settings** (your SSIDs, trusted access points, lookup tokens) are stored in the app's private settings file, **not encrypted**.
+- **Session recordings** are **encrypted** (AES-256-GCM in independent chunks, key derived from the database passphrase), so a crash only loses the last seconds and a tampered or reordered file is rejected. Recordings made by older versions are encrypted the first time you open the Sessions screen. If the Keystore is unavailable, the app refuses to record rather than write in clear. **Export writes a plain copy** (so it can be replayed on another phone): it contains other people's device addresses and your track, so treat it like the database. Imports are encrypted on arrival.
+- **Sensitive settings** (your network names, trusted access points, your phone's fingerprint, WiGLE name and token) are **encrypted with a Keystore key**. Values stored in clear by older versions are migrated on first read. Other settings (thresholds, toggles) are plain.
 - **Delete all data** removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, trusted access points, your phone's fingerprint and field-test targets.
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.

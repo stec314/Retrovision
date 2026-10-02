@@ -17,13 +17,14 @@ import javax.crypto.spec.GCMParameterSpec
  */
 object KeyVault {
     private const val ALIAS = "retrovision-db-wrap"
+    private const val SECRET_ALIAS = "retrovision-settings"
     private const val PREF = "vault"
     private const val PREF_KEY = "p"
 
     /** @return passphrase as ASCII hex bytes (no NULs), or null if the stored one cannot be decrypted. */
     fun passphrase(ctx: Context, createIfMissing: Boolean = true): ByteArray? {
         val prefs = ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        val key = wrappingKey() ?: return null
+        val key = wrappingKey(ALIAS) ?: return null
         val stored = prefs.getString(PREF_KEY, null)
         if (stored != null) {
             return try {
@@ -50,13 +51,41 @@ object KeyVault {
         runCatching { KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.deleteEntry(ALIAS) }
     }
 
-    private fun wrappingKey(): SecretKey? = try {
+    /**
+     * Key for session recordings, derived from the database passphrase: same protection as the
+     * database, and wiping the vault makes old recordings unreadable too.
+     */
+    fun sessionKey(ctx: Context): ByteArray? {
+        val pass = passphrase(ctx, createIfMissing = false) ?: return null
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest("retrovision-sessions-v1".toByteArray() + pass)
+    }
+
+    /** Encrypts a small setting with a Keystore key. Null if the Keystore is unavailable. */
+    fun seal(plain: String): String? = try {
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.ENCRYPT_MODE, wrappingKey(SECRET_ALIAS) ?: return null)
+        Base64.encodeToString(c.iv + c.doFinal(plain.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+    } catch (_: Exception) {
+        null
+    }
+
+    fun open(sealed: String): String? = try {
+        val raw = Base64.decode(sealed, Base64.NO_WRAP)
+        val c = Cipher.getInstance("AES/GCM/NoPadding")
+        c.init(Cipher.DECRYPT_MODE, wrappingKey(SECRET_ALIAS) ?: return null, GCMParameterSpec(128, raw, 0, 12))
+        String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun wrappingKey(alias: String): SecretKey? = try {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (!ks.containsAlias(ALIAS)) {
+        if (!ks.containsAlias(alias)) {
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").apply {
                 init(
                     KeyGenParameterSpec.Builder(
-                        ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                        alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
                     )
                         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
@@ -65,7 +94,7 @@ object KeyVault {
                 )
             }.generateKey()
         }
-        ks.getKey(ALIAS, null) as SecretKey
+        ks.getKey(alias, null) as SecretKey
     } catch (_: Exception) {
         null
     }

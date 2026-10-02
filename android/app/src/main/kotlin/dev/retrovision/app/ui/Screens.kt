@@ -307,7 +307,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         dismissButton = {
             TextButton(onClick = {
                 scope.launch {
-                    app.db.dao().addIgnore(IgnoreRow(r.entityId, Texts.entityLabel(r), System.currentTimeMillis()))
+                    for (m in r.memberIds) app.db.dao().addIgnore(IgnoreRow(m, Texts.entityLabel(r), System.currentTimeMillis()))
                     Collector.analyzeNow.value = System.nanoTime()
                     onClose()
                 }
@@ -791,8 +791,8 @@ private fun TrustedApsSection() {
     Text(Texts.tr("Your network's access points", "Access point della tua rete"), style = MaterialTheme.typography.titleMedium)
     Text(
         Texts.tr(
-            "When your phone joins one of your networks, its access point is remembered. Joining it later through an unknown one (another vendor) raises an alert: that's an evil twin that got your phone.",
-            "Quando il telefono si collega a una tua rete, l'access point viene ricordato. Se in seguito si collega tramite uno sconosciuto (altro produttore) scatta un'allerta: è un evil twin che ha agganciato il tuo telefono.",
+            "The first access point your phone uses for each of your networks is trusted. Any other one raises an alert until you confirm it here (mesh nodes and extenders included, once each): an unknown one may be an evil twin that got your phone.",
+            "Il primo access point usato dal telefono per ogni tua rete è fidato. Ogni altro fa scattare un'allerta finché non lo confermi qui (anche nodi mesh e ripetitori, una volta ciascuno): uno sconosciuto potrebbe essere un evil twin che ha agganciato il telefono.",
         ),
         style = MaterialTheme.typography.bodySmall,
     )
@@ -826,13 +826,16 @@ private fun FeedbackRowUi(r: EntityReport, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val dao = app.db.dao()
     fun send(label: Int) = scope.launch {
-        dao.addFeedback(
-            dev.retrovision.app.data.FeedbackRow(
-                entityId = r.entityId, label = label, score = r.score,
-                reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
-            ),
-        )
-        if (label == 1) dao.addIgnore(IgnoreRow(r.entityId, Texts.entityLabel(r), System.currentTimeMillis()))
+        // One row per merged id, so the verdict still applies if the merge changes later.
+        for (m in r.memberIds) {
+            dao.addFeedback(
+                dev.retrovision.app.data.FeedbackRow(
+                    entityId = m, label = label, score = r.score,
+                    reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
+                ),
+            )
+            if (label == 1) dao.addIgnore(IgnoreRow(m, Texts.entityLabel(r), System.currentTimeMillis()))
+        }
         Collector.analyzeNow.value = System.nanoTime()
         onClose()
     }
@@ -896,13 +899,15 @@ private fun FeedbackStatsSection() {
     val list by remember { app.db.dao().feedback() }.collectAsState(initial = emptyList())
     if (list.isEmpty()) return
     Text(Texts.tr("Your verdicts", "I tuoi giudizi"), style = MaterialTheme.typography.titleMedium)
+    // A verdict on a merged device is stored once per member id: count each verdict once.
+    val verdicts = list.distinctBy { it.timeMs to it.label }
     val n = IntArray(3)
-    list.forEach { if (it.label in 0..2) n[it.label]++ }
+    verdicts.forEach { if (it.label in 0..2) n[it.label]++ }
     Text(
         Texts.tr("False alarms ${n[0]} · yours ${n[1]} · suspicious ${n[2]}", "Falsi allarmi ${n[0]} · tuoi ${n[1]} · sospetti ${n[2]}"),
         style = MaterialTheme.typography.bodySmall,
     )
-    val top = list.filter { it.label == 0 }.flatMap { it.reasons.split(',') }.filter { it.isNotBlank() }
+    val top = verdicts.filter { it.label == 0 }.flatMap { it.reasons.split(',') }.filter { it.isNotBlank() }
         .groupingBy { it }.eachCount().entries.sortedByDescending { it.value }.take(4)
     if (top.isNotEmpty()) {
         Text(

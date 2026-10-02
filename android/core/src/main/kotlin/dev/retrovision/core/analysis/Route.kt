@@ -14,13 +14,19 @@ import kotlin.math.abs
  * Pure function of your own fixes and the device's sighting times.
  */
 object Route {
-    class Stop(val placeId: Int, val arriveMs: Long, val leaveMs: Long, val closed: Boolean)
+    /** [lat]/[lon]: where the stop began (its anchor). */
+    class Stop(val placeId: Int, val arriveMs: Long, val leaveMs: Long, val closed: Boolean, val lat: Double, val lon: Double)
 
     class Turn(val timeMs: Long, val angleDeg: Double)
 
     class Config(
         /** A stay shorter than this is passing through, not a stop. */
         val minStopMs: Long = 5 * 60_000L,
+        /**
+         * Fixes within this distance of where a stop began still belong to it, even if they fall in a
+         * neighbouring 100 m place: sitting near a place boundary must not split one stay into fragments.
+         */
+        val stopMergeM: Double = 150.0,
         /** Heard within this of your arrival = it was already there or came with you. */
         val arrivalSlackMs: Long = 2 * 60_000L,
         /** First heard at least this long after you arrived = it came after you. */
@@ -41,14 +47,18 @@ object Route {
         var cur = -1
         var start = 0L
         var last = 0L
+        var anchor: GeoFix? = null
         fun close(closed: Boolean) {
-            if (cur >= 0 && last - start >= cfg.minStopMs) out += Stop(cur, start, last, closed)
+            val a = anchor
+            if (cur >= 0 && a != null && last - start >= cfg.minStopMs) out += Stop(cur, start, last, closed, a.lat, a.lon)
         }
         for (f in fixes) {
             val p = placeOf(f) ?: continue
-            if (p != cur) {
+            val a = anchor
+            val samePlace = p == cur || (a != null && Geo.distanceM(a, f) <= cfg.stopMergeM)
+            if (!samePlace) {
                 close(closed = true)
-                cur = p; start = f.timeMs
+                cur = p; start = f.timeMs; anchor = f
             }
             last = f.timeMs
         }
@@ -111,7 +121,8 @@ object Route {
         times: LongArray,
         stops: List<Stop>,
         turns: List<Turn>,
-        elsewhere: (Long, Int) -> Boolean,
+        /** True when at that time you were away from the stop (beyond its merge radius). */
+        elsewhere: (Long, Stop) -> Boolean,
         sensorActive: (Long) -> Boolean,
         cfg: Config = Config(),
     ): Behaviour {
@@ -132,7 +143,7 @@ object Route {
             val atArrival = first <= s.arriveMs + cfg.arrivalSlackMs
             if (!s.closed) continue // you're still here: departure unknown
             val after = firstIn(s.leaveMs + 30_000L, s.leaveMs + cfg.leftWithYouMs)
-            val leftWithYou = after != null && elsewhere(after, s.placeId)
+            val leftWithYou = after != null && elsewhere(after, s)
             val recording = sensorActive(s.leaveMs + cfg.leftWithYouMs / 2)
             if (!atArrival && first >= s.arriveMs + cfg.lateArrivalMs && leftWithYou) joined++
             if (!leftWithYou && recording) behind++
