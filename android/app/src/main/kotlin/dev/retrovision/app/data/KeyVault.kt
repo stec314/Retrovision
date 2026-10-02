@@ -62,21 +62,27 @@ object KeyVault {
     }
 
     /** Encrypts a small setting with a Keystore key. Null if the Keystore is unavailable. */
-    fun seal(plain: String): String? = try {
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.ENCRYPT_MODE, wrappingKey(SECRET_ALIAS) ?: return null)
-        Base64.encodeToString(c.iv + c.doFinal(plain.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
-    } catch (_: Exception) {
-        null
+    fun seal(plain: String): String? {
+        val key = wrappingKey(SECRET_ALIAS) ?: return null
+        return try {
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.ENCRYPT_MODE, key)
+            Base64.encodeToString(c.iv + c.doFinal(plain.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    fun open(sealed: String): String? = try {
-        val raw = Base64.decode(sealed, Base64.NO_WRAP)
-        val c = Cipher.getInstance("AES/GCM/NoPadding")
-        c.init(Cipher.DECRYPT_MODE, wrappingKey(SECRET_ALIAS) ?: return null, GCMParameterSpec(128, raw, 0, 12))
-        String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
-    } catch (_: Exception) {
-        null
+    fun open(sealed: String): String? {
+        val key = wrappingKey(SECRET_ALIAS) ?: return null
+        return try {
+            val raw = Base64.decode(sealed, Base64.NO_WRAP)
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, raw, 0, 12))
+            String(c.doFinal(raw, 12, raw.size - 12), Charsets.UTF_8)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun wrappingKey(alias: String): SecretKey? = try {
