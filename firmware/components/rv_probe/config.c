@@ -11,6 +11,7 @@
 #define BLE_MIN_UNITS 4      // 2.5 ms
 #define BLE_MAX_UNITS 16384  // 10.24 s
 
+#ifndef RV_HAS_5GHZ
 // Primary channels (1, 6, 11) get twice the dwell and three times the visits:
 // that is where most clients and APs live.
 static const rv_hop_t k_default_hop[] = {
@@ -18,6 +19,7 @@ static const rv_hop_t k_default_hop[] = {
     {11, 200}, {4, 100}, {5, 100}, {7, 100},  {1, 200},  {6, 200}, {11, 200},
     {8, 100}, {9, 100}, {10, 100}, {12, 100}, {13, 100},
 };
+#endif
 
 #ifdef RV_HAS_5GHZ
 // UNII-1/2/2C + UNII-3: all 20 MHz primaries. Receive-only, so DFS is fine.
