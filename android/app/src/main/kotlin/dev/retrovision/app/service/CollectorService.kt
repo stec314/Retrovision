@@ -216,7 +216,8 @@ class CollectorService : Service() {
         val res = synchronized(resolver) { resolver.resolve(s) }
         if (s.rssi != 0) {
             val fix = Collector.location.value
-            if (fix != null) {
+            // Radar bearing comes from how RSSI changes as you move: a drifting fix would invent a direction.
+            if (fix != null && fix.accuracyM <= prefs.maxFixAccuracyM && System.currentTimeMillis() - fix.timeMs < 15_000L) {
                 synchronized(radarLock) {
                     val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
                     dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs))

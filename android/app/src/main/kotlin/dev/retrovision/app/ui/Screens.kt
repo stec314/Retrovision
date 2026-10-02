@@ -410,6 +410,9 @@ fun SettingsScreen(modifier: Modifier) {
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(Texts.tr("Settings", "Impostazioni"), style = MaterialTheme.typography.headlineSmall)
+        OutlinedButton(onClick = { WikiNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(Texts.tr("📖 Guide: how it works, heuristics, limits", "📖 Guida: come funziona, euristiche, limiti"))
+        }
 
         Text(Texts.tr("Alert when score ≥ ", "Allerta con punteggio ≥ ") + "%.0f%%".format(alertScore * 100))
         Slider(value = alertScore, onValueChange = { alertScore = it }, onValueChangeFinished = { prefs.alertScore = alertScore }, valueRange = 0.3f..0.95f)

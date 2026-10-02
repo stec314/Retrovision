@@ -10,6 +10,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,6 +32,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val wikiOpen by WikiNav.open.collectAsState()
+    if (wikiOpen) {
+        WikiScreen(onClose = { WikiNav.open.value = false })
+        return
+    }
     val tabs = listOf(
         "📡" to Texts.tr("Status", "Stato"),
         "🔎" to Texts.tr("Devices", "Dispositivi"),

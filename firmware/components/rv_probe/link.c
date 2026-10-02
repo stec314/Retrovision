@@ -24,9 +24,7 @@ static SemaphoreHandle_t s_tx_lock;
 static uint32_t s_seq;
 static rv_link_rx_cb_t s_on_envelope;
 static volatile uint32_t s_rx_bad_pb;
-#if CONFIG_IDF_TARGET_ESP32
 static volatile int64_t s_last_rx_us;
-#endif
 
 // TX scratch, protected by s_tx_lock.
 static uint8_t s_tx_pb[RV_MAX_ENVELOPE];

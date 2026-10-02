@@ -59,6 +59,8 @@ android {
         (this as ExtensionAware).extensions.configure<SourceDirectorySet>("proto") {
             srcDir("../../proto")
         }
+        // The wiki (docs/WIKI.md) ships inside the APK, so the in-app guide always matches this build.
+        assets.srcDir("../../docs")
     }
 }
 
