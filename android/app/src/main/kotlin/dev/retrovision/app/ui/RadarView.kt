@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -108,7 +109,7 @@ fun RadarView() {
                 .border(1.dp, Neon.grid.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
                 .onSizeChanged { sizePx = it }
                 .pointerInput(placed) {
-                    detectTapGesturesCompat { p ->
+                    detectTapGestures { p ->
                         val hit = placed.minByOrNull { (it.second - p).getDistance() }
                             ?.takeIf { (it.second - p).getDistance() < 48f }
                         selected = hit?.first?.entityId
@@ -257,8 +258,4 @@ private fun placeholderAngle(id: String): Double {
     var h = 2166136261.toInt()
     for (ch in id) { h = h xor ch.code; h *= 16777619 }
     return (abs(h) % 360).toDouble()
-}
-
-private suspend fun androidx.compose.ui.input.pointer.PointerInputScope.detectTapGesturesCompat(onTap: (Offset) -> Unit) {
-    androidx.compose.foundation.gestures.detectTapGestures(onTap = onTap)
 }
