@@ -6,6 +6,11 @@ import android.content.Context
 class Prefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    /** GPS fixes less accurate than this (metres) are ignored by the analysis (indoor/car drift). */
+    var maxFixAccuracyM: Int
+        get() = p.getInt("maxFixAccuracyM", 50)
+        set(v) = p.edit().putInt("maxFixAccuracyM", v).apply()
+
     var alertScore: Float
         get() = p.getFloat("alertScore", 0.7f)
         set(v) = p.edit().putFloat("alertScore", v).apply()

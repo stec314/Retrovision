@@ -38,6 +38,7 @@ object Retrospective {
                 alertScore = app.prefs.alertScore.toDouble(),
                 alertMinPlaces = app.prefs.alertMinPlaces,
                 familiarWeight = 0.3,
+                maxFixAccuracyM = app.prefs.maxFixAccuracyM.toDouble(),
             )
             val result = Analyzer(cfg).analyze(
                 now,

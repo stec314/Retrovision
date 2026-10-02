@@ -340,6 +340,8 @@ class CollectorService : Service() {
         try {
             while (!done.isCompleted && !Collector.usbPaused.get() && usb.isAttached(dev) && scope.isActive) {
                 delay(500)
+                // Recover a stuck probe without making the user unplug it.
+                if (session.tick() == ProbeSession.Health.DEAD) break
             }
         } finally {
             watcher.cancel()
@@ -392,6 +394,7 @@ class CollectorService : Service() {
             lookbackMs = prefs.lookbackMin * 60_000L,
             alertScore = prefs.alertScore.toDouble(),
             alertMinPlaces = prefs.alertMinPlaces,
+            maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
         )
         val from = now - cfg.lookbackMs
         val rows = dao.sightingsSince(from)
@@ -483,7 +486,10 @@ class CollectorService : Service() {
 
     private suspend fun learnFamiliar(now: Long) {
         val dao = app.db.dao()
+        val maxAcc = app.prefs.maxFixAccuracyM.toFloat()
+        // Poor fixes (indoors, in a car park) scatter and would invent "places" you never went.
         val fixes = dao.fixesSampled(now - 30L * 24 * 3600_000L).map { it.toFix() }
+            .filter { it.accuracyM <= maxAcc }
         val known = dao.familiarNow().map { it.toModel() }
         val offset = java.util.TimeZone.getDefault().getOffset(now).toLong()
         for (s in dev.retrovision.core.analysis.FamiliarLearner.suggest(fixes, known, offset)) {

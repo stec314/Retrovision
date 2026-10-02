@@ -401,6 +401,7 @@ fun SettingsScreen(modifier: Modifier) {
     var minPlaces by remember { mutableIntStateOf(prefs.alertMinPlaces) }
     var lookback by remember { mutableIntStateOf(prefs.lookbackMin) }
     var retention by remember { mutableIntStateOf(prefs.retentionDays) }
+    var gpsAcc by remember { mutableIntStateOf(prefs.maxFixAccuracyM) }
     var own by remember { mutableStateOf(prefs.ownSsids) }
     var wName by remember { mutableStateOf(prefs.wigleName) }
     var wToken by remember { mutableStateOf(prefs.wigleToken) }
@@ -416,6 +417,15 @@ fun SettingsScreen(modifier: Modifier) {
         Slider(value = minPlaces.toFloat(), onValueChange = { minPlaces = it.toInt() }, onValueChangeFinished = { prefs.alertMinPlaces = minPlaces }, valueRange = 2f..6f, steps = 3)
         Text(Texts.tr("Analysis window: $lookback min", "Finestra di analisi: $lookback min"))
         Slider(value = lookback.toFloat(), onValueChange = { lookback = (it / 15).toInt() * 15 }, onValueChangeFinished = { prefs.lookbackMin = lookback }, valueRange = 30f..720f)
+        Text(Texts.tr("Ignore GPS fixes worse than ±$gpsAcc m", "Ignora posizioni GPS peggiori di ±$gpsAcc m"))
+        Text(
+            Texts.tr(
+                "Indoors or in a car the GPS drifts and fakes movement. Lower = stricter (fewer false alerts, fewer fixes).",
+                "In casa o in auto il GPS deriva e simula spostamenti. Più basso = più severo (meno falsi allarmi, meno posizioni).",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Slider(value = gpsAcc.toFloat(), onValueChange = { gpsAcc = (it / 5).toInt() * 5 }, onValueChangeFinished = { prefs.maxFixAccuracyM = gpsAcc }, valueRange = 20f..150f)
         Text(Texts.tr("Keep data for $retention days", "Conserva i dati per $retention giorni"))
         Slider(value = retention.toFloat(), onValueChange = { retention = it.toInt() }, onValueChangeFinished = { prefs.retentionDays = retention }, valueRange = 1f..30f)
 

@@ -48,6 +48,9 @@ static void rx_task(void *arg)
         }
 #else
         int n = usb_serial_jtag_read_bytes(chunk, sizeof chunk, pdMS_TO_TICKS(100));
+        if (n > 0) {
+            s_last_rx_us = esp_timer_get_time();
+        }
 #endif
         for (int i = 0; i < n; i++) {
             const uint8_t *env;
@@ -128,12 +131,16 @@ out:
 
 bool rv_link_host_connected(void)
 {
+    // The host sends time-sync requests every 30 s while a session is up, so silence for
+    // 2 minutes means it is gone -- or it reopened the port and lost our session (the USB
+    // cable never left, so the USB layer still says "connected"). Either way: go back to
+    // the handshake so the next host hears a Hello instead of waiting forever.
+    const bool talking = esp_timer_get_time() - s_last_rx_us < 120LL * 1000 * 1000;
 #if CONFIG_IDF_TARGET_ESP32
-    // A UART cannot tell whether anyone listens. The host sends time-sync requests
-    // every 30 s while a session is up, so silence for 2 minutes means it is gone.
-    return esp_timer_get_time() - s_last_rx_us < 120LL * 1000 * 1000;
+    // A UART cannot tell whether anyone listens: silence is the only signal.
+    return talking;
 #else
-    return usb_serial_jtag_is_connected();
+    return talking && usb_serial_jtag_is_connected();
 #endif
 }
 

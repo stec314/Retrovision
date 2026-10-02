@@ -39,6 +39,12 @@ data class AnalysisConfig(
     val periodBucketMs: Long? = null,
     /** Buckets at which the recurrence sub-score saturates (retrospective mode). */
     val periodBucketTarget: Int = 6,
+    /**
+     * GPS fixes worse than this (horizontal accuracy, metres) are dropped before clustering,
+     * travel and co-movement, so indoor/urban drift cannot invent places or "moved with you".
+     * Fixes with unknown accuracy (0) are kept, so there is no regression when it is unreported.
+     */
+    val maxFixAccuracyM: Double = 50.0,
 )
 
 /** A tuned config for reviewing all saved data over [spanMs]: rewards recurring, travelling presence. */
@@ -47,8 +53,10 @@ fun retrospectiveConfig(
     alertScore: Double = 0.7,
     alertMinPlaces: Int = 3,
     familiarWeight: Double = 0.3,
+    maxFixAccuracyM: Double = 50.0,
 ): AnalysisConfig = AnalysisConfig(
     lookbackMs = spanMs,
+    maxFixAccuracyM = maxFixAccuracyM,
     alertScore = alertScore,
     alertMinPlaces = alertMinPlaces,
     familiarWeight = familiarWeight,
@@ -166,7 +174,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         residents: Set<String> = emptySet(),
     ): AnalysisResult {
         val from = nowMs - config.lookbackMs
-        val timeline = FixTimeline(fixes.filter { it.timeMs in from..nowMs }, config.fixMaxGapMs)
+        // Only trust fixes good enough to place you (indoor/canyon drift would fake movement).
+        val goodFixes = fixes.filter {
+            it.timeMs in from..nowMs && it.accuracyM <= config.maxFixAccuracyM.toFloat()
+        }
+        val timeline = FixTimeline(goodFixes, config.fixMaxGapMs)
         val clusterer = PlaceClusterer(config.placeRadiusM)
         val placeOfFix = HashMap<GeoFix, Place>()
         for (f in timeline.fixes) placeOfFix[f] = clusterer.assign(f)
