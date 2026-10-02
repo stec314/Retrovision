@@ -178,5 +178,6 @@ retrovision_v1_AckResult rv_cfg_from_pb(const retrovision_v1_Config *in, rv_cfg_
     }
 
     out->status_interval_s = in->status_interval_s;
+    out->led_off = (in->led == retrovision_v1_LedMode_LED_MODE_OFF);
     return res;
 }

@@ -84,6 +84,7 @@ class CollectorService : Service() {
             return START_NOT_STICKY
         }
         Collector.running.value = true
+        Collector.probeLedOn.value = app.prefs.probeLedOn
         startLocation()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
@@ -245,7 +246,7 @@ class CollectorService : Service() {
                 port.write(data, 1000)
             }
         }
-        val session = ProbeSession(transport, scope, ::onSighting)
+        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value })
         Collector.session = session
         val done = CompletableDeferred<Unit>()
         val io = SerialInputOutputManager(

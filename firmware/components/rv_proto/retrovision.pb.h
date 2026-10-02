@@ -73,6 +73,12 @@ typedef enum _retrovision_v1_AckResult {
     retrovision_v1_AckResult_ACK_RESULT_ERROR = 5
 } retrovision_v1_AckResult;
 
+typedef enum _retrovision_v1_LedMode {
+    retrovision_v1_LedMode_LED_MODE_UNSPECIFIED = 0, /* probe default: status LED behaves normally */
+    retrovision_v1_LedMode_LED_MODE_ON = 1,
+    retrovision_v1_LedMode_LED_MODE_OFF = 2 /* never light the LED (covert) */
+} retrovision_v1_LedMode;
+
 typedef enum _retrovision_v1_RadioMode {
     retrovision_v1_RadioMode_RADIO_MODE_UNSPECIFIED = 0,
     retrovision_v1_RadioMode_RADIO_MODE_COEX = 1, /* let the SoC coexistence scheduler share the radio */
@@ -285,6 +291,9 @@ typedef struct _retrovision_v1_Config {
     retrovision_v1_RadioSchedule schedule;
     /* Seconds between unsolicited Status frames. 0 = only on GetStatus. */
     uint32_t status_interval_s;
+    /* Status LED. UNSPECIFIED = probe default (on). Live-changeable via SetConfig,
+ so the probe can run dark without reflashing. */
+    retrovision_v1_LedMode led;
 } retrovision_v1_Config;
 
 typedef struct _retrovision_v1_HelloAck {
@@ -382,6 +391,10 @@ extern "C" {
 #define _retrovision_v1_AckResult_MAX retrovision_v1_AckResult_ACK_RESULT_ERROR
 #define _retrovision_v1_AckResult_ARRAYSIZE ((retrovision_v1_AckResult)(retrovision_v1_AckResult_ACK_RESULT_ERROR+1))
 
+#define _retrovision_v1_LedMode_MIN retrovision_v1_LedMode_LED_MODE_UNSPECIFIED
+#define _retrovision_v1_LedMode_MAX retrovision_v1_LedMode_LED_MODE_OFF
+#define _retrovision_v1_LedMode_ARRAYSIZE ((retrovision_v1_LedMode)(retrovision_v1_LedMode_LED_MODE_OFF+1))
+
 #define _retrovision_v1_RadioMode_MIN retrovision_v1_RadioMode_RADIO_MODE_UNSPECIFIED
 #define _retrovision_v1_RadioMode_MAX retrovision_v1_RadioMode_RADIO_MODE_BLE_ONLY
 #define _retrovision_v1_RadioMode_ARRAYSIZE ((retrovision_v1_RadioMode)(retrovision_v1_RadioMode_RADIO_MODE_BLE_ONLY+1))
@@ -410,6 +423,7 @@ extern "C" {
 
 #define retrovision_v1_CommandAck_result_ENUMTYPE retrovision_v1_AckResult
 
+#define retrovision_v1_Config_led_ENUMTYPE retrovision_v1_LedMode
 
 
 #define retrovision_v1_WifiConfig_frame_types_ENUMTYPE retrovision_v1_WifiFrameType
@@ -436,7 +450,7 @@ extern "C" {
 #define retrovision_v1_GetStatus_init_default    {0}
 #define retrovision_v1_Reboot_init_default       {0}
 #define retrovision_v1_CommandAck_init_default   {0, _retrovision_v1_AckResult_MIN, ""}
-#define retrovision_v1_Config_init_default       {false, retrovision_v1_WifiConfig_init_default, false, retrovision_v1_BleConfig_init_default, false, retrovision_v1_RadioSchedule_init_default, 0}
+#define retrovision_v1_Config_init_default       {false, retrovision_v1_WifiConfig_init_default, false, retrovision_v1_BleConfig_init_default, false, retrovision_v1_RadioSchedule_init_default, 0, _retrovision_v1_LedMode_MIN}
 #define retrovision_v1_ChannelDwell_init_default {0, 0}
 #define retrovision_v1_WifiConfig_init_default   {0, 0, {retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default}, 0, {_retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN}, 0, 0, 0, 0}
 #define retrovision_v1_BleConfig_init_default    {0, 0, 0, 0, 0, 0, 0}
@@ -457,7 +471,7 @@ extern "C" {
 #define retrovision_v1_GetStatus_init_zero       {0}
 #define retrovision_v1_Reboot_init_zero          {0}
 #define retrovision_v1_CommandAck_init_zero      {0, _retrovision_v1_AckResult_MIN, ""}
-#define retrovision_v1_Config_init_zero          {false, retrovision_v1_WifiConfig_init_zero, false, retrovision_v1_BleConfig_init_zero, false, retrovision_v1_RadioSchedule_init_zero, 0}
+#define retrovision_v1_Config_init_zero          {false, retrovision_v1_WifiConfig_init_zero, false, retrovision_v1_BleConfig_init_zero, false, retrovision_v1_RadioSchedule_init_zero, 0, _retrovision_v1_LedMode_MIN}
 #define retrovision_v1_ChannelDwell_init_zero    {0, 0}
 #define retrovision_v1_WifiConfig_init_zero      {0, 0, {retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero}, 0, {_retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN}, 0, 0, 0, 0}
 #define retrovision_v1_BleConfig_init_zero       {0, 0, 0, 0, 0, 0, 0}
@@ -539,6 +553,7 @@ extern "C" {
 #define retrovision_v1_Config_ble_tag            2
 #define retrovision_v1_Config_schedule_tag       3
 #define retrovision_v1_Config_status_interval_s_tag 4
+#define retrovision_v1_Config_led_tag            5
 #define retrovision_v1_HelloAck_protocol_major_tag 1
 #define retrovision_v1_HelloAck_protocol_minor_tag 2
 #define retrovision_v1_HelloAck_boot_id_tag      3
@@ -722,7 +737,8 @@ X(a, STATIC,   SINGULAR, STRING,   message,           3)
 X(a, STATIC,   OPTIONAL, MESSAGE,  wifi,              1) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  ble,               2) \
 X(a, STATIC,   OPTIONAL, MESSAGE,  schedule,          3) \
-X(a, STATIC,   SINGULAR, UINT32,   status_interval_s,   4)
+X(a, STATIC,   SINGULAR, UINT32,   status_interval_s,   4) \
+X(a, STATIC,   SINGULAR, UENUM,    led,               5)
 #define retrovision_v1_Config_CALLBACK NULL
 #define retrovision_v1_Config_DEFAULT NULL
 #define retrovision_v1_Config_wifi_MSGTYPE retrovision_v1_WifiConfig
@@ -839,13 +855,13 @@ extern const pb_msgdesc_t retrovision_v1_Log_msg;
 #define retrovision_v1_BleConfig_size            30
 #define retrovision_v1_ChannelDwell_size         12
 #define retrovision_v1_CommandAck_size           105
-#define retrovision_v1_Command_size              1002
-#define retrovision_v1_Config_size               999
+#define retrovision_v1_Command_size              1004
+#define retrovision_v1_Config_size               1001
 #define retrovision_v1_CustomObservation_size    564
-#define retrovision_v1_Envelope_size             1128
+#define retrovision_v1_Envelope_size             1130
 #define retrovision_v1_GetStatus_size            0
 #define retrovision_v1_GnssFix_size              44
-#define retrovision_v1_HelloAck_size             1118
+#define retrovision_v1_HelloAck_size             1120
 #define retrovision_v1_Hello_size                727
 #define retrovision_v1_Log_size                  160
 #define retrovision_v1_Observation_size          593

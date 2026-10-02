@@ -42,4 +42,7 @@ object Collector {
 
     /** Set by the UI to request an immediate analysis run. */
     val analyzeNow = MutableStateFlow(0L)
+
+    /** Mirrors Prefs.probeLedOn; ProbeSession reads it when building the probe config. */
+    val probeLedOn = MutableStateFlow(true)
 }

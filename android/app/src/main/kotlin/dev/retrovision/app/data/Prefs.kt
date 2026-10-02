@@ -39,6 +39,11 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("beaconDb", false)
         set(v) = p.edit().putBoolean("beaconDb", v).apply()
 
+    /** Keep the probe's status LED lit. Off = the probe runs dark. */
+    var probeLedOn: Boolean
+        get() = p.getBoolean("probeLedOn", true)
+        set(v) = p.edit().putBoolean("probeLedOn", v).apply()
+
     /** Entities marked as field-test targets (a device you carry on purpose). */
     var targets: Set<String>
         get() = p.getStringSet("targets", emptySet()) ?: emptySet()

@@ -311,7 +311,7 @@ static void session_task(void *arg)
             break;
         }
         xSemaphoreGive(s_lock);
-        gpio_set_level(LED_GPIO, led ? LED_ON : !LED_ON);
+        gpio_set_level(LED_GPIO, (led && !s_cfg.led_off) ? LED_ON : !LED_ON);
     }
 }
 

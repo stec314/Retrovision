@@ -21,6 +21,7 @@ import dev.retrovision.proto.v1.HelloAck
 import dev.retrovision.proto.v1.Observation
 import dev.retrovision.proto.v1.RadioMode
 import dev.retrovision.proto.v1.RadioSchedule
+import dev.retrovision.proto.v1.LedMode
 import dev.retrovision.proto.v1.Reboot
 import dev.retrovision.proto.v1.TimeSyncRequest
 import dev.retrovision.proto.v1.WifiConfig
@@ -76,6 +77,7 @@ class ProbeSession(
     private val scope: CoroutineScope,
     private val onSighting: (Sighting) -> Unit,
     private val nowUs: () -> Long = WallClock::nowUs,
+    private val ledOn: () -> Boolean = { true },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -310,7 +312,20 @@ class ProbeSession(
         _state.value = f(_state.value)
     }
 
-    private fun defaultConfig(): Config = Config.newBuilder()
+    /** Resend the running config with the LED on/off. Takes effect immediately. */
+    fun setLedEnabled(on: Boolean) {
+        synchronized(lock) {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                    Command.newBuilder().setSetConfig(configWith(on)),
+                ).build(),
+            )
+        }
+    }
+
+    private fun defaultConfig(): Config = configWith(ledOn())
+
+    private fun configWith(led: Boolean): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
@@ -327,6 +342,7 @@ class ProbeSession(
         .setBle(BleConfig.newBuilder().setEnabled(true).setExtended(true).setDedupMs(1_000))
         .setSchedule(RadioSchedule.newBuilder().setMode(RadioMode.RADIO_MODE_COEX))
         .setStatusIntervalS(10)
+        .setLed(if (led) LedMode.LED_MODE_ON else LedMode.LED_MODE_OFF)
         .build()
 
     companion object {

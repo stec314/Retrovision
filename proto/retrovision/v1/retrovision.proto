@@ -306,6 +306,16 @@ message Config {
 
   // Seconds between unsolicited Status frames. 0 = only on GetStatus.
   uint32 status_interval_s = 4;
+
+  // Status LED. UNSPECIFIED = probe default (on). Live-changeable via SetConfig,
+  // so the probe can run dark without reflashing.
+  LedMode led = 5;
+}
+
+enum LedMode {
+  LED_MODE_UNSPECIFIED = 0;  // probe default: status LED behaves normally
+  LED_MODE_ON = 1;
+  LED_MODE_OFF = 2;          // never light the LED (covert)
 }
 
 message ChannelDwell {

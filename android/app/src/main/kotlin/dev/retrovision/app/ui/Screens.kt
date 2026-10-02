@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -249,6 +250,31 @@ fun ProbeScreen(modifier: Modifier) {
         Text(Texts.tr("Probe firmware", "Firmware della sonda"), style = MaterialTheme.typography.headlineSmall)
         Text(linkText(conn.link, conn.device, conn.error))
         conn.session?.info?.let { Text("${Texts.tr("Installed", "Installato")}: ${it.firmware} (${it.probeType})") }
+
+        var ledOn by remember { mutableStateOf(app.prefs.probeLedOn) }
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(Texts.tr("Probe status LED", "LED di stato della sonda"))
+                    Switch(
+                        checked = ledOn,
+                        onCheckedChange = {
+                            ledOn = it
+                            app.prefs.probeLedOn = it
+                            Collector.probeLedOn.value = it
+                            Collector.session?.setLedEnabled(it)
+                        },
+                    )
+                }
+                Text(
+                    Texts.tr(
+                        "Off = the probe runs dark. Applied immediately to the connected probe, and remembered for the next one.",
+                        "Spento = la sonda resta al buio. Applicato subito alla sonda collegata e ricordato per la prossima.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
 
         if (images.isEmpty()) {
             Text(

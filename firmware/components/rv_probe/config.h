@@ -33,6 +33,7 @@ typedef struct {
 
     retrovision_v1_RadioMode radio_mode;  // effective mode
     uint32_t status_interval_s;
+    bool led_off;              // true = keep the status LED dark (covert)
 } rv_cfg_t;
 
 void rv_cfg_defaults(rv_cfg_t *cfg);
