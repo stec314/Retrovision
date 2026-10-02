@@ -518,17 +518,17 @@ private fun NotificationsSection() {
 }
 
 
-private fun probeModel(probeType: String): String = when (probeType) {
+internal fun probeModel(probeType: String): String = when (probeType) {
     "dev.retrovision.esp32s3" -> "ESP32-S3 (XIAO)"
     "dev.retrovision.esp32" -> Texts.tr("Classic ESP32 (NodeMCU/DevKitC)", "ESP32 classica (NodeMCU/DevKitC)")
     "dev.retrovision.esp32c5" -> "ESP32-C5 (dual-band, Wi-Fi 6)"
     else -> probeType.removePrefix("dev.retrovision.")
 }
 
-private class Health(val dot: String, val text: String, val color: androidx.compose.ui.graphics.Color)
+internal class Health(val dot: String, val text: String, val color: androidx.compose.ui.graphics.Color)
 
 @Composable
-private fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
+internal fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
     val ok = androidx.compose.ui.graphics.Color(0xFF7CF29A)
     val warn = androidx.compose.ui.graphics.Color(0xFFFFC857)
     val bad = MaterialTheme.colorScheme.error
