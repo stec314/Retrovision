@@ -450,7 +450,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         }
         if (awayOwnProbes > 0) {
             reasons += Reason.ProbesForYourNetwork(ownNetNames)
-            score += 0.10
+            // Until your own phone is identified, the most likely asker is your own phone: no bonus.
+            if (ignore.ownFingerprints.isNotEmpty()) score += 0.10
         }
 
         // How it behaved around your stops and turns.

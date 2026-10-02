@@ -33,6 +33,8 @@ const val PHONE_SOURCE = "phone"
  */
 class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> Unit) {
     val active = MutableStateFlow(false)
+    /** Elapsed-realtime before which start() must not retry (after a failure). */
+    @Volatile var retryAfter = 0L
     val heard = MutableStateFlow(0L)
     val codedPhy = MutableStateFlow(false)
 
@@ -44,12 +46,17 @@ class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> U
     private val callback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) = handle(result)
         override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::handle)
-        override fun onScanFailed(errorCode: Int) { active.value = false }
+        override fun onScanFailed(errorCode: Int) {
+            active.value = false
+            // Android allows ~5 scan starts per 30 s per app; retrying faster gets us blocked.
+            retryAfter = SystemClock.elapsedRealtime() + 60_000L
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun start(): Boolean {
         if (active.value) return true
+        if (SystemClock.elapsedRealtime() < retryAfter) return false
         val a = adapter ?: return false
         if (!a.isEnabled) return false
         val scanner = a.bluetoothLeScanner ?: return false
@@ -161,7 +168,7 @@ class MotionMonitor(ctx: Context) : SensorEventListener {
 
     override fun onSensorChanged(e: SensorEvent) {
         val m = sqrt(e.values[0] * e.values[0] + e.values[1] * e.values[1] + e.values[2] * e.values[2])
-        val now = SystemClock.elapsedRealtime()
+        val now = e.timestamp / 1_000_000L // event time (elapsed-realtime ns), not batch delivery time
         samples.addLast(now to m)
         while (samples.isNotEmpty() && now - samples.first().first > windowMs) samples.removeFirst()
         if (samples.size < 20 || now - samples.first().first < windowMs * 3 / 4) {

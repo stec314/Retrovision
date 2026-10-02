@@ -59,7 +59,7 @@ Everything runs on the phone. Nothing is uploaded unless you turn on an optional
 
 You connect the probe with a USB-OTG cable or adapter. The app recognises Espressif (0x303A), WCH (0x1A86) and Silicon Labs (0x10C4) USB vendor IDs.
 
-**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. There is also a browser flasher (ESP Web Tools) on the project's GitHub Pages.
+**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. The in-app flasher supports the **ESP32-S3 and the classic ESP32**. The **ESP32-C5 must be flashed from a computer** with the browser flasher (ESP Web Tools) on the project's GitHub Pages, or with esptool, using the image published in each release.
 
 **What the probe captures by default:**
 - Wi-Fi management frames: probe requests, beacons, probe responses, authentication, (re)association requests, deauthentication, disassociation.
@@ -242,6 +242,7 @@ Being "often near you" does not separate a follower from someone who simply take
 ## Network signals
 
 - **Someone asked for YOUR network.** A device that, away from your routine places, asks by name for one of your own networks (Settings → My networks) has been connected to it: a household member, a past guest, or someone who got your password. **+0.10**.
+  - The **+0.10 applies only after you identify your phone** (below): until then the most likely asker is your own phone, so the reason is shown without a bonus.
   - Your own phone does this too. **Settings → Identify my phone**: with the probe close, the phone runs a Wi-Fi scan and the loudest probe requests are saved as your phone's fingerprint, then ignored for this signal. Phones of the same model share the fingerprint, so theirs are ignored too.
   - Modern phones ask by name mostly for **hidden** networks, so this fires rarely. When it does, it is meaningful.
 - **Rotating addresses linked by rare networks.** If two randomised addresses both ask for **≥ 2** networks that at most **3** devices in the window ask for, and their lists overlap by at least half, they are merged into one entity. Common names (eduroam, airport and chain hotspots) never link anything, and neither do names that are only your own networks (your household shares those).
@@ -438,7 +439,10 @@ The map shows **your** places and **your** movement. By design it does not draw 
 - **Encrypted at rest.** The database uses SQLCipher. Its key is wrapped by a key held in the Android Keystore, which cannot be exported.
 - **Retention.** Sightings are deleted after the number of days you set (1–30). GPS fixes are kept for up to 30 days, because learning routine places needs weeks.
 - **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached.
-- **Session recordings** (Sessions screen, when you start one) are local files you control; they can be replayed.
+- **Session recordings** (Sessions screen, when you start one) are local files you control; they can be replayed. They are compressed but **not encrypted** (they live in the app's private storage). Delete them when you no longer need them.
+- **Settings** (your SSIDs, trusted access points, lookup tokens) are stored in the app's private settings file, **not encrypted**.
+- **Delete all data** removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, trusted access points, your phone's fingerprint and field-test targets.
+- **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
 ## Settings reference

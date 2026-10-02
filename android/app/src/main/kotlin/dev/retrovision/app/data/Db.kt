@@ -213,6 +213,19 @@ interface AppDao {
     @Insert
     suspend fun addFeedback(row: FeedbackRow)
 
+    /** Unanswered or rejected suggestions not refreshed for a month are dropped (confirmed ones are kept). */
+    @Query("DELETE FROM companions WHERE updatedMs < :before AND state != 2")
+    suspend fun pruneCompanions(before: Long): Int
+
+    @Query("DELETE FROM feedback WHERE timeMs < :before")
+    suspend fun pruneFeedback(before: Long): Int
+
+    @Query("DELETE FROM companions")
+    suspend fun wipeCompanions()
+
+    @Query("DELETE FROM feedback")
+    suspend fun wipeFeedback()
+
     @Query("SELECT * FROM feedback ORDER BY timeMs DESC")
     fun feedback(): kotlinx.coroutines.flow.Flow<List<FeedbackRow>>
 

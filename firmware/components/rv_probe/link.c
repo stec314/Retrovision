@@ -24,7 +24,9 @@ static SemaphoreHandle_t s_tx_lock;
 static uint32_t s_seq;
 static rv_link_rx_cb_t s_on_envelope;
 static volatile uint32_t s_rx_bad_pb;
-static volatile int64_t s_last_rx_us;
+// 32-bit ms stamp: a 64-bit volatile can tear between tasks on a 32-bit core. Wraps after
+// 49 days; unsigned subtraction keeps the age right across the wrap.
+static volatile uint32_t s_last_rx_ms;
 
 // TX scratch, protected by s_tx_lock.
 static uint8_t s_tx_pb[RV_MAX_ENVELOPE];
@@ -42,12 +44,12 @@ static void rx_task(void *arg)
 #if CONFIG_IDF_TARGET_ESP32
         int n = uart_read_bytes(RV_UART, chunk, sizeof chunk, pdMS_TO_TICKS(20));
         if (n > 0) {
-            s_last_rx_us = esp_timer_get_time();
+            s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
         }
 #else
         int n = usb_serial_jtag_read_bytes(chunk, sizeof chunk, pdMS_TO_TICKS(100));
         if (n > 0) {
-            s_last_rx_us = esp_timer_get_time();
+            s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
         }
 #endif
         for (int i = 0; i < n; i++) {
@@ -84,7 +86,7 @@ void rv_link_init(rv_link_rx_cb_t on_envelope)
     ESP_ERROR_CHECK(uart_driver_install(RV_UART, 2048, 8192, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(RV_UART, &ucfg));
     ESP_ERROR_CHECK(uart_set_pin(RV_UART, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    s_last_rx_us = esp_timer_get_time();
+    s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
 #else
     usb_serial_jtag_driver_config_t cfg = {
         .rx_buffer_size = 2048,
@@ -133,7 +135,7 @@ bool rv_link_host_connected(void)
     // 2 minutes means it is gone -- or it reopened the port and lost our session (the USB
     // cable never left, so the USB layer still says "connected"). Either way: go back to
     // the handshake so the next host hears a Hello instead of waiting forever.
-    const bool talking = esp_timer_get_time() - s_last_rx_us < 120LL * 1000 * 1000;
+    const bool talking = (uint32_t)(esp_timer_get_time() / 1000) - s_last_rx_ms < 120u * 1000u;
 #if CONFIG_IDF_TARGET_ESP32
     // A UART cannot tell whether anyone listens: silence is the only signal.
     return talking;

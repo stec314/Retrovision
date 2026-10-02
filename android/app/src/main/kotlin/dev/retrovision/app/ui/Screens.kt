@@ -549,6 +549,10 @@ fun SettingsScreen(modifier: Modifier) {
                     scope.launch {
                         val dao = app.db.dao()
                         dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar(); dao.wipeBaseline()
+                        dao.wipeCompanions(); dao.wipeFeedback()
+                        dev.retrovision.app.data.SessionRecorder.dir(app).listFiles()?.forEach { it.delete() }
+                        prefs.trustedAps = emptySet(); prefs.ownFingerprints = emptySet()
+                        prefs.targets = emptySet(); prefs.testFirstAlerts = emptySet()
                         Collector.analysis.value = null
                         wipe = false
                     }

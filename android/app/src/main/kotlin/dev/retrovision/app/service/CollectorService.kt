@@ -232,12 +232,15 @@ class CollectorService : Service() {
         scope.launch { ble.active.collect { Collector.phoneBleActive.value = it } }
         scope.launch { ble.heard.collect { Collector.phoneBleHeard.value = it } }
         scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
+        var probeGoneSince = 0L
         while (scope.isActive) {
             val streaming = Collector.connection.value.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            val nowMs = System.currentTimeMillis()
+            probeGoneSince = if (streaming) 0L else if (probeGoneSince == 0L) nowMs else probeGoneSince
             val permitted = if (Build.VERSION.SDK_INT >= 31) hasPerm(Manifest.permission.BLUETOOTH_SCAN) else true
             val want = permitted && when (prefs.phoneBleMode) {
                 2 -> true
-                1 -> !streaming
+                1 -> !streaming && nowMs - probeGoneSince >= 30_000L // don't flap on brief USB re-enumerations
                 else -> false
             }
             if (want && !ble.active.value) ble.start() else if (!want && ble.active.value) ble.stop()
@@ -247,7 +250,7 @@ class CollectorService : Service() {
 
     // ---- probe link ------------------------------------------------------------
 
-    private class RSample(val lat: Double, val lon: Double, val rssi: Int, val ms: Long)
+    private class RSample(val lat: Double, val lon: Double, val rssi: Int, val ms: Long, val source: String)
     private val radarLock = Any()
     private val radarBuf = HashMap<String, ArrayDeque<RSample>>()
 
@@ -269,7 +272,7 @@ class CollectorService : Service() {
             if (fix != null && fix.accuracyM <= prefs.maxFixAccuracyM && System.currentTimeMillis() - fix.timeMs < 15_000L) {
                 synchronized(radarLock) {
                     val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
-                    dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs))
+                    dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs, s.probeId))
                     while (dq.size > 60) dq.removeFirst()
                 }
             }
@@ -292,12 +295,15 @@ class CollectorService : Service() {
                     val (id, dq) = it.next()
                     while (dq.isNotEmpty() && now - dq.first().ms > 120_000L) dq.removeFirst()
                     if (dq.isEmpty()) { it.remove(); smooth.remove(id); continue }
-                    val recent = dq.filter { now - it.ms <= 20_000L }
+                    // One receiver only: probe and phone antennas read different dBm for the same device.
+                    val src = dq.groupingBy { s -> s.source }.eachCount().maxBy { e -> e.value }.key
+                    val mine = dq.filter { s -> s.source == src }
+                    val recent = mine.filter { now - it.ms <= 20_000L }
                     if (recent.isEmpty()) continue
                     val sm = BearingEstimator.ewma(smooth[id], recent.last().rssi).also { smooth[id] = it }
 
                     // bearing from the last ~90 s of movement
-                    val win = dq.filter { now - it.ms <= 90_000L }
+                    val win = mine.filter { now - it.ms <= 90_000L }
                     val lat0 = win.map { it.lat }.average()
                     val lon0 = win.map { it.lon }.average()
                     val cosL = Math.cos(Math.toRadians(lat0))
@@ -542,6 +548,8 @@ class CollectorService : Service() {
         dao.pruneSightings(cutoff)
         // Fixes are kept longer than sightings: learning routine places needs weeks, not days.
         dao.pruneFixes(minOf(cutoff, now - 30L * 24 * 3600_000L))
+        dao.pruneCompanions(now - 30L * 24 * 3600_000L)
+        dao.pruneFeedback(now - 180L * 24 * 3600_000L)
         if (now - lastLearn > 15 * 60_000L) {
             lastLearn = now
             learnFamiliar(now)
