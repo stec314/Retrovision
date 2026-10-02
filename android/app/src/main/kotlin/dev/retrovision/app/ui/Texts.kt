@@ -57,6 +57,10 @@ object Texts {
             "Heard continuously at a steady strength while you moved ${r.meters.toInt()} m",
             "Sentito di continuo, con segnale stabile, mentre ti spostavi di ${r.meters.toInt()} m",
         )
+        Reason.KnownAtRoutine -> tr(
+            "Belongs to your routine places (seen there over several days)",
+            "Appartiene ai tuoi luoghi di routine (visto lì per più giorni)",
+        )
         is Reason.SeenAcrossPeriods -> tr(
             "Reappeared in ${r.periods} different time periods",
             "Ricomparso in ${r.periods} fasce orarie diverse",

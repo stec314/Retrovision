@@ -62,6 +62,15 @@ class EnrichRow(
     val fetchedMs: Long,
 )
 
+@Entity(tableName = "baseline")
+class BaselineRow(
+    @PrimaryKey val entityId: String,
+    /** Distinct local days this device was seen only at your routine places. */
+    val days: Int,
+    val lastDay: Long,
+    val lastMs: Long,
+)
+
 @Entity(tableName = "familiar_places")
 class FamiliarRow(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -150,6 +159,18 @@ interface AppDao {
     @Query("DELETE FROM familiar_places WHERE id = :id")
     suspend fun deleteFamiliar(id: Long)
 
+    @Query("SELECT * FROM baseline WHERE entityId = :id")
+    suspend fun baseline(id: String): BaselineRow?
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun putBaseline(row: BaselineRow)
+
+    @Query("SELECT entityId FROM baseline WHERE days >= :minDays")
+    suspend fun residents(minDays: Int): List<String>
+
+    @Query("DELETE FROM baseline")
+    suspend fun wipeBaseline()
+
     @Query("DELETE FROM familiar_places")
     suspend fun wipeFamiliar()
 
@@ -164,8 +185,8 @@ interface AppDao {
 }
 
 @Database(
-    entities = [SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class],
-    version = 2,
+    entities = [SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -185,6 +206,16 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : androidx.room.migration.Migration(2, 3) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `baseline` (" +
+                        "`entityId` TEXT PRIMARY KEY NOT NULL, `days` INTEGER NOT NULL, " +
+                        "`lastDay` INTEGER NOT NULL, `lastMs` INTEGER NOT NULL)",
+                )
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -197,7 +228,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
         }
     }

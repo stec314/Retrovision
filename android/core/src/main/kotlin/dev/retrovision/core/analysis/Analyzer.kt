@@ -80,6 +80,8 @@ sealed class Reason {
     data class PresentInWindows(val windows: Int, val of: Int) : Reason()
     /** Retrospective: reappeared in this many distinct time periods (e.g. hours) across the review. */
     data class SeenAcrossPeriods(val periods: Int) : Reason()
+    /** Learned to belong to your routine places (seen there across many days). */
+    object KnownAtRoutine : Reason()
     data class SeenFor(val durationMs: Long) : Reason()
     data class TravelledWithYou(val meters: Double) : Reason()
     data class Tracker(val kind: TrackerKind, val separatedFromOwner: Boolean?) : Reason()
@@ -126,6 +128,8 @@ class EntityReport(
     val joinAttempts: List<JoinAttempt> = emptyList(),
     /** BLE local name, if it advertised one. */
     val bleName: String? = null,
+    /** Distinct non-familiar places where it was seen (0 = only at your routine places). */
+    val unfamiliarPlaces: Int = 0,
 )
 
 /** A client trying to connect to an access point (auth / (re)association request). */
@@ -158,6 +162,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         fixes: List<GeoFix>,
         ignore: IgnoreList = IgnoreList(),
         familiar: List<FamiliarPlace> = emptyList(),
+        /** Entities learned to belong to your routine places (neighbours, colleagues): damped. */
+        residents: Set<String> = emptySet(),
     ): AnalysisResult {
         val from = nowMs - config.lookbackMs
         val timeline = FixTimeline(fixes.filter { it.timeMs in from..nowMs }, config.fixMaxGapMs)
@@ -178,7 +184,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 ignored++
                 continue
             }
-            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds)
+            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents)
         }
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         return AnalysisResult(nowMs, clusterer.places, reports, ignored)
@@ -202,6 +208,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         timeline: FixTimeline,
         placeOfFix: Map<GeoFix, Place>,
         familiarIds: Set<Int>,
+        isResident: Boolean,
     ): EntityReport {
         val first = list.first().sighting.timeMs
         val last = list.last().sighting.timeMs
@@ -348,6 +355,10 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
 
         if (effPlaces < 2) score = minOf(score, 0.3)
+        if (isResident) {
+            reasons += Reason.KnownAtRoutine
+            score = minOf(score, 0.25) // belongs to your routine environment: not a follower
+        }
         score = score.coerceIn(0.0, 1.0)
 
         val radio = list.first().sighting.radio
@@ -388,6 +399,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             wildcardProbes = wildcard,
             joinAttempts = joins.values.sortedByDescending { it.lastMs },
             bleName = hints.name,
+            unfamiliarPlaces = nUnfamiliar,
         )
     }
 

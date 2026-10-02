@@ -403,8 +403,10 @@ class CollectorService : Service() {
             fixes,
             IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet()),
             familiar = dao.familiarNow().map { it.toModel() },
+            residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
         )
         Collector.analysis.value = result
+        learnBaseline(result, now)
 
         // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
         val recentWifi = rows.asSequence()
@@ -463,6 +465,21 @@ class CollectorService : Service() {
     }
 
     private var lastLearn = 0L
+
+    /** A device seen only at your routine places gains a "day" once per local day; residents are damped. */
+    private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val dao = app.db.dao()
+        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        for (e in result.entities) {
+            if (e.placeIds.isEmpty() || e.unfamiliarPlaces > 0) continue // only devices confined to routine places
+            val b = dao.baseline(e.entityId)
+            if (b == null) {
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, 1, day, now))
+            } else if (b.lastDay != day) {
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, (b.days + 1).coerceAtMost(30), day, now))
+            }
+        }
+    }
 
     private suspend fun learnFamiliar(now: Long) {
         val dao = app.db.dao()
@@ -569,6 +586,7 @@ class CollectorService : Service() {
         private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_PROBE_LOST = 2
+        private const val BASELINE_MIN_DAYS = 3
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))
