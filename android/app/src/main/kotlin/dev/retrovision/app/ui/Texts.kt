@@ -49,17 +49,21 @@ object Texts {
         )
         val sb = StringBuilder(d.label)
         sb.append(" (").append(dev.retrovision.core.identity.RemoteId.uaTypeName(d.uaType)).append(")")
-        if (d.distanceM != null && d.bearingDeg != null) {
-            sb.append(" — ").append(dist(d.distanceM)).append(" ").append(dev.retrovision.core.analysis.Drones.compass(d.bearingDeg))
+        val dm = d.distanceM
+        val db = d.bearingDeg
+        if (dm != null && db != null) {
+            sb.append(" — ").append(dist(dm)).append(" ").append(dev.retrovision.core.analysis.Drones.compass(db))
         } else if (d.lat != null) {
             sb.append(tr(" — position known, yours is not", " — posizione nota, la tua no"))
         } else {
             sb.append(tr(" — no position yet", " — posizione non ancora ricevuta"))
         }
         d.heightM?.let { sb.append(tr(", ${it.toInt()} m up", ", a ${it.toInt()} m di quota")) }
-        if (d.operatorDistanceM != null && d.operatorBearingDeg != null) {
-            sb.append(tr("; pilot ", "; pilota ")).append(dist(d.operatorDistanceM)).append(" ")
-                .append(dev.retrovision.core.analysis.Drones.compass(d.operatorBearingDeg))
+        val om = d.operatorDistanceM
+        val ob = d.operatorBearingDeg
+        if (om != null && ob != null) {
+            sb.append(tr("; pilot ", "; pilota ")).append(dist(om)).append(" ")
+                .append(dev.retrovision.core.analysis.Drones.compass(ob))
         }
         sb.append(" · ").append(ago)
         return sb.toString()
