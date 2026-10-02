@@ -78,6 +78,7 @@ class ProbeSession(
     private val onSighting: (Sighting) -> Unit,
     private val nowUs: () -> Long = WallClock::nowUs,
     private val ledOn: () -> Boolean = { true },
+    private val dataFrames: () -> Boolean = { false },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -312,20 +313,22 @@ class ProbeSession(
         _state.value = f(_state.value)
     }
 
-    /** Resend the running config with the LED on/off. Takes effect immediately. */
-    fun setLedEnabled(on: Boolean) {
+    /** Resend the running config (LED, data-frame capture) to the probe. Takes effect immediately. */
+    fun resendConfig() {
         synchronized(lock) {
             send(
                 Envelope.newBuilder().setSeq(nextSeq()).setCommand(
-                    Command.newBuilder().setSetConfig(configWith(on)),
+                    Command.newBuilder().setSetConfig(defaultConfig()),
                 ).build(),
             )
         }
     }
 
-    private fun defaultConfig(): Config = configWith(ledOn())
+    fun setLedEnabled(on: Boolean) = resendConfig()
 
-    private fun configWith(led: Boolean): Config = Config.newBuilder()
+    private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
+
+    private fun configWith(led: Boolean, data: Boolean): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
@@ -338,6 +341,7 @@ class ProbeSession(
                 // Attack detection: deauth/disassoc floods.
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
+                .apply { if (data) addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DATA) }
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),

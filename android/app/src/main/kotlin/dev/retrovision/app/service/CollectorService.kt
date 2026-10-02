@@ -90,6 +90,7 @@ class CollectorService : Service() {
         }
         Collector.running.value = true
         Collector.probeLedOn.value = app.prefs.probeLedOn
+        Collector.captureDataFrames.value = app.prefs.captureDataFrames
         startLocation()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
@@ -319,7 +320,7 @@ class CollectorService : Service() {
                 port.write(data, 1000)
             }
         }
-        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value })
+        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value })
         Collector.session = session
         val done = CompletableDeferred<Unit>()
         val io = SerialInputOutputManager(
@@ -411,6 +412,11 @@ class CollectorService : Service() {
             .map { it.toSighting() }.toList()
         val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet())
         Collector.threats.value = threats
+        Collector.associations.value = if (prefs.captureDataFrames) {
+            dev.retrovision.core.analysis.AssociatedClients.of(
+                rows.asSequence().filter { it.radio == 0 }.map { it.toSighting() }.toList(),
+            ).take(30)
+        } else emptyList()
         if (prefs.alertsEnabled && !inQuietHours(now)) {
             for (th in threats.filter { it.severity >= 0.6 }) {
                 val key = "threat:${th.kind}:${th.bssid}:${th.ssid}"

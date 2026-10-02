@@ -175,7 +175,22 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
-        RetrospectiveCard()
+val assoc by Collector.associations.collectAsState()
+        if (assoc.isNotEmpty()) {
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(Texts.tr("Connected clients (data frames)", "Client connessi (frame di dati)"), style = MaterialTheme.typography.titleMedium)
+                    assoc.take(6).forEach { ap ->
+                        Text(
+                            "• " + (ap.ssid ?: ap.bssid.toString()) + " — " + ap.clients.size + " " + Texts.tr("clients", "client"),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
+        }
+
+                RetrospectiveCard()
     }
 }
 
@@ -428,6 +443,23 @@ fun SettingsScreen(modifier: Modifier) {
             Text("BeaconDB (Wi-Fi BSSID)")
             Switch(checked = beacon, onCheckedChange = { beacon = it; prefs.beaconDbEnabled = it })
         }
+
+        var dataFrames by remember { mutableStateOf(prefs.captureDataFrames) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Capture data frames (connected clients)", "Cattura frame di dati (client connessi)"), modifier = Modifier.weight(1f))
+            Switch(checked = dataFrames, onCheckedChange = {
+                dataFrames = it; prefs.captureDataFrames = it
+                Collector.captureDataFrames.value = it
+                Collector.session?.resendConfig()
+            })
+        }
+        Text(
+            Texts.tr(
+                "Invasive: reveals devices connected to nearby networks that never send probe requests. More radio load and more data. Off by default.",
+                "Invasivo: mostra i dispositivi connessi alle reti vicine che non inviano probe request. Più carico radio e più dati. Spento di default.",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
 
         Text(Texts.tr("Ignored devices", "Dispositivi ignorati") + " (${ignores.size})", style = MaterialTheme.typography.titleMedium)
         ignores.forEach { ig ->

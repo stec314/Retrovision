@@ -93,6 +93,11 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("alertsAwayOnly", false)
         set(v) = p.edit().putBoolean("alertsAwayOnly", v).apply()
 
+    /** Capture Wi-Fi DATA frames to see connected (silent) clients. Invasive; off by default. */
+    var captureDataFrames: Boolean
+        get() = p.getBoolean("captureDataFrames", false)
+        set(v) = p.edit().putBoolean("captureDataFrames", v).apply()
+
     /** Entities marked as field-test targets (a device you carry on purpose). */
     var targets: Set<String>
         get() = p.getStringSet("targets", emptySet()) ?: emptySet()

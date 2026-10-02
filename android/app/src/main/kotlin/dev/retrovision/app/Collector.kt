@@ -3,6 +3,7 @@ package dev.retrovision.app
 import dev.retrovision.app.probe.ProbeSession
 import dev.retrovision.app.probe.SessionState
 import dev.retrovision.core.analysis.AnalysisResult
+import dev.retrovision.core.analysis.AssociatedClients
 import dev.retrovision.core.analysis.WifiThreats
 import dev.retrovision.core.identity.DeviceCategory
 import dev.retrovision.core.model.GeoFix
@@ -66,4 +67,10 @@ object Collector {
 
     /** Active Wi-Fi attacks detected in the recent window. */
     val threats = MutableStateFlow<List<WifiThreats.Threat>>(emptyList())
+
+    /** Mirrors Prefs.captureDataFrames; ProbeSession reads it when building the probe config. */
+    val captureDataFrames = MutableStateFlow(false)
+
+    /** APs and the clients talking to them (only when data-frame capture is on). */
+    val associations = MutableStateFlow<List<AssociatedClients.Ap>>(emptyList())
 }
