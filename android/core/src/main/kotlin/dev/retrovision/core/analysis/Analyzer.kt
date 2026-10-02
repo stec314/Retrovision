@@ -240,6 +240,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var probeReqs = 0
         var wildcard = 0
         val joins = LinkedHashMap<MacAddress, JoinAttempt>()
+        // Randomised Wi-Fi addresses, and the ones among them that joined a network themselves.
+        val randomWifi = HashSet<MacAddress>()
+        val joinedWith = HashSet<MacAddress>()
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
         for (es in list) {
@@ -248,7 +251,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             if (s.rssi != 0) maxRssi = maxOf(maxRssi, s.rssi)
             windowIndex(nowMs - s.timeMs)?.let { windows += it }
 
-            if (s.radio == Radio.WIFI && s.address.isLocallyAdministered) lower(MacTrust.ROTATING)
+            if (s.radio == Radio.WIFI && s.address.isLocallyAdministered) randomWifi += s.address
             s.wifi?.let { w ->
                 val text = w.ssidText
                 when (w.kind) {
@@ -270,6 +273,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                         // Frames sent by the client (transmitter is not the AP itself).
                         val ap = w.bssid
                         if (ap != null && ap != s.address) {
+                            joinedWith += s.address
                             val prev = joins[ap]
                             val ssid = text.ifEmpty { prev?.ssid.orEmpty() }
                             val kind = if (w.kind == WifiKind.AUTH && prev != null) prev.kind else w.kind
@@ -305,6 +309,14 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 }
             }
         }
+
+        // A randomised address that joined a network is that network's persistent per-network address
+        // (Android 10+, iOS 14+, Windows); one only seen scanning rotates. The least stable one wins:
+        // an entity stitched from a per-network address and scan addresses is still ROTATING.
+        // Only join frames count: data frames carry no DS bits here, so their transmitter may be the AP.
+        // No score bonus on purpose: a persistent address lets places and legs accumulate on one
+        // entity instead of many fragments, and that is already what the score measures.
+        for (a in randomWifi) lower(if (a in joinedWith) MacTrust.PER_NETWORK else MacTrust.ROTATING)
 
         val activeMinutes = list.map { it.sighting.timeMs / 60_000L }.toSet().size
 

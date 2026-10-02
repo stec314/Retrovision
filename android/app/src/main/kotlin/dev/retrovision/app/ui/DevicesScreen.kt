@@ -115,7 +115,7 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", {
         it.category in setOf(DeviceCategory.TV, DeviceCategory.INPUT, DeviceCategory.HOME, DeviceCategory.BEACON, DeviceCategory.BLE_OTHER)
     }),
-    RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", { it.macTrust != MacTrust.STABLE }),
+    RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", { it.macTrust.unreliable }),
     ;
 
     val label: String get() = Texts.tr(en, itText)
@@ -181,9 +181,13 @@ private val SEARCH = Color(0xFFFFC857)
 private val JOIN = Color(0xFFFF8A3D)
 private val WARN = Color(0xFFFF9E80)
 
+/** Addresses that do not identify the device across the analysis window. */
+val MacTrust.unreliable: Boolean get() = this == MacTrust.UNTIL_REBOOT || this == MacTrust.ROTATING
+
 fun trustLabel(t: MacTrust) = when (t) {
     MacTrust.STABLE -> Texts.tr("Fixed MAC", "MAC fisso")
     MacTrust.UNTIL_REBOOT -> Texts.tr("MAC changes on reboot", "MAC cambia al riavvio")
+    MacTrust.PER_NETWORK -> Texts.tr("Per-network MAC", "MAC per rete")
     MacTrust.ROTATING -> Texts.tr("Random MAC (not reliable)", "MAC casuale (non affidabile)")
 }
 
@@ -208,7 +212,8 @@ fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
                 Text(CategoryUi.label(r.category), style = MaterialTheme.typography.labelSmall, color = catColor)
                 LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (r.macTrust != MacTrust.STABLE) Badge("⚠ " + trustLabel(r.macTrust), WARN)
+                    if (r.macTrust.unreliable) Badge("⚠ " + trustLabel(r.macTrust), WARN)
+                    if (r.macTrust == MacTrust.PER_NETWORK) Badge("🔒 " + trustLabel(r.macTrust), JOIN)
                     if (r.addresses.size > 1) Badge(Texts.tr("${r.addresses.size} addresses", "${r.addresses.size} indirizzi"), WARN)
                     r.joinAttempts.firstOrNull()?.let {
                         Badge("🔗 " + Texts.tr("joining ", "si collega a ") + (it.ssid.ifEmpty { it.bssid.toString() }), JOIN)
@@ -238,8 +243,8 @@ fun DeviceDetails(r: EntityReport) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CategoryUi.icon(r.category) + "  " + CategoryUi.label(r.category) + (r.bleName?.let { " · “$it”" } ?: ""))
         Text(
-            "⚠ ".takeIf { r.macTrust != MacTrust.STABLE }.orEmpty() + trustLabel(r.macTrust),
-            color = if (r.macTrust == MacTrust.STABLE) MaterialTheme.colorScheme.onSurface else WARN,
+            "⚠ ".takeIf { r.macTrust.unreliable }.orEmpty() + trustLabel(r.macTrust),
+            color = if (r.macTrust.unreliable) WARN else MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodySmall,
         )
         if (r.macTrust == MacTrust.ROTATING) {
@@ -247,6 +252,16 @@ fun DeviceDetails(r: EntityReport) {
                 Texts.tr(
                     "The address is randomised: it changes over time, so the same device may appear as several entries, and lookups by address are meaningless.",
                     "L'indirizzo è casuale: cambia nel tempo, quindi lo stesso dispositivo può comparire più volte e le ricerche per indirizzo non hanno senso.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        if (r.macTrust == MacTrust.PER_NETWORK) {
+            val nets = r.joinAttempts.map { it.ssid.ifEmpty { it.bssid.toString() } }.distinct().joinToString(", ") { "“$it”" }
+            Text(
+                Texts.tr(
+                    "The address is random, but the device used it to join $nets. Phones and laptops keep one random address per network and reuse it every time they connect, so it stays the same while it uses that network, often for days. On another network it will have a different one, and some phones still renew it every day or two.",
+                    "L'indirizzo è casuale, ma il dispositivo l'ha usato per collegarsi a $nets. Telefoni e portatili tengono un indirizzo casuale per ogni rete e lo riusano a ogni connessione, quindi resta lo stesso finché usa quella rete, spesso per giorni. Su un'altra rete ne avrà uno diverso, e alcuni telefoni lo rinnovano comunque ogni uno o due giorni.",
                 ),
                 style = MaterialTheme.typography.bodySmall,
             )
