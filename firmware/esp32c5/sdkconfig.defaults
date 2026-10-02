@@ -1,0 +1,44 @@
+# Retrovision probe, Waveshare ESP32-C5-WROOM-1 (dual-band Wi-Fi 6, RISC-V).
+# Target: idf.py set-target esp32c5   (needs ESP-IDF v5.4+)
+CONFIG_IDF_TARGET="esp32c5"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# --- USB link ------------------------------------------------------------
+# Native USB-Serial-JTAG carries the binary protocol; console/logs go to UART0.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_LOG_COLORS=n
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- Wi-Fi sniffer (dual band) -------------------------------------------
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+
+# --- BLE observer (NimBLE), Bluetooth 5 ----------------------------------
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=y
+CONFIG_BT_NIMBLE_EXT_ADV=y
+CONFIG_BT_NIMBLE_EXT_SCAN=y
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# --- Wi-Fi / BLE coexistence ---------------------------------------------
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# --- Robustness ----------------------------------------------------------
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+
+# Log v1 emits one vprintf per line, which log_forward.c relies on.
+CONFIG_LOG_VERSION_1=y

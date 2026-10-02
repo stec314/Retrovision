@@ -34,6 +34,11 @@ static const char *TAG = "session";
 // NodeMCU-32S / most ESP32 DevKits: blue LED on GPIO2, active high (harmless on boards without it).
 #define LED_GPIO GPIO_NUM_2
 #define LED_ON 1
+#elif CONFIG_IDF_TARGET_ESP32C5
+// ESP32-C5-DevKitC-1 / Waveshare: the status LED is an addressable RGB (WS2812) on GPIO27,
+// which needs the led_strip (RMT) driver, not gpio_set_level. Left undriven for now; the
+// LED on/off config still applies (as a no-op) and the host shows state. TODO: WS2812 driver.
+#define LED_NONE 1
 #else
 // XIAO ESP32-S3 user LED (orange), active low.
 #define LED_GPIO GPIO_NUM_21
@@ -86,12 +91,20 @@ static void send_hello(void)
         retrovision_v1_Capability_CAPABILITY_BLE_EXT_ADV,
 #endif
         retrovision_v1_Capability_CAPABILITY_BLE_ACTIVE_SCAN,
+#ifdef RV_HAS_5GHZ
+        retrovision_v1_Capability_CAPABILITY_WIFI_5GHZ,
+#endif
     };
     h->capabilities_count = sizeof caps / sizeof caps[0];
     memcpy(h->capabilities, caps, sizeof caps);
     h->max_rx_frame = RV_MAX_DECODED_FRAME;
     for (uint32_t ch = RV_CFG_MIN_CHANNEL; ch <= RV_CFG_MAX_CHANNEL; ch++) {
         h->supported_wifi_channels[h->supported_wifi_channels_count++] = ch;
+    }
+    for (uint8_t i = 0; i < rv_cfg_5ghz_channel_count &&
+         h->supported_wifi_channels_count < (sizeof h->supported_wifi_channels / sizeof h->supported_wifi_channels[0]);
+         i++) {
+        h->supported_wifi_channels[h->supported_wifi_channels_count++] = rv_cfg_5ghz_channels[i];
     }
     rv_link_send(e, pdMS_TO_TICKS(50));
 }
@@ -311,7 +324,9 @@ static void session_task(void *arg)
             break;
         }
         xSemaphoreGive(s_lock);
+#ifndef LED_NONE
         gpio_set_level(LED_GPIO, (led && !s_cfg.led_off) ? LED_ON : !LED_ON);
+#endif
     }
 }
 
@@ -324,9 +339,11 @@ void rv_session_init(void)
     s_lock = xSemaphoreCreateMutex();
     rv_cfg_defaults(&s_cfg);
 
+#ifndef LED_NONE
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_GPIO, !LED_ON);
+#endif
 
 #if SOC_TEMP_SENSOR_SUPPORTED
     temperature_sensor_config_t tcfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);

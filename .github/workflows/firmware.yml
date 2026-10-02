@@ -54,6 +54,9 @@ jobs:
           # Classic ESP32 (NodeMCU-32S, DevKitC): bootloader at 0x1000
           - target: esp32
             offset: "0x1000"
+          # Waveshare ESP32-C5 (dual-band Wi-Fi 6, RISC-V): native USB, merged at 0x0
+          - target: esp32c5
+            offset: "0x0"
     steps:
       - uses: actions/checkout@v4
         with:

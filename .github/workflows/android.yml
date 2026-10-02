@@ -118,8 +118,9 @@ jobs:
         run: |
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           cp "$apk" "Retrovision-${RV_VERSION_NAME}.apk"
-          for t in esp32s3 esp32; do
-            cp "$(find fw -name retrovision-$t-merged.bin | head -1)" "retrovision-$t-${RV_VERSION_NAME}.bin"
+          for t in esp32s3 esp32 esp32c5; do
+            b=$(find fw -name "retrovision-$t-merged.bin" | head -1)
+            [ -n "$b" ] && cp "$b" "retrovision-$t-${RV_VERSION_NAME}.bin"
           done
           sha256sum Retrovision-*.apk retrovision-esp32*.bin | tee SHA256SUMS
 

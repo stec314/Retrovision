@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p site/firmware
           cp web/index.html web/manifest.json site/
-          for t in esp32s3 esp32; do
+          for t in esp32s3 esp32 esp32c5; do
             f=$(find site-fw -name "retrovision-$t-merged.bin" | head -1)
             [ -n "$f" ] || { echo "::error::merged $t image not found"; exit 1; }
             cp "$f" site/firmware/

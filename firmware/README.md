@@ -4,6 +4,7 @@
 |---|---|
 | `esp32s3/` | ESP-IDF app for the **Seeed Studio XIAO ESP32-S3** (native USB link) |
 | `esp32/` | ESP-IDF app for **classic ESP32** boards: NodeMCU-32S, ESP32-DevKitC, WROOM-32 (UART link at 921600 baud via CP210x/CH340) |
+| `esp32c5/` | ESP-IDF app for the **Waveshare ESP32-C5** (dual-band Wi-Fi 6, RISC-V, native USB). Adds 5 GHz sniffing. Needs ESP-IDF v5.4+ |
 | `components/rv_probe/` | The probe firmware itself, shared by both boards |
 | `components/rv_core/` | Portable C core: framing, 802.11 parser, BLE helpers, dedup. Host-tested |
 | `components/rv_proto/` | nanopb code generated from `proto/`. **Do not edit**; run `tools/gen_proto.sh` |
@@ -20,7 +21,7 @@ idf.py build
 idf.py -p /dev/ttyACM0 flash   # XIAO native USB; hold BOOT while plugging in if the port does not show up
 ```
 
-CI (`.github/workflows/firmware.yml`) builds both boards on every push and publishes `retrovision-esp32s3-merged.bin` (flash at `0x0`) and `retrovision-esp32-merged.bin` (flash at `0x1000`). The app and the web flasher pick the right one from the detected chip.
+CI (`.github/workflows/firmware.yml`) builds all boards on every push and publishes `retrovision-esp32s3-merged.bin` (flash at `0x0`) and `retrovision-esp32-merged.bin` (flash at `0x1000`). The app and the web flasher pick the right one from the detected chip.
 
 ### Classic ESP32 differences
 - Link is UART0 at **921600 baud** through the board's USB-UART bridge; the IDF console is off so the line carries only protocol frames. The ROM boot banner at 115200 is skipped by the host decoder.
@@ -62,3 +63,10 @@ The code has so far been built in CI only. These points need a real board:
 - Capture quality under `COEX`, and whether `TIME_SLICED` is worth implementing.
 - `Reboot{into_bootloader}` → ROM download mode.
 - Whether chained extended-advertising reports arrive fragmented from NimBLE. They are reassembled, but this has not been observed yet.
+
+### ESP32-C5 (dual-band, 5 GHz) — to verify on hardware
+The C5 adds 5 GHz. Prepared but not yet tested on silicon:
+- **Flashing:** use the web flasher (auto-detects the chip) or `idf.py -p <port> flash` / `esptool`. In-app flashing is not enabled yet: the app needs the C5's MP chip-detect magic, which is read from the board on first connect.
+- **5 GHz channels:** the hop list interleaves 2.4 GHz (1,6,11) with 5 GHz (36–48, 100–116, 149–161). If the IDF build rejects a 5 GHz channel in promiscuous mode, `hop_task` skips it (degrades to 2.4) — this needs confirming on hardware, possibly via a band/country call.
+- **Promiscuous frame type:** a known IDF report notes the C5 promiscuous callback can mislabel the 802.11 frame type; re-check classification once capturing.
+- **Status LED:** the DevKitC-1/Waveshare LED is an addressable RGB (WS2812, GPIO27); the shared code leaves it undriven for now (a WS2812 driver is a TODO). The LED on/off setting still applies as a no-op.

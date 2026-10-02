@@ -19,16 +19,64 @@ static const rv_hop_t k_default_hop[] = {
     {8, 100}, {9, 100}, {10, 100}, {12, 100}, {13, 100},
 };
 
+#ifdef RV_HAS_5GHZ
+// UNII-1/2/2C + UNII-3: all 20 MHz primaries. Receive-only, so DFS is fine.
+const uint8_t rv_cfg_5ghz_channels[] = {
+    36, 40, 44, 48, 52, 56, 60, 64,
+    100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144,
+    149, 153, 157, 161, 165,
+};
+#else
+const uint8_t rv_cfg_5ghz_channels[] = {0};
+#endif
+const uint8_t rv_cfg_5ghz_channel_count =
+#ifdef RV_HAS_5GHZ
+    sizeof rv_cfg_5ghz_channels / sizeof rv_cfg_5ghz_channels[0];
+#else
+    0;
+#endif
+
+bool rv_cfg_channel_is_5ghz(uint32_t ch)
+{
+    for (uint8_t i = 0; i < rv_cfg_5ghz_channel_count; i++) {
+        if (rv_cfg_5ghz_channels[i] == ch) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool rv_cfg_channel_supported(uint32_t ch)
 {
-    return ch >= RV_CFG_MIN_CHANNEL && ch <= RV_CFG_MAX_CHANNEL;
+    if (ch >= RV_CFG_MIN_CHANNEL && ch <= RV_CFG_MAX_CHANNEL) {
+        return true;
+    }
+    return rv_cfg_channel_is_5ghz(ch);
 }
+
+#ifdef RV_HAS_5GHZ
+// Dual-band default: the 2.4 GHz primaries (1,6,11) interleaved with the most
+// common 5 GHz channels, so a device on either band is seen without a huge cycle.
+static const rv_hop_t k_default_hop_dualband[] = {
+    {1, 160}, {6, 160}, {11, 160},
+    {36, 140}, {40, 140}, {44, 140}, {48, 140},
+    {1, 160}, {6, 160}, {11, 160},
+    {149, 140}, {153, 140}, {157, 140}, {161, 140},
+    {1, 160}, {6, 160}, {11, 160},
+    {100, 140}, {104, 140}, {108, 140}, {112, 140}, {116, 140},
+};
+#endif
 
 static void wifi_defaults(rv_cfg_t *c)
 {
     c->wifi_enabled = true;
+#ifdef RV_HAS_5GHZ
+    memcpy(c->hop, k_default_hop_dualband, sizeof k_default_hop_dualband);
+    c->hop_count = sizeof k_default_hop_dualband / sizeof k_default_hop_dualband[0];
+#else
     memcpy(c->hop, k_default_hop, sizeof k_default_hop);
     c->hop_count = sizeof k_default_hop / sizeof k_default_hop[0];
+#endif
     c->wifi_type_mask = (1u << RV_WIFI_PROBE_REQ) | (1u << RV_WIFI_BEACON);
     c->forward_raw_ies = true;
     c->probe_req_dedup_ms = 0;

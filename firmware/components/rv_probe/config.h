@@ -47,3 +47,14 @@ retrovision_v1_AckResult rv_cfg_from_pb(const retrovision_v1_Config *in, rv_cfg_
 bool rv_cfg_channel_supported(uint32_t ch);
 #define RV_CFG_MIN_CHANNEL 1
 #define RV_CFG_MAX_CHANNEL 13
+
+// Dual-band parts (ESP32-C5) can also tune 5 GHz. The sniffer is receive-only,
+// so it may listen on DFS channels too; transmit never happens.
+#if defined(CONFIG_IDF_TARGET_ESP32C5)
+#define RV_HAS_5GHZ 1
+#endif
+
+// 5 GHz 20 MHz primary channels this firmware may hop to (empty array on 2.4-only parts).
+extern const uint8_t rv_cfg_5ghz_channels[];
+extern const uint8_t rv_cfg_5ghz_channel_count;
+bool rv_cfg_channel_is_5ghz(uint32_t ch);
