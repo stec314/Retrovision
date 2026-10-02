@@ -416,8 +416,29 @@ class CollectorService : Service() {
         val recentWifi = rows.asSequence()
             .filter { it.radio == 0 && now - it.timeMs <= 3 * 60_000L }
             .map { it.toSighting() }.toList()
-        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet())
+        val recentBle = rows.asSequence()
+            .filter { it.radio == 1 && now - it.timeMs <= 60_000L }
+            .map { it.toSighting() }.toList()
+        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
+            dev.retrovision.core.analysis.WifiThreats.detectBle(recentBle)
         Collector.threats.value = threats
+
+        // Drones heard in the last 5 minutes (Remote ID and drone-radio signatures).
+        val droneWindow = rows.asSequence()
+            .filter { now - it.timeMs <= 5 * 60_000L }
+            .map { it.toSighting() }.toList()
+        val drones = dev.retrovision.core.analysis.Drones.summarize(droneWindow, Collector.location.value)
+        Collector.drones.value = drones
+        if (prefs.alertsEnabled && prefs.droneAlerts && !inQuietHours(now)) {
+            for (d in drones) {
+                val key = "drone:${d.key}"
+                val last = notifiedAt[key]
+                if (now - d.lastMs <= 2 * 60_000L && (last == null || now - last > 30 * 60_000L)) {
+                    notifiedAt[key] = now
+                    notifyDrone(d)
+                }
+            }
+        }
         Collector.associations.value = if (prefs.captureDataFrames) {
             dev.retrovision.core.analysis.AssociatedClients.of(
                 rows.asSequence().filter { it.radio == 0 }.map { it.toSighting() }.toList(),
@@ -526,13 +547,22 @@ class CollectorService : Service() {
         }
     }
 
+    private fun notifyDrone(d: dev.retrovision.core.analysis.Drones.Drone) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val n = NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Drone nearby", "Drone nelle vicinanze"))
+            .setContentText(Texts.drone(d))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(Texts.drone(d)))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .build()
+        nm.notify(("d" + d.key).hashCode(), n)
+    }
+
     private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {
         val nm = getSystemService(NotificationManager::class.java)
-        val title = when (th.kind) {
-            dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD -> Texts.tr("Wi-Fi deauth attack", "Attacco Wi-Fi deauth")
-            dev.retrovision.core.analysis.WifiThreats.Kind.KARMA_AP -> Texts.tr("Fake Wi-Fi access point", "Access point Wi-Fi fasullo")
-            dev.retrovision.core.analysis.WifiThreats.Kind.EVIL_TWIN_OWN -> Texts.tr("Clone of your network", "Clone della tua rete")
-        }
+        val title = Texts.threatTitle(th.kind)
         val n = NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)

@@ -71,6 +71,9 @@ object Collector {
     /** Mirrors Prefs.captureDataFrames; ProbeSession reads it when building the probe config. */
     val captureDataFrames = MutableStateFlow(false)
 
+    /** Drones heard recently (Remote ID or drone-radio signatures). */
+    val drones = MutableStateFlow<List<dev.retrovision.core.analysis.Drones.Drone>>(emptyList())
+
     /** APs and the clients talking to them (only when data-frame capture is on). */
     val associations = MutableStateFlow<List<AssociatedClients.Ap>>(emptyList())
 }

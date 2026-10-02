@@ -175,7 +175,22 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
-val assoc by Collector.associations.collectAsState()
+        val drones by Collector.drones.collectAsState()
+        if (drones.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("🛸 " + Texts.tr("Drones nearby", "Droni nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                    drones.take(5).forEach {
+                        Text("• " + Texts.drone(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                    }
+                }
+            }
+        }
+
+        val assoc by Collector.associations.collectAsState()
         if (assoc.isNotEmpty()) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -239,6 +254,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                 Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
                 Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
+                r.notable.filter { it.note.isNotBlank() }.forEach {
+                    Text("👁 ${it.name}: ${it.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                }
                 DeviceDetails(r)
                 queries.forEach { (label, q) ->
                     enrichers.all().filter { it.supports(q) }.forEach { e ->
@@ -572,6 +590,11 @@ private fun NotificationsSection() {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(Texts.tr("Only when away from routine places", "Solo quando sei fuori dai luoghi di routine"), modifier = Modifier.weight(1f))
             Switch(checked = away, onCheckedChange = { away = it; prefs.alertsOnlyAwayFromFamiliar = it })
+        }
+        var droneOn by remember { mutableStateOf(prefs.droneAlerts) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Warn me when a drone is nearby", "Avvisami quando c'è un drone vicino"), modifier = Modifier.weight(1f))
+            Switch(checked = droneOn, onCheckedChange = { droneOn = it; prefs.droneAlerts = it })
         }
         var disc by remember { mutableStateOf(prefs.probeDisconnectAlert) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

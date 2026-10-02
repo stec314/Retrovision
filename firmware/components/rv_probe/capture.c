@@ -57,6 +57,28 @@ void rv_capture_submit(const rv_raw_item_t *item)
     }
 }
 
+// ASTM F3411 Remote ID over Wi-Fi Beacon: vendor IE with OUI FA:0B:BC, type 0x0D.
+// Its payload (drone position) changes every frame while SSID and BSSID stay put,
+// so the normal 30 s beacon dedup would hide almost all of the track.
+static bool has_remote_id_ie(const uint8_t *ies, uint16_t len)
+{
+    uint16_t i = 0;
+    while (i + 2 <= len) {
+        const uint8_t id = ies[i], l = ies[i + 1];
+        if (i + 2 + l > len) {
+            break;
+        }
+        if (id == 221 && l >= 4 && ies[i + 2] == 0xFA && ies[i + 3] == 0x0B && ies[i + 4] == 0xBC &&
+            ies[i + 5] == 0x0D) {
+            return true;
+        }
+        i += 2 + l;
+    }
+    return false;
+}
+
+#define REMOTE_ID_DEDUP_MS 1000
+
 static bool build_wifi(const rv_raw_item_t *it, retrovision_v1_Observation *obs)
 {
     rv_wifi_frame_t f;
@@ -73,6 +95,9 @@ static bool build_wifi(const rv_raw_item_t *it, retrovision_v1_Observation *obs)
         window_ms = s_cfg.probe_req_dedup_ms;
     } else if (f.type == RV_WIFI_BEACON || f.type == RV_WIFI_PROBE_RESP) {
         window_ms = s_cfg.beacon_dedup_ms;
+        if (window_ms > REMOTE_ID_DEDUP_MS && has_remote_id_ie(f.ies, f.ies_len)) {
+            window_ms = REMOTE_ID_DEDUP_MS;
+        }
     }
     uint32_t merged;
     if (!rv_dedup_check(&s_dedup, key, (uint64_t)it->ts_us, (uint64_t)window_ms * 1000, &merged)) {

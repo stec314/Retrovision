@@ -21,7 +21,7 @@ Retrovision is a from-scratch reimplementation of the ideas behind [Chasing Your
 ```
 
 - **Probe**: a dumb sensor. It sniffs 2.4 GHz Wi-Fi management frames and BLE advertisements, dedups them, and forwards raw data.
-- **App**: does all the heavy lifting: time sync, GPS tagging with accuracy filtering, an encrypted database, fingerprinting to link randomised MACs, BLE tracker detection, persistence scoring, Wi-Fi attack detection, alerts.
+- **App**: does all the heavy lifting: time sync, GPS tagging with accuracy filtering, an encrypted database, fingerprinting to link randomised MACs, BLE tracker detection (incl. IETF DULT tags), drone Remote ID decoding, persistence scoring, Wi-Fi/BLE attack detection (deauth, Karma, evil twin, beacon flood, BLE spam), notable-device tagging, alerts.
 - **Expandable**: new probe types (e.g. an ESP32-C5 for 5 GHz) plug in through a `ProbeDriver` and the shared protocol. See [docs/protocol.md §9](docs/protocol.md#9-adding-a-new-probe-type).
 
 ## Repository layout
@@ -42,6 +42,10 @@ pip install grpcio-tools
 python3 tools/refcodec/gen_vectors.py          # regenerate proto/testvectors/framing.json
 python3 -m unittest -v tools/refcodec/test_framing.py
 ```
+
+## Credits
+
+Notable-device signatures are derived from [Fieldwatch](https://github.com/OffGridPete/Fieldwatch) (MIT, © Off Grid Pete LLC). Tracker identifiers follow [AirGuard](https://github.com/seemoo-lab/AirGuard). See [NOTICE](NOTICE).
 
 ## Legal
 

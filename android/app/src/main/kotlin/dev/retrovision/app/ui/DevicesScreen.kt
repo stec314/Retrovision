@@ -66,6 +66,7 @@ object CategoryUi {
         DeviceCategory.TRACKER -> "🏷"
         DeviceCategory.BEACON -> "🔆"
         DeviceCategory.BLE_OTHER -> "ᛒ"
+        DeviceCategory.DRONE -> "🛸"
     }
 
     fun label(c: DeviceCategory) = when (c) {
@@ -86,10 +87,11 @@ object CategoryUi {
         DeviceCategory.TRACKER -> Texts.tr("Tracker tag", "Tracker")
         DeviceCategory.BEACON -> Texts.tr("Beacon", "Beacon")
         DeviceCategory.BLE_OTHER -> Texts.tr("Bluetooth device", "Dispositivo Bluetooth")
+        DeviceCategory.DRONE -> Texts.tr("Drone", "Drone")
     }
 
     fun color(c: DeviceCategory): Color = when (c) {
-        DeviceCategory.TRACKER -> Color(0xFFFF5C7A)
+        DeviceCategory.TRACKER, DeviceCategory.DRONE -> Color(0xFFFF5C7A)
         DeviceCategory.ROUTER, DeviceCategory.HOTSPOT, DeviceCategory.WIFI_DIRECT -> Color(0xFF3DDCFF)
         DeviceCategory.VEHICLE, DeviceCategory.CAMERA -> Color(0xFFFFC857)
         DeviceCategory.WIFI_CLIENT, DeviceCategory.PHONE, DeviceCategory.COMPUTER -> Color(0xFF7CF29A)
@@ -102,6 +104,8 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     ALL("", "All", "Tutti", { true }),
     SEARCHING("🔍", "Looking for a network", "Cercano una rete", { it.probedSsids.isNotEmpty() || it.joinAttempts.isNotEmpty() }),
     TRACKERS("🏷", "Trackers", "Tracker", { it.category == DeviceCategory.TRACKER }),
+    DRONES("🛸", "Drones", "Droni", { it.isDrone }),
+    NOTABLE("👁", "Notable", "Notevoli", { it.notable.isNotEmpty() }),
     PHONES("📱", "Phones & PCs", "Telefoni e PC", {
         it.category in setOf(DeviceCategory.PHONE, DeviceCategory.COMPUTER, DeviceCategory.WIFI_CLIENT)
     }),

@@ -87,5 +87,9 @@ class WikiTest {
         has("≥ ${(f.nightShare * 100).toInt()}%")
         has("clamp(travel / ${a.travelSaturationM.toInt()} m)")
         has("clamp(span / ${a.spanSaturationMs / 60_000} min)")
+        has("**≥ ${t.floodMinNew}** networks first heard")
+        has("**≥ ${t.spamMinAddresses}** random addresses")
+        has("each alive **≤ ${t.spamMaxLifeMs / 1000} s**")
+        has("**≤ ${t.oneTransmitterStdDb.toInt()} dB**")
     }
 }

@@ -6,6 +6,7 @@ enum class DeviceCategory {
     WIFI_CLIENT,
     PHONE, COMPUTER, WATCH, AUDIO, TV, INPUT, HEALTH, HOME, TRACKER, BEACON,
     BLE_OTHER,
+    DRONE,
 }
 
 /** How far a MAC/BLE address identifies the same device over time. */

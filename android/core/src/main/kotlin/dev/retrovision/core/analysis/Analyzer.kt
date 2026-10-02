@@ -7,6 +7,10 @@ import dev.retrovision.core.identity.DeviceCategories
 import dev.retrovision.core.identity.CategoryHints
 import dev.retrovision.core.identity.AdvertisementInfo
 import dev.retrovision.core.identity.MobileAp
+import dev.retrovision.core.identity.NotableCatalog
+import dev.retrovision.core.identity.NotableKind
+import dev.retrovision.core.identity.NotableSignature
+import dev.retrovision.core.identity.RemoteId
 import dev.retrovision.core.identity.TrackerClassifier
 import dev.retrovision.core.identity.TrackerKind
 import dev.retrovision.core.model.BleAdvType
@@ -95,6 +99,10 @@ sealed class Reason {
     data class Tracker(val kind: TrackerKind, val separatedFromOwner: Boolean?) : Reason()
     data class MovingAccessPoint(val kind: MobileAp.Kind, val ssid: String) : Reason()
     data class RotatedAddresses(val addresses: Int) : Reason()
+    /** Matches a notable-device signature (pentest tool, ALPR camera, body cam, glasses...). Information, not proof. */
+    data class Notable(val name: String, val kind: NotableKind) : Reason()
+    /** A drone: [remoteId] true when it broadcast Remote ID ([id] is then its serial). */
+    data class Drone(val id: String?, val remoteId: Boolean) : Reason()
 }
 
 enum class EntityKind { WIFI_CLIENT, WIFI_AP, BLE_DEVICE, BLE_TRACKER }
@@ -138,6 +146,11 @@ class EntityReport(
     val bleName: String? = null,
     /** Distinct non-familiar places where it was seen (0 = only at your routine places). */
     val unfamiliarPlaces: Int = 0,
+    /** Notable-device signatures it matched. */
+    val notable: List<NotableSignature> = emptyList(),
+    /** Remote ID serial, when it is a drone broadcasting one. */
+    val droneId: String? = null,
+    val isDrone: Boolean = false,
 )
 
 /** A client trying to connect to an access point (auth / (re)association request). */
@@ -243,6 +256,10 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var probeReqs = 0
         var wildcard = 0
         val joins = LinkedHashMap<MacAddress, JoinAttempt>()
+        val notable = LinkedHashSet<NotableSignature>()
+        val notableChecked = HashSet<Any>()
+        var remoteId = false
+        var droneId: String? = null
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
         for (es in list) {
@@ -305,6 +322,14 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 }
             }
 
+            // Notable signatures: once per distinct payload (names/adverts repeat constantly).
+            if (notableChecked.size < 64 && notableChecked.add(Triple(s.address, s.wifi?.ssidText, s.ble?.advData?.contentHashCode()))) {
+                notable += NotableCatalog.match(s)
+            }
+            if (s.radio == Radio.BLE || s.wifi?.kind == WifiKind.BEACON) {
+                RemoteId.decode(s)?.let { r -> remoteId = true; r.uasId?.let { droneId = it } }
+            }
+
             timeline.nearest(s.timeMs)?.let { fix ->
                 val p = placeOfFix[fix] ?: return@let
                 places += p.id
@@ -365,6 +390,13 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             score += 0.15
         }
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
+        val drone = remoteId || notable.any { it.kind == NotableKind.DRONE }
+        if (drone) {
+            reasons += Reason.Drone(droneId, remoteId)
+            // A drone that keeps turning up where you are is exactly what this tool is for.
+            if (effPlaces >= 2) score += 0.15
+        }
+        for (n in notable) if (n.kind != NotableKind.DRONE) reasons += Reason.Notable(n.name, n.kind)
 
         if (effPlaces < 2) score = minOf(score, 0.3)
         if (isResident) {
@@ -400,7 +432,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             bleCompanyId = companyId,
             mobileAp = mobileAp,
             track = track,
-            category = when (kind) {
+            category = if (drone) DeviceCategory.DRONE else when (kind) {
                 EntityKind.WIFI_AP -> DeviceCategories.forWifiAp(mobileAp)
                 EntityKind.WIFI_CLIENT -> DeviceCategory.WIFI_CLIENT
                 else -> DeviceCategories.forBle(tk, tk != null && TrackerClassifier.isTag(tk), hints)
@@ -412,6 +444,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             joinAttempts = joins.values.sortedByDescending { it.lastMs },
             bleName = hints.name,
             unfamiliarPlaces = nUnfamiliar,
+            notable = notable.toList(),
+            droneId = droneId,
+            isDrone = drone,
         )
     }
 

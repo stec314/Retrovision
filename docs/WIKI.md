@@ -8,13 +8,15 @@ If something here disagrees with what the app does, the code is right and this p
 
 Retrovision is a personal counter-surveillance tool. A small ESP32 board (the **probe**) listens to Wi-Fi and Bluetooth Low Energy (BLE) radio traffic around you. An Android phone (the **app**) adds GPS and time, and asks one question: **does the same device keep showing up wherever I go?**
 
-It does three jobs, which differ a lot in how certain they are:
+It does five jobs, which differ a lot in how certain they are:
 
 | Job | What it answers | How certain |
 |---|---|---|
 | Following detection | "Has this device been with me across several places?" | Probabilistic. A score with reasons that you have to judge yourself |
 | Tracker detection | "Is there an AirTag / SmartTag / Tile / Find My tag near me, possibly away from its owner?" | High. These tags announce what they are |
-| Wi-Fi attack detection | "Is someone deauthing, running a fake AP, or cloning my network right now?" | High. Read directly from the frames |
+| Radio attack detection | "Is someone deauthing, running a fake AP, cloning my network, or spamming Wi-Fi/Bluetooth right now?" | High. Read directly from the frames |
+| Drone detection | "Is a drone nearby, where is it and where is its pilot?" | High with Remote ID (the drone states it). Low without it |
+| Notable devices | "Is that a pentest gadget, a plate-reading camera, a body cam, camera glasses?" | Low. A pattern match on names and IDs, shown as information only |
 
 What it is **not**:
 
@@ -137,6 +139,7 @@ Some OSes reset the sequence counter when they rotate the address. Those rotatio
 | Chipolo | Service 0xFE33 | No |
 | Pebblebee | Service 0xFA25 | No |
 | Google Find My Device network (tags and phones) | Service data 0xFEAA, frame type 0x40/0x41 (told apart from Eddystone) | No |
+| **Any DULT tag** (IETF *Detecting Unwanted Location Trackers*, adopted by Chipolo, Pebblebee, moto tag and others) | Service data 0xFCB2. Byte 1 bit 0 = mode | Yes. 0 = separated, 1 = near owner. If the tag also carries its brand UUID, the brand is shown and DULT supplies the flag |
 
 An AirTag **separated from its owner** that moves with you is the classic planted-tracker situation. It gets the largest bonus in the score.
 
@@ -174,6 +177,7 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Tracker tag, seen at ≥ 2 effective places, **separated from owner** | +0.20 |
 | Tracker tag, seen at ≥ 2 effective places, separation unknown or near owner | +0.10 |
 | Moving access point (hotspot, car, camera; not Wi-Fi Direct), ≥ 2 effective places | +0.10 |
+| Drone (Remote ID or drone-radio signature), ≥ 2 effective places | +0.15 |
 
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
@@ -195,6 +199,8 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Tracker … | A recognised tracker, with its separated-from-owner state if known |
 | Moving access point … | Hotspot, car, camera or Wi-Fi Direct, with its SSID |
 | Rotated N addresses | The entity was stitched from N MAC addresses |
+| Drone … | Broadcasts Remote ID (serial shown), or matches a drone/controller radio signature |
+| Looks like: … | Matches a notable-device signature. Information, not proof, no score bonus |
 | Known at your routine places | Resident: damped |
 
 ### Worked examples
@@ -252,21 +258,72 @@ Suggested values: 30–50 m in cities (default 50), 75–100 m if you are mostly
 
 Recommended routine: keep live mode on all the time with a short window, and run a retrospective review now and then, or whenever something felt off.
 
-## Wi-Fi attack detection
+## Radio attack detection
 
-Every analysis cycle checks the **last 3 minutes** of Wi-Fi management frames. These are facts read from the air, not guesses about identity.
+Every analysis cycle checks the **last 3 minutes** of Wi-Fi management frames and the **last minute** of BLE advertisements. These are facts read from the air, not guesses about identity.
 
 | Attack | Detection rule | Why this rule |
 |---|---|---|
 | **Deauth / disassoc flood** | ≥ **40** deauth+disassoc frames aimed at **one** BSSID within 3 min. Severity grows to 400 | Normal networks send a few deauths, spread across many BSSIDs (roaming, idle timeouts). An attack hammers one target. An earlier rule ("≥ 12 in total") fired on ordinary city traffic |
 | **Karma / MANA access point** | One AP answers probe responses for **≥ 5 different SSIDs** (severity saturates at 15) | A real AP has one name. A Karma AP says "yes" to every network your phone asks for, to lure it in |
 | **Evil twin of your network** | One of **your own SSIDs** (Settings → My networks) advertised from **≥ 2 BSSIDs** | Your home network should have one known AP. Add every BSSID of a mesh by listing it, or expect this to fire |
+| **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, and a signal spread (std dev) **≤ 6 dB**. Needs ≥ 2 min of history first | Walking or driving past real networks also brings many new ones, but they come from many places, so their signals spread widely. Fake ones all come from one transmitter |
+| **BLE spam** (Flipper Zero / ESP32 "pop-up" attacks) | **≥ 25** random addresses within 1 min, each alive **≤ 10 s**, sending pairing pop-up adverts (Apple Proximity Pairing / Nearby Action, Google Fast Pair, Microsoft Swift Pair, Samsung EasySetup), with a signal spread **≤ 6 dB** | Real earbuds keep an address for minutes, and a crowd's signals spread widely. A spammer cycles a new address every advert from one spot |
 
 Not flagged, on purpose: an SSID served by many BSSIDs in general (normal for mesh, enterprise and hotspot chains) and simply "many APs around".
 
 Threats appear on the Status screen. Threats with severity ≥ 0.6 send a notification, at most once per 10 minutes per attack and target. Quiet hours apply.
 
-**Limits.** A one-channel sniffer misses frames on other channels, so a short attack on another channel can go unseen. Management Frame Protection (WPA3 / 802.11w) makes forged deauths ineffective, but they are still visible and still flagged.
+**Limits.** A one-channel sniffer misses frames on other channels, so a short attack on another channel can go unseen. Management Frame Protection (WPA3 / 802.11w) makes forged deauths ineffective, but they are still visible and still flagged. A beacon flood is caught when it **starts** (its networks are new). If it was already running when you arrived, the fake networks look like the neighbourhood. A spammer that keeps one address, or a single pop-up, is not a flood and is not flagged.
+
+## Drones
+
+Drones over 250 g, and most new consumer drones, must broadcast **Remote ID** (ASTM F3411; EU Delegated Regulation 2019/945 "direct remote identification"). It is a public, unencrypted digital licence plate: the drone states its serial number, its position, height, speed and heading, and **its pilot's position**. Retrovision decodes it.
+
+**What the probe can hear:**
+
+| Transport | Heard? | Notes |
+|---|---|---|
+| Wi-Fi Beacon (vendor IE FA:0B:BC, type 0x0D) | **Yes** | Used by DJI and many consumer drones. Phones can't see it on stock Android; the probe's monitor mode can. Beacons carrying Remote ID are deduplicated over 1 s instead of 30 s, so the track stays live (needs firmware from this build or newer) |
+| Bluetooth 4 legacy (service data 0xFFFA) | **Yes** | Add-on Remote ID modules |
+| Bluetooth 5 Long Range (Coded PHY) | No | The probe scans the 1M PHY only. Coded PHY would halve Wi-Fi listening time |
+| Wi-Fi NAN (action frames) | No | Not captured |
+| DJI OcuSync "DroneID" | No | Not Wi-Fi at all. It needs a software-defined radio |
+
+**What you see:**
+- Status screen → **Drones nearby**: serial, aircraft type, **distance and compass direction from you**, height, and **distance and direction to the pilot**. These are real positions from the broadcast, not signal-strength guesses.
+- A notification the first time a drone is heard, then at most once per 30 minutes per drone (Settings → Notifications → drone alerts, on by default; quiet hours apply).
+- In the Devices list (🛸 filter) a drone is an entity like any other. If it turns up at **≥ 2 of your places**, it gets **+0.15** and can raise a following alert.
+
+**Drones without Remote ID** (old, home-built, or Remote ID switched off) can sometimes still be spotted by their radios: DJI, Autel, Parrot (ANAFI/Bebop), Skydio and HOVERAir Wi-Fi names, Bluetooth names and company IDs. These appear as "drone/controller radio, no Remote ID" **without a position**. Often it is the pilot's controller or a drone parked on the ground, not one in the air.
+
+**Honest limits.**
+- Remote ID is **not authenticated**: it can be spoofed, or switched off on modified drones.
+- Military and many professional or government drones do not broadcast it. **No drone detected does not mean no drone.**
+- Range depends on the drone's transmitter and on obstacles. Typically a few hundred metres for Bluetooth, more for Wi-Fi.
+- The analysis of saved data (retrospective) drops Wi-Fi elements to save memory, so it sees Bluetooth Remote ID but not Wi-Fi Remote ID.
+
+## Notable devices
+
+Some radios matter because of **what kind of thing they are**. Retrovision tags them using a signature catalog derived from [Fieldwatch](https://github.com/OffGridPete/Fieldwatch) (MIT, © Off Grid Pete LLC; see NOTICE):
+
+| Kind | Examples |
+|---|---|
+| Pentest tools | Flipper Zero, ESP32 Marauder / Deauther, GhostESP, Hak5 WiFi Pineapple, Pwnagotchi, Porkchop, Bruce, cheap BLE serial modules (sometimes used in card skimmers) |
+| Surveillance | Licence-plate readers (Flock, Motorola Vigilant, Genetec AutoVu, Rekor…), traffic sensors, IP-camera brands (Verkada, Hikvision, Axis…), gunshot detectors |
+| Police gear | Body cams and in-car systems (Axon, WatchGuard, Digital Ally, Wolfcom…), vehicle LTE routers |
+| Camera glasses | Ray-Ban / Oakley Meta, Snap Spectacles, Brilliant Frame, Even G1, Vuzix |
+| Recording pendants | Plaud, Limitless, Bee, Friend, Omi, Fieldy |
+| Drones | See *Drones* |
+
+Matching uses default names (exact patterns, case-insensitive), vendor prefixes (only on non-random addresses), BLE company IDs, 16- and 128-bit service UUIDs, service-data payloads and Wi-Fi vendor elements.
+
+**This is the weakest signal in the app, so it never alerts on its own:**
+- A match is **not proof**. The same chips and names show up in harmless gear. The Axon pattern, for example, also matches some ZTE phones, and the vehicle LTE routers sit in buses and shops too.
+- A miss is **not a clean bill**. A renamed Flipper, or one with Bluetooth off, is invisible. Most current plate-reader poles are quiet on Wi-Fi and BLE.
+- What makes it matter: **behaviour** (the same moment as BLE spam or a deauth flood) or **persistence** (the normal following score: a notable device seen at several of your places).
+
+Each match shows the catalog's own note in the device details. The 👁 filter in Devices lists them.
 
 ## Associated clients (data frames)
 
@@ -298,6 +355,7 @@ All of these are in Settings → Notifications:
 | Silent | Alerts go to a channel with no sound or vibration |
 | Quiet hours | No alerts in a time range |
 | Only away from routine places | Mute following alerts at confirmed routine places |
+| Drone alerts | Notify when a drone is heard (first time, then at most every 30 min per drone) |
 | Probe disconnected | Notify if a streaming probe drops out for more than 15 s |
 
 ## Maps (offline)
@@ -344,6 +402,8 @@ This is the honest list. Read it before trusting a result.
 8. **Default-name heuristics** (moving APs, categories) fail when devices are renamed.
 9. **No cellular** coverage (IMSI catchers). Use a dedicated tool.
 10. **Attack detection is per-channel.** A brief attack on a channel the probe isn't listening to can be missed.
+11. **Drones** are seen only if they broadcast Remote ID over Wi-Fi beacons or Bluetooth 4, or use a recognisable radio. No detection does not mean no drone.
+12. **Notable-device tags** are name/ID patterns: easy to evade, and prone to false matches.
 
 ## Troubleshooting
 

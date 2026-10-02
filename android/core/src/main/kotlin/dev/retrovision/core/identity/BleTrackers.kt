@@ -7,6 +7,8 @@ object AdParser {
     const val FLAGS = 0x01
     const val UUID16_INCOMPLETE = 0x02
     const val UUID16_COMPLETE = 0x03
+    const val UUID128_INCOMPLETE = 0x06
+    const val UUID128_COMPLETE = 0x07
     const val SHORT_NAME = 0x08
     const val COMPLETE_NAME = 0x09
     const val TX_POWER = 0x0A
@@ -42,6 +44,8 @@ class AdvertisementInfo(
     val flags: Int?,
     /** GAP Appearance value (AD type 0x19), null when absent. */
     val appearance: Int? = null,
+    /** 128-bit service UUIDs, canonical upper-case "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX". */
+    val serviceUuids128: Set<String> = emptySet(),
 ) {
     companion object {
         fun of(ad: ByteArray): AdvertisementInfo {
@@ -53,6 +57,7 @@ class AdvertisementInfo(
             var tx: Int? = null
             var flags: Int? = null
             var appearance: Int? = null
+            val uuids128 = HashSet<String>()
             for (s in AdParser.parse(ad)) {
                 val d = s.data
                 when (s.type) {
@@ -67,6 +72,13 @@ class AdvertisementInfo(
                             i += 2
                         }
                     }
+                    AdParser.UUID128_COMPLETE, AdParser.UUID128_INCOMPLETE -> {
+                        var i = 0
+                        while (i + 16 <= d.size) {
+                            uuids128 += uuid128(d, i)
+                            i += 16
+                        }
+                    }
                     AdParser.SERVICE_DATA_16 -> if (d.size >= 2) {
                         val u = (d[0].toInt() and 0xFF) or ((d[1].toInt() and 0xFF) shl 8)
                         sdata[u] = d.copyOfRange(2, d.size)
@@ -78,7 +90,13 @@ class AdvertisementInfo(
                     AdParser.APPEARANCE -> if (d.size >= 2) appearance = (d[0].toInt() and 0xFF) or ((d[1].toInt() and 0xFF) shl 8)
                 }
             }
-            return AdvertisementInfo(mId, mData, uuids, sdata, name, tx, flags, appearance)
+            return AdvertisementInfo(mId, mData, uuids, sdata, name, tx, flags, appearance, uuids128)
+        }
+
+        /** 128-bit UUIDs are little-endian on air. */
+        private fun uuid128(d: ByteArray, off: Int): String {
+            val hex = (15 downTo 0).joinToString("") { "%02X".format(d[off + it].toInt() and 0xFF) }
+            return "${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}"
         }
     }
 }
@@ -95,6 +113,8 @@ enum class TrackerKind(val label: String, val vendor: String) {
     PEBBLEBEE("Pebblebee", "Pebblebee"),
     GOOGLE_FIND_MY_DEVICE("Find My Device network tag", "Google"),
     GOOGLE_FIND_MY_PHONE("Find My Device network phone", "Google"),
+    /** IETF DULT (Detecting Unwanted Location Trackers) advertisement from a tag of any brand. */
+    DULT_TAG("Location tag (DULT)", "IETF DULT"),
 }
 
 /**
@@ -116,11 +136,16 @@ class TrackerMatch(val kind: TrackerKind, val separated: Boolean?)
  *  - Google Find My Device network (FMDN): service data 0xFEAA with frame type
  *    0x40/0x41. 0xFEAA is shared with Eddystone (frames 0x00-0x30), hence the check.
  *    AD flags 0x02 = smartphone, 0x06 = tag.
+ *  - IETF DULT (draft-ietf-dult-accessory-protocol): service data 0xFCB2; byte 0 network id,
+ *    byte 1 bit 0 = mode (0 separated from owner, 1 near owner). Brands adopting it (Chipolo,
+ *    Pebblebee, moto tag...) may also carry their own UUID: then the brand wins and DULT
+ *    supplies the separated flag.
  */
 object TrackerClassifier {
     private const val APPLE = 0x004C
     private const val APPLE_OFFLINE_FINDING = 0x12
     private const val APPLE_SEPARATED_LEN = 0x19
+    private const val DULT = 0xFCB2
 
     fun classify(ad: ByteArray): TrackerMatch? = classify(AdvertisementInfo.of(ad))
 
@@ -147,13 +172,20 @@ object TrackerClassifier {
             }
         }
 
+        val dult = info.serviceData16[DULT]
+        val dultSeparated = dult?.takeIf { it.size >= 2 }?.let { (it[1].toInt() and 0x01) == 0 }
         val uuids = info.serviceUuids16 + info.serviceData16.keys
+        val brand = when {
+            0xFD5A in uuids -> TrackerKind.SAMSUNG_SMARTTAG
+            0xFEED in uuids -> TrackerKind.TILE
+            0xFE33 in uuids -> TrackerKind.CHIPOLO
+            0xFA25 in uuids -> TrackerKind.PEBBLEBEE
+            0xFD69 in uuids -> TrackerKind.SAMSUNG_FIND_MY_MOBILE
+            else -> null
+        }
         return when {
-            0xFD5A in uuids -> TrackerMatch(TrackerKind.SAMSUNG_SMARTTAG, null)
-            0xFEED in uuids -> TrackerMatch(TrackerKind.TILE, null)
-            0xFE33 in uuids -> TrackerMatch(TrackerKind.CHIPOLO, null)
-            0xFA25 in uuids -> TrackerMatch(TrackerKind.PEBBLEBEE, null)
-            0xFD69 in uuids -> TrackerMatch(TrackerKind.SAMSUNG_FIND_MY_MOBILE, null)
+            brand != null -> TrackerMatch(brand, dultSeparated)
+            dult != null -> TrackerMatch(TrackerKind.DULT_TAG, dultSeparated)
             else -> null
         }
     }
@@ -162,7 +194,7 @@ object TrackerClassifier {
     fun isTag(kind: TrackerKind): Boolean = when (kind) {
         TrackerKind.AIRTAG, TrackerKind.FIND_MY_ACCESSORY, TrackerKind.SAMSUNG_SMARTTAG,
         TrackerKind.TILE, TrackerKind.CHIPOLO, TrackerKind.PEBBLEBEE,
-        TrackerKind.GOOGLE_FIND_MY_DEVICE -> true
+        TrackerKind.GOOGLE_FIND_MY_DEVICE, TrackerKind.DULT_TAG -> true
         TrackerKind.AIRPODS, TrackerKind.APPLE_DEVICE_FIND_MY, TrackerKind.SAMSUNG_FIND_MY_MOBILE,
         TrackerKind.GOOGLE_FIND_MY_PHONE -> false
     }
