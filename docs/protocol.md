@@ -97,6 +97,7 @@ Expected accuracy over USB is about 1 ms. That is more than enough, because a ph
 
 - Always forward `addr2` (the transmitter) and `seq_ctrl`. Sequence-number continuity across a MAC rotation is one of the few signals that survive MAC randomisation.
 - `ssid` holds raw bytes and is **not guaranteed to be UTF-8**. The host must never assume it can decode them.
+- `tsf_us` (protocol 1.1, additive) is the 8-byte timestamp field of beacons and probe responses: the AP's TSF timer, i.e. its uptime in µs. 0 for other frames. Reception time minus TSF is the AP's boot moment, which survives renaming and BSSID changes until the AP reboots.
 - `raw_ies` carries the tagged parameters verbatim; it is enabled by `WifiConfig.forward_raw_ies`. The host derives the IE fingerprint from them (element order, supported rates, HT/VHT/HE capabilities, extended capabilities, vendor OUIs). If the IEs don't fit the budget (320 bytes), the probe cuts them at an element boundary and sets `raw_ies_truncated`.
 - Which frame types are forwarded is controlled by `WifiConfig.frame_types`. The default is probe requests plus beacons. Beacons are useful to recognise mobile APs such as phone hotspots, car Wi-Fi and dashcams.
 

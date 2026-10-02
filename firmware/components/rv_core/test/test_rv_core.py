@@ -66,7 +66,7 @@ LIB.rv_frame_decoder_feed.argtypes = [C.POINTER(FrameDecoder), C.c_uint8,
 class WifiFrame(C.Structure):
     _fields_ = [("type", C.c_int), ("addr1", C.c_uint8 * 6), ("addr2", C.c_uint8 * 6),
                 ("addr3", C.c_uint8 * 6), ("seq", C.c_uint16), ("ssid", C.c_uint8 * 32),
-                ("ssid_len", C.c_uint8), ("has_ssid", C.c_bool), ("ies", u8p),
+                ("ssid_len", C.c_uint8), ("has_ssid", C.c_bool), ("tsf", C.c_uint64), ("ies", u8p),
                 ("ies_len", C.c_uint16), ("ies_truncated", C.c_bool)]
 
 
@@ -201,6 +201,15 @@ class TestWifi(unittest.TestCase):
         self.assertEqual(wf.type, 3)
         self.assertEqual(bytes(wf.ssid[:wf.ssid_len]), b"CarHotspot")
         self.assertEqual(self.ies(wf), body)
+        self.assertEqual(wf.tsf, 0x1111111111111111)
+
+    def test_beacon_tsf_little_endian(self):
+        fixed = (123_456_789_012).to_bytes(8, "little") + b"\x64\x00" + b"\x31\x04"
+        ok, wf = self.parse(mgmt(8, fixed + ie(0, b"x")))
+        self.assertTrue(ok)
+        self.assertEqual(wf.tsf, 123_456_789_012)
+        ok, wf = self.parse(mgmt(4, ie(0, b"x")))
+        self.assertEqual(wf.tsf, 0)
 
     def test_malformed_trailing_ie(self):
         body = ie(0, b"x") + bytes([0xDD, 50, 1, 2, 3])

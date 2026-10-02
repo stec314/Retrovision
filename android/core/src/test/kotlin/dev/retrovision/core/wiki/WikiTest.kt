@@ -91,5 +91,14 @@ class WikiTest {
         has("**≥ ${t.spamMinAddresses}** random addresses")
         has("each alive **≤ ${t.spamMaxLifeMs / 1000} s**")
         has("**≤ ${t.oneTransmitterStdDb.toInt()} dB**")
+        val r = dev.retrovision.core.analysis.Route.Config()
+        has("stay of **≥ ${r.minStopMs / 60_000} minutes**")
+        has("first heard **≥ ${r.lateArrivalMs / 60_000} min** after")
+        has("within **${r.leftWithYouMs / 60_000} min** after you left")
+        has("direction **≥ ${r.minTurnDeg.toInt()}°**")
+        has("over **${r.legM.toInt()} m**")
+        has("**≥ ${dev.retrovision.core.analysis.NetworkLinker.MIN_SHARED_RARE}** networks that at most **${dev.retrovision.core.analysis.NetworkLinker.MAX_ASKERS}** devices")
+        has("within **${dev.retrovision.core.analysis.ApUptimeLinker.MAX_HANDOVER_MS / 60_000} min**")
+        has("(**± ${dev.retrovision.core.analysis.ApUptimeLinker.MAX_BOOT_DIFF_MS / 1000} s**)")
     }
 }

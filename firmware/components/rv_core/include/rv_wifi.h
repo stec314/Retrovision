@@ -36,6 +36,7 @@ typedef struct {
     uint8_t ssid[RV_MAX_SSID];
     uint8_t ssid_len;
     bool has_ssid;             // SSID element present (may be zero length = wildcard)
+    uint64_t tsf;              // beacon / probe-response timestamp (AP uptime, µs), 0 if absent
     const uint8_t *ies;        // points into the input buffer
     uint16_t ies_len;          // possibly cut at an element boundary to RV_MAX_RAW_IES
     bool ies_truncated;

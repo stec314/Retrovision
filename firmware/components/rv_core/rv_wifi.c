@@ -64,6 +64,14 @@ bool rv_wifi_parse(const uint8_t *f, size_t len, rv_wifi_frame_t *out)
     memcpy(out->addr3, f + 16, 6);
     out->seq = (uint16_t)((f[22] | (f[23] << 8)) >> 4);
 
+    if ((out->type == RV_WIFI_BEACON || out->type == RV_WIFI_PROBE_RESP) && len >= HDR_LEN + 8) {
+        uint64_t t = 0;
+        for (int i = 7; i >= 0; i--) {
+            t = (t << 8) | f[HDR_LEN + i];
+        }
+        out->tsf = t;
+    }
+
     int off = ie_offset(out->type);
     if (off < 0 || (size_t)off > len) {
         return true; // header-only observation (auth, deauth, data, ...)

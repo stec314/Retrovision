@@ -111,6 +111,8 @@ sealed class Reason {
     data class ProbesForYourNetwork(val ssids: Set<String>) : Reason()
     /** Several randomised addresses linked because they ask for the same rare networks. */
     data class LinkedByNetworks(val addresses: Int, val sharedSsids: Int) : Reason()
+    /** One access point that changed name or address (same boot moment from its beacon uptime). */
+    data class SameApRenamed(val from: String, val to: String) : Reason()
     /** Moves together with [size] − 1 other devices (same places, same times): one person or vehicle? */
     data class TravelsInGroup(val size: Int, val groupId: String) : Reason()
     /** A drone: [remoteId] true when it broadcast Remote ID ([id] is then its serial). */
@@ -225,7 +227,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
 
         val inWindow = sightings.filter { it.sighting.timeMs in from..nowMs }
         val links = NetworkLinker.link(inWindow, ignore.apSsids)
-        val byEntity = inWindow.groupBy { links.root[it.entityId] ?: it.entityId }
+        val apLinks = ApUptimeLinker.link(inWindow)
+        val byEntity = inWindow.groupBy { links.root[it.entityId] ?: apLinks.root[it.entityId] ?: it.entityId }
 
         // Your route: stops and turns, and when the receivers were hearing anything at all.
         val stops = Route.stops(timeline.fixes, { placeOfFix[it]?.id })
@@ -249,6 +252,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
                 r.with(r.score, r.alert, r.reasons + Reason.LinkedByNetworks(n, sh))
+            } ?: apLinks.renamed[id]?.let { (from, to) ->
+                r.with(r.score, r.alert, r.reasons + Reason.SameApRenamed(from, to))
             } ?: r
         }
         groups(reports)

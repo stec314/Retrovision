@@ -294,6 +294,7 @@ class ProbeSession(
                     seq = w.seqCtrl ushr 4,
                     ies = w.rawIes.toByteArray(),
                     iesTruncated = w.rawIesTruncated,
+                    tsfUs = if (w.tsfUs != 0L) w.tsfUs else -1,
                 )
                 update { it.copy(wifiObs = it.wifiObs + 1) }
                 onSighting(Sighting(timeMs, Radio.WIFI, addr, o.rssiDbm, maxOf(1, o.mergedCount), wifi = detail, probeId = probeId))
@@ -411,7 +412,7 @@ class ProbeSession(
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 0
+        const val PROTOCOL_MINOR = 1
         private const val KICK_EVERY_MS = 12_000L
         private const val DEAD_AFTER_MS = 45_000L
     }

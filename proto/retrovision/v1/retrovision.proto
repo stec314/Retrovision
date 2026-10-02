@@ -199,6 +199,12 @@ message WifiFrame {
 
   // True when raw_ies was cut to fit the frame budget.
   bool raw_ies_truncated = 9;
+
+  // Beacon / probe-response timestamp field: the AP's TSF timer, i.e. its
+  // uptime in microseconds. Survives SSID and BSSID changes of the same AP
+  // until it reboots, so the host can tell one renamed hotspot from a new one.
+  // 0 = not present (other frame types). Added in protocol 1.1 (additive).
+  uint64 tsf_us = 10;
 }
 
 enum BleAddressType {

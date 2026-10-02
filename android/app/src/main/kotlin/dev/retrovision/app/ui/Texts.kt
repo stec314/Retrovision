@@ -161,6 +161,10 @@ object Texts {
             "${r.addresses} rotating addresses linked: they ask for the same ${r.sharedSsids} rare networks",
             "${r.addresses} indirizzi casuali collegati: cercano le stesse ${r.sharedSsids} reti rare",
         )
+        is Reason.SameApRenamed -> tr(
+            "Same access point under a new name or address (same boot moment): “${r.from}” → “${r.to}”",
+            "Stesso access point con nuovo nome o indirizzo (stesso istante di accensione): “${r.from}” → “${r.to}”",
+        )
         is Reason.TravelsInGroup -> tr(
             "Moves together with ${r.size - 1} other device(s): same places, same times",
             "Si muove insieme ad altri ${r.size - 1} dispositivi: stessi luoghi, stessi orari",

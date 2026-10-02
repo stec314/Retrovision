@@ -178,6 +178,10 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Tracker tag, seen at ≥ 2 effective places, separation unknown or near owner | +0.10 |
 | Moving access point (hotspot, car, camera; not Wi-Fi Direct), ≥ 2 effective places | +0.10 |
 | Drone (Remote ID or drone-radio signature), ≥ 2 effective places | +0.15 |
+| **Arrived after you and left with you** at **≥ 2** stops | +0.15 |
+| **Stayed with you through ≥ 3** of your turns | +0.10 |
+| Away from your routine places, **asked by name for one of your networks** | +0.10 |
+| Travels in a group with other devices (same places, same times), ≥ 2 effective places | +0.05 |
 
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
@@ -201,6 +205,12 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Rotated N addresses | The entity was stitched from N MAC addresses |
 | Drone … | Broadcasts Remote ID (serial shown), or matches a drone/controller radio signature |
 | Looks like: … | Matches a notable-device signature. Information, not proof, no score bonus |
+| Arrived after you and left with you at N stops | See *Route signals* |
+| Stayed with you through N of your M turns | See *Route signals* |
+| Asked for YOUR network | See *Network signals* |
+| N rotating addresses linked: same rare networks | See *Network signals* |
+| Same access point under a new name | See *Network signals* |
+| Moves together with N other devices | See *Network signals* |
 | Known at your routine places | Resident: damped |
 
 ### Worked examples
@@ -212,6 +222,63 @@ Base = 0.78. Co-movement +0.15, moving AP +0.10 → **1.00 (clamped). Alert.**
 *Your neighbour's router.* It is seen only at home (a confirmed routine place) for 12 hours. effPlaces = 0.3 → capped at 0.30, and after 3 days it becomes a resident (≤ 0.25). **No alert.**
 
 *A commuter on your train.* Their phone has a stable address and is seen at 4 stations over 40 minutes, moving with you. The score is high and **this is a real false positive**: they really did travel with you. The reasons make that visible ("moved with you" during the train ride, no presence before or after). See *Limits*.
+
+## Route signals: following vs sharing your road
+
+Being "often near you" does not separate a follower from someone who simply takes the same road. Two signals look at **how** a device behaves around your own movements.
+
+**Stops.** From your fixes, a stop is a stay of **≥ 5 minutes** at one place, with an arrival and a departure time. For each finished stop, the device is classed as:
+- *there already, or came with you*: heard within **2 min** of your arrival;
+- **arrived after you**: first heard **≥ 3 min** after you arrived;
+- **left with you**: heard again within **5 min** after you left, while you were already elsewhere;
+- *stayed behind*: not heard after you left, although the receivers were working.
+
+**Arrived after you *and* left with you at 2 or more stops** is the classic follower pattern. It earns **+0.15**. A resident is there already and stays behind. Your own gear and your fellow passengers come with you. A passer-by arrives later and leaves before you.
+
+**Turns.** Your path is thinned to points at least 20 m apart. A turn is a change of direction **≥ 60°**, measured over **60 m** before and after the point (at most one per minute). A device heard both in the **2 minutes before and after** a turn stayed with you through it. **3 or more** such turns earn **+0.10**. On a straight road everyone "follows" you; through several turns, almost nobody does by chance. This is the logic of a surveillance-detection route. The *Route check* card on the Status screen lists what stayed with you through your recent turns.
+
+**Limits.** These signals need good GPS: stops and turns come from the same filtered fixes as everything else. They also need time: one stop or one turn proves nothing. People on the same bus or train genuinely arrive and turn with you; the reasons show it, so judge them.
+
+## Network signals
+
+- **Someone asked for YOUR network.** A device that, away from your routine places, asks by name for one of your own networks (Settings → My networks) has been connected to it: a household member, a past guest, or someone who got your password. **+0.10**.
+  - Your own phone does this too. **Settings → Identify my phone**: with the probe close, the phone runs a Wi-Fi scan and the loudest probe requests are saved as your phone's fingerprint, then ignored for this signal. Phones of the same model share the fingerprint, so theirs are ignored too.
+  - Modern phones ask by name mostly for **hidden** networks, so this fires rarely. When it does, it is meaningful.
+- **Rotating addresses linked by rare networks.** If two randomised addresses both ask for **≥ 2** networks that at most **3** devices in the window ask for, and their lists overlap by at least half, they are merged into one entity. Common names (eduroam, airport and chain hotspots) never link anything, and neither do names that are only your own networks (your household shares those).
+- **One access point, new name.** Every beacon carries the AP's uptime (TSF timer). *Reception time − uptime* is the moment it booted, constant until it reboots. When one AP goes silent and another appears within **30 min** with the same boot moment (**± 2 s**), it is the same radio renamed or with a new address: typically a phone hotspot or car Wi-Fi. Radios serving several names *at the same time* are not merged. This needs probe firmware from this build or newer (protocol 1.1).
+- **Groups.** Devices seen at **≥ 3** places, sharing **≥ 75%** of their places and **≥ 40%** of their 5-minute time slots, form a group: a phone, watch, earbuds and car moving as one person or vehicle. A group survives one member rotating its address. **+0.05** each.
+
+## Your phone's own sensors
+
+The phone can be a receiver too (Settings → Phone sensors):
+
+| Sensor | What it adds | Limits |
+|---|---|---|
+| **Bluetooth LE** (off / only without probe / always; default always) | Full advertisements like the probe: trackers, Bluetooth Remote ID, BLE spam and notable devices **work without a probe**. Phones with LE Coded PHY also hear **Bluetooth 5 Long Range**, which the probe doesn't | Android throttles scanning and may pause it with the screen off. Uses battery |
+| **Accelerometer** | GPS drift check (see below) | None worth noting: it is the cheapest sensor |
+| **Bluetooth Classic** (button, ~12 s) | Discoverable Classic devices, e.g. **HC-05/HC-06 serial modules** used in card skimmers. The probe has no Classic radio | Only devices in discoverable mode answer; it occupies the phone's Bluetooth while it runs |
+| **Wi-Fi connection** | Being connected to one of your networks counts as being at a routine place, even indoors without GPS | Needs location permission to read the network name |
+
+**Phone-only mode.** Without a probe: trackers, Bluetooth drones, BLE spam and notable Bluetooth devices work. Probe requests, Wi-Fi attacks and Wi-Fi Remote ID need the probe. The Status screen says which mode you are in.
+
+**Signal levels are per receiver.** The phone's antenna and the probe's read different dBm, so "steady signal" (co-movement) and "one transmitter" (BLE spam) are judged on one receiver at a time.
+
+**Silent GPS drift.** The accuracy filter only catches fixes the receiver *admits* are bad; indoors it often claims ±20 m while wandering 100 m. While the accelerometer says the phone is **still** (acceleration spread < 0.12 m/s² over 20 s) **and** the GPS Doppler speed is under **1.5 m/s**, fixes more than **30 m** (or the anchor's accuracy) from where stillness began are rejected. Doppler speed comes from carrier frequency shifts, not positions, so it stays near zero during drift and stays right in a smooth car where the accelerometer looks calm.
+
+## Your own devices and your own network
+
+**"Is this yours?"** A device that travelled with you (moved with you across ≥ 2 places) on **3** different days is proposed on the Status screen. *Yes* ignores it; *No* never asks again. Your watch, earbuds and car are the most common false alerts, and this removes them.
+
+**Trackers and drones are never proposed.** A tracker planted on you also "travels with you every day": auto-ignoring would hide exactly the threat the app exists for.
+
+**Your phone joining an unknown access point.** For your own networks, the app remembers the access points your phone joins (the first one is trusted, and so are others from the same vendor, such as mesh nodes and extenders). If your phone joins your network through an access point from another vendor, it alerts: that is an evil twin that got **your** phone, not just one in the air. If it's yours (a new router), trust it in Settings.
+
+## Your verdicts and field tests
+
+Every threshold in this page is reasoned, not measured on real data. Two tools make measuring possible:
+
+- **Verdict buttons** in device details: *False alarm* (silences that device's alerts for 24 h), *Suspicious*, and *Ignore (mine)*. Settings shows the counts and which reasons appear most in false alarms: that is where tuning should start. Verdicts stay on the phone.
+- **Field test.** Mark a device you carry on purpose (a friend's phone, a tag, the retrovision-target firmware) as a test target. Then walk a route with turns and stops, or have someone follow you with it. The Sessions screen shows its detection rate, places, score, reasons and **how long it took to first cross the alert threshold**.
 
 ## Places, routine places and residents
 
@@ -240,6 +307,7 @@ Retrovision handles this in layers:
 2. **At analysis.** Fixes worse than **±50 m** (the *Ignore GPS fixes worse than* setting, 20–150 m) are dropped before places, travel and co-movement are computed. Fixes with unknown accuracy are kept.
 3. **Learning routine places** uses the same filter.
 4. **Radar** only uses samples taken with a fix that is good enough and less than 15 s old.
+5. **Silent drift** while the phone is still is rejected using the accelerometer and Doppler speed (see *Your phone's own sensors*).
 
 **Trade-off.** A stricter setting means fewer false alerts but also fewer usable fixes. In a long indoor stay you may get no places at all, so following detection effectively pauses there. That is the honest behaviour: without a reliable position, "it followed me" cannot be judged. Trackers and attack detection don't depend on GPS and keep working.
 
@@ -386,6 +454,10 @@ The map shows **your** places and **your** movement. By design it does not draw 
 | Capture data frames | off | Associated-clients list. More traffic |
 | Probe LED | on | LED off for discretion. Applied immediately |
 | Notifications section | see above | Alert behaviour |
+| Your network's access points | learned | Trusted APs for your own networks; forget or trust here |
+| Identify my phone | not set | Your phone's probe fingerprint, ignored by "asked for your network" |
+| Phone Bluetooth | always | Phone as a BLE receiver: off / only without probe / always |
+| Reject GPS drift while still | on | Accelerometer + Doppler drift guard |
 | WiGLE / BeaconDB | off | Optional online lookups |
 
 ## Limits
@@ -404,6 +476,7 @@ This is the honest list. Read it before trusting a result.
 10. **Attack detection is per-channel.** A brief attack on a channel the probe isn't listening to can be missed.
 11. **Drones** are seen only if they broadcast Remote ID over Wi-Fi beacons or Bluetooth 4, or use a recognisable radio. No detection does not mean no drone.
 12. **Notable-device tags** are name/ID patterns: easy to evade, and prone to false matches.
+13. **Thresholds are not yet validated on real data.** Use the verdict buttons and field tests; expect values to change.
 
 ## Troubleshooting
 

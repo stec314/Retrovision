@@ -119,6 +119,7 @@ static bool build_wifi(const rv_raw_item_t *it, retrovision_v1_Observation *obs)
     w->addr3.size = 6;
     memcpy(w->addr3.bytes, f.addr3, 6);
     w->seq_ctrl = f.seq;
+    w->tsf_us = f.tsf;
     w->ssid.size = f.ssid_len;
     memcpy(w->ssid.bytes, f.ssid, f.ssid_len);
     if (s_cfg.forward_raw_ies && f.ies_len > 0) {

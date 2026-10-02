@@ -156,6 +156,11 @@ typedef struct _retrovision_v1_WifiFrame {
     retrovision_v1_WifiFrame_raw_ies_t raw_ies;
     /* True when raw_ies was cut to fit the frame budget. */
     bool raw_ies_truncated;
+    /* Beacon / probe-response timestamp field: the AP's TSF timer, i.e. its
+ uptime in microseconds. Survives SSID and BSSID changes of the same AP
+ until it reboots, so the host can tell one renamed hotspot from a new one.
+ 0 = not present (other frame types). Added in protocol 1.1 (additive). */
+    uint64_t tsf_us;
 } retrovision_v1_WifiFrame;
 
 typedef PB_BYTES_ARRAY_T(6) retrovision_v1_BleAdvertisement_address_t;
@@ -442,7 +447,7 @@ extern "C" {
 #define retrovision_v1_TimeSyncRequest_init_default {0}
 #define retrovision_v1_TimeSyncResponse_init_default {0, 0}
 #define retrovision_v1_Observation_init_default  {0, _retrovision_v1_Sensor_MIN, 0, 0, 0, {retrovision_v1_WifiFrame_init_default}}
-#define retrovision_v1_WifiFrame_init_default    {_retrovision_v1_WifiFrameType_MIN, 0, {0, {0}}, {0, {0}}, {0, {0}}, 0, {0, {0}}, {0, {0}}, 0}
+#define retrovision_v1_WifiFrame_init_default    {_retrovision_v1_WifiFrameType_MIN, 0, {0, {0}}, {0, {0}}, {0, {0}}, 0, {0, {0}}, {0, {0}}, 0, 0}
 #define retrovision_v1_BleAdvertisement_init_default {{0, {0}}, _retrovision_v1_BleAddressType_MIN, _retrovision_v1_BleAdvType_MIN, {0, {0}}, {0, {0}}, 0, 0, 0}
 #define retrovision_v1_GnssFix_init_default      {0, 0, 0, 0, 0, 0}
 #define retrovision_v1_CustomObservation_init_default {"", {0, {0}}}
@@ -463,7 +468,7 @@ extern "C" {
 #define retrovision_v1_TimeSyncRequest_init_zero {0}
 #define retrovision_v1_TimeSyncResponse_init_zero {0, 0}
 #define retrovision_v1_Observation_init_zero     {0, _retrovision_v1_Sensor_MIN, 0, 0, 0, {retrovision_v1_WifiFrame_init_zero}}
-#define retrovision_v1_WifiFrame_init_zero       {_retrovision_v1_WifiFrameType_MIN, 0, {0, {0}}, {0, {0}}, {0, {0}}, 0, {0, {0}}, {0, {0}}, 0}
+#define retrovision_v1_WifiFrame_init_zero       {_retrovision_v1_WifiFrameType_MIN, 0, {0, {0}}, {0, {0}}, {0, {0}}, 0, {0, {0}}, {0, {0}}, 0, 0}
 #define retrovision_v1_BleAdvertisement_init_zero {{0, {0}}, _retrovision_v1_BleAddressType_MIN, _retrovision_v1_BleAdvType_MIN, {0, {0}}, {0, {0}}, 0, 0, 0}
 #define retrovision_v1_GnssFix_init_zero         {0, 0, 0, 0, 0, 0}
 #define retrovision_v1_CustomObservation_init_zero {"", {0, {0}}}
@@ -502,6 +507,7 @@ extern "C" {
 #define retrovision_v1_WifiFrame_ssid_tag        7
 #define retrovision_v1_WifiFrame_raw_ies_tag     8
 #define retrovision_v1_WifiFrame_raw_ies_truncated_tag 9
+#define retrovision_v1_WifiFrame_tsf_us_tag      10
 #define retrovision_v1_BleAdvertisement_address_tag 1
 #define retrovision_v1_BleAdvertisement_address_type_tag 2
 #define retrovision_v1_BleAdvertisement_adv_type_tag 3
@@ -672,7 +678,8 @@ X(a, STATIC,   SINGULAR, BYTES,    addr3,             5) \
 X(a, STATIC,   SINGULAR, UINT32,   seq_ctrl,          6) \
 X(a, STATIC,   SINGULAR, BYTES,    ssid,              7) \
 X(a, STATIC,   SINGULAR, BYTES,    raw_ies,           8) \
-X(a, STATIC,   SINGULAR, BOOL,     raw_ies_truncated,   9)
+X(a, STATIC,   SINGULAR, BOOL,     raw_ies_truncated,   9) \
+X(a, STATIC,   SINGULAR, UINT64,   tsf_us,           10)
 #define retrovision_v1_WifiFrame_CALLBACK NULL
 #define retrovision_v1_WifiFrame_DEFAULT NULL
 
@@ -871,7 +878,7 @@ extern const pb_msgdesc_t retrovision_v1_Log_msg;
 #define retrovision_v1_TimeSyncRequest_size      11
 #define retrovision_v1_TimeSyncResponse_size     22
 #define retrovision_v1_WifiConfig_size           942
-#define retrovision_v1_WifiFrame_size            397
+#define retrovision_v1_WifiFrame_size            408
 
 #ifdef __cplusplus
 } /* extern "C" */
