@@ -75,6 +75,8 @@ class WifiDetail(
     /** Raw information elements (may be empty if the probe does not forward them). */
     val ies: ByteArray,
     val iesTruncated: Boolean = false,
+    /** Beacon/probe-response timestamp: the AP's uptime in µs (-1 = unknown). */
+    val tsfUs: Long = -1,
 ) {
     val ssidText: String get() = ssidToText(ssid)
 }

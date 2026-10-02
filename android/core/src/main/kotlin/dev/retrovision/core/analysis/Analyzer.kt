@@ -472,7 +472,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             val b = timeline.nearest(t1) ?: continue
             val d = Geo.distanceM(a, b)
             if (d < COMOVE_MIN_M) continue
-            val rssi = seg.map { it.sighting.rssi }.filter { it != 0 }
+            // Receivers differ (probe antenna vs phone): judge steadiness on one receiver only.
+            val rssi = seg.groupBy { it.sighting.probeId }.values.maxBy { it.size }
+                .map { it.sighting.rssi }.filter { it != 0 }
             if (rssi.size < 4) continue
             val mean = rssi.average()
             val std = Math.sqrt(rssi.sumOf { (it - mean) * (it - mean) } / rssi.size)

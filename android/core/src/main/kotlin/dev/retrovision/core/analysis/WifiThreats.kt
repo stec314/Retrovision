@@ -184,7 +184,11 @@ object WifiThreats {
      * BLE spam: many random addresses, each alive only a few seconds, all sending popup adverts
      * at nearly the same signal. A crowd of real AirPods has stable addresses and spread signals.
      */
-    fun detectBle(ble: List<Sighting>, cfg: Config = Config()): List<Threat> {
+    fun detectBle(ble: List<Sighting>, cfg: Config = Config()): List<Threat> =
+        // Each receiver separately: signal levels from different antennas are not comparable.
+        ble.groupBy { it.probeId }.values.flatMap { detectBleOne(it, cfg) }.sortedByDescending { it.count }.take(1)
+
+    private fun detectBleOne(ble: List<Sighting>, cfg: Config): List<Threat> {
         if (ble.isEmpty()) return emptyList()
         val end = ble.maxOf { it.timeMs }
         val byAddr = ble.filter { end - it.timeMs <= cfg.spamWindowMs && it.ble != null }

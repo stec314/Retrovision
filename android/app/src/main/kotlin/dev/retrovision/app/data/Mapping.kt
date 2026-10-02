@@ -28,6 +28,8 @@ fun Sighting.toRow(entityId: String): SightingRow = SightingRow(
     advType = ble?.advType ?: 0,
     advData = ble?.advData ?: EMPTY,
     txPower = ble?.txPowerDbm ?: 0,
+    source = probeId,
+    tsf = wifi?.tsfUs ?: -1,
 )
 
 fun SightingRow.toSighting(): Sighting {
@@ -37,8 +39,9 @@ fun SightingRow.toSighting(): Sighting {
             timeMs, Radio.WIFI, mac, rssi, merged,
             wifi = WifiDetail(
                 WifiKind.entries[wifiKind.coerceIn(0, WifiKind.entries.size - 1)], channel, ssid,
-                if (bssid >= 0) MacAddress(bssid) else null, seq, ies,
+                if (bssid >= 0) MacAddress(bssid) else null, seq, ies, tsfUs = tsf,
             ),
+            probeId = source,
         )
     } else {
         Sighting(
@@ -47,6 +50,7 @@ fun SightingRow.toSighting(): Sighting {
                 BleAddressKind.entries[bleAddrKind.coerceIn(0, BleAddressKind.entries.size - 1)],
                 advType, advData, txPower,
             ),
+            probeId = source,
         )
     }
 }
@@ -59,8 +63,9 @@ fun SightingRow.toSightingLight(): Sighting {
             timeMs, Radio.WIFI, mac, rssi, merged,
             wifi = WifiDetail(
                 WifiKind.entries[wifiKind.coerceIn(0, WifiKind.entries.size - 1)], channel, ssid,
-                if (bssid >= 0) MacAddress(bssid) else null, seq, ByteArray(0),
+                if (bssid >= 0) MacAddress(bssid) else null, seq, ByteArray(0), tsfUs = tsf,
             ),
+            probeId = source,
         )
     } else {
         Sighting(
@@ -69,6 +74,7 @@ fun SightingRow.toSightingLight(): Sighting {
                 BleAddressKind.entries[bleAddrKind.coerceIn(0, BleAddressKind.entries.size - 1)],
                 advType, advData, txPower,
             ),
+            probeId = source,
         )
     }
 }

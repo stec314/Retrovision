@@ -35,6 +35,10 @@ class SightingRow(
     val advType: Int,
     val advData: ByteArray,
     val txPower: Int,
+    /** Which receiver heard it: probe hardware id, or "phone". */
+    @androidx.room.ColumnInfo(defaultValue = "''") val source: String = "",
+    /** Beacon timestamp (AP uptime, µs), -1 when not a beacon or not forwarded. */
+    @androidx.room.ColumnInfo(defaultValue = "-1") val tsf: Long = -1,
 )
 
 @Entity(tableName = "fixes")
@@ -69,6 +73,32 @@ class BaselineRow(
     val days: Int,
     val lastDay: Long,
     val lastMs: Long,
+)
+
+/** Devices that seem to be with you everywhere: candidates for "is this yours?". */
+@Entity(tableName = "companions")
+class CompanionRow(
+    @PrimaryKey val entityId: String,
+    /** Distinct local days it travelled with you. */
+    val days: Int,
+    val lastDay: Long,
+    /** 0 counting, 1 suggested, 2 confirmed yours, 3 confirmed NOT yours. */
+    val state: Int,
+    val label: String,
+    val updatedMs: Long,
+)
+
+/** What you said about an alert or device: ground truth for tuning thresholds. */
+@Entity(tableName = "feedback")
+class FeedbackRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val entityId: String,
+    /** 0 false alarm, 1 mine, 2 really suspicious. */
+    val label: Int,
+    val score: Double,
+    /** Reason class names, comma separated (no device data beyond the entity id). */
+    val reasons: String,
+    val timeMs: Long,
 )
 
 @Entity(tableName = "familiar_places")
@@ -171,6 +201,24 @@ interface AppDao {
     @Query("DELETE FROM baseline")
     suspend fun wipeBaseline()
 
+    @Query("SELECT * FROM companions WHERE entityId = :id")
+    suspend fun companion(id: String): CompanionRow?
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun putCompanion(row: CompanionRow)
+
+    @Query("SELECT * FROM companions WHERE state = 1 ORDER BY updatedMs DESC")
+    fun companionSuggestions(): kotlinx.coroutines.flow.Flow<List<CompanionRow>>
+
+    @Insert
+    suspend fun addFeedback(row: FeedbackRow)
+
+    @Query("SELECT * FROM feedback ORDER BY timeMs DESC")
+    fun feedback(): kotlinx.coroutines.flow.Flow<List<FeedbackRow>>
+
+    @Query("SELECT entityId FROM feedback WHERE label = 0 AND timeMs >= :since")
+    suspend fun falseAlarmsSince(since: Long): List<String>
+
     @Query("DELETE FROM familiar_places")
     suspend fun wipeFamiliar()
 
@@ -185,8 +233,11 @@ interface AppDao {
 }
 
 @Database(
-    entities = [SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class],
-    version = 3,
+    entities = [
+        SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
+        CompanionRow::class, FeedbackRow::class,
+    ],
+    version = 4,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -216,6 +267,23 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : androidx.room.migration.Migration(3, 4) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `sightings` ADD COLUMN `source` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `sightings` ADD COLUMN `tsf` INTEGER NOT NULL DEFAULT -1")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `companions` (" +
+                        "`entityId` TEXT PRIMARY KEY NOT NULL, `days` INTEGER NOT NULL, `lastDay` INTEGER NOT NULL, " +
+                        "`state` INTEGER NOT NULL, `label` TEXT NOT NULL, `updatedMs` INTEGER NOT NULL)",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `feedback` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `entityId` TEXT NOT NULL, `label` INTEGER NOT NULL, " +
+                        "`score` REAL NOT NULL, `reasons` TEXT NOT NULL, `timeMs` INTEGER NOT NULL)",
+                )
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -228,7 +296,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
         }
     }

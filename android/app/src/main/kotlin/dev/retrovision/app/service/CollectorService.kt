@@ -97,6 +97,7 @@ class CollectorService : Service() {
         scope.launch { analysisLoop() }
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
+        scope.launch { phoneLoop() }
         return START_NOT_STICKY
     }
 
@@ -106,6 +107,8 @@ class CollectorService : Service() {
         Collector.session = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
         runCatching { locationManager?.removeUpdates(locationListener) }
+        phoneBle?.stop()
+        motion?.stop()
         scope.cancel()
         super.onDestroy()
     }
@@ -192,16 +195,52 @@ class CollectorService : Service() {
         if (loc.hasAccuracy() && loc.accuracy > 150f) return
         val now = System.currentTimeMillis()
         if (now - lastFixWritten < 5000) return
-        lastFixWritten = now
         val fix = dev.retrovision.core.model.GeoFix(
             now, loc.latitude, loc.longitude,
             if (loc.hasAccuracy()) loc.accuracy else 0f,
             if (loc.hasSpeed()) loc.speed else null,
         )
+        // Silent drift: the phone is still (accelerometer + Doppler) but the position wanders.
+        if (prefs.driftGuard && motion?.available == true && !driftGuard.accept(fix, Collector.phoneStill.value)) {
+            Collector.driftRejected.value = driftGuard.rejected
+            return
+        }
+        lastFixWritten = now
         Collector.location.value = fix
         SessionRecorder.write(fix)
         scope.launch {
             app.db.dao().insertFix(FixRow(fix.timeMs, fix.lat, fix.lon, fix.accuracyM, fix.speedMps ?: -1f))
+        }
+    }
+
+    // ---- phone receivers -------------------------------------------------------
+
+    private val driftGuard = dev.retrovision.core.analysis.DriftGuard()
+    private var phoneBle: dev.retrovision.app.phone.PhoneBle? = null
+    private var motion: dev.retrovision.app.phone.MotionMonitor? = null
+
+    private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    /** Keeps the phone's BLE scanner and motion sensor in the state the settings ask for. */
+    private suspend fun phoneLoop() {
+        motion = dev.retrovision.app.phone.MotionMonitor(this).also { m ->
+            m.start()
+            scope.launch { m.still.collect { Collector.phoneStill.value = it } }
+        }
+        val ble = dev.retrovision.app.phone.PhoneBle(this, ::onSighting).also { phoneBle = it }
+        scope.launch { ble.active.collect { Collector.phoneBleActive.value = it } }
+        scope.launch { ble.heard.collect { Collector.phoneBleHeard.value = it } }
+        scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
+        while (scope.isActive) {
+            val streaming = Collector.connection.value.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            val permitted = if (Build.VERSION.SDK_INT >= 31) hasPerm(Manifest.permission.BLUETOOTH_SCAN) else true
+            val want = permitted && when (prefs.phoneBleMode) {
+                2 -> true
+                1 -> !streaming
+                else -> false
+            }
+            if (want && !ble.active.value) ble.start() else if (!want && ble.active.value) ble.stop()
+            delay(5_000)
         }
     }
 

@@ -7,6 +7,16 @@ class Prefs(ctx: Context) {
     private val p = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     /** GPS fixes less accurate than this (metres) are ignored by the analysis (indoor/car drift). */
+    /** Phone Bluetooth as a receiver: 0 off, 1 only while no probe is streaming, 2 always. */
+    var phoneBleMode: Int
+        get() = p.getInt("phoneBleMode", 2)
+        set(v) = p.edit().putInt("phoneBleMode", v).apply()
+
+    /** Reject GPS drift while the accelerometer says the phone is still. */
+    var driftGuard: Boolean
+        get() = p.getBoolean("driftGuard", true)
+        set(v) = p.edit().putBoolean("driftGuard", v).apply()
+
     /** Notify when a drone is heard nearby. */
     var droneAlerts: Boolean
         get() = p.getBoolean("droneAlerts", true)

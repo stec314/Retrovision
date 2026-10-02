@@ -25,6 +25,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -97,6 +98,10 @@ fun StatusScreen(modifier: Modifier) {
                         add(Manifest.permission.ACCESS_FINE_LOCATION)
                         add(Manifest.permission.ACCESS_COARSE_LOCATION)
                         if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                        if (Build.VERSION.SDK_INT >= 31) {
+                            add(Manifest.permission.BLUETOOTH_SCAN)
+                            add(Manifest.permission.BLUETOOTH_CONNECT)
+                        }
                     }
                     permissions.launch(req.toTypedArray())
                 }
@@ -140,6 +145,8 @@ fun StatusScreen(modifier: Modifier) {
                 }
             }
         }
+        PhoneCard(conn.session?.phase == dev.retrovision.app.probe.Phase.STREAMING, running)
+
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("GPS", style = MaterialTheme.typography.titleMedium)
@@ -410,6 +417,7 @@ fun ProbeScreen(modifier: Modifier) {
 
 // ---------------------------------------------------------------- Settings
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(modifier: Modifier) {
     val prefs = app.prefs
@@ -451,6 +459,23 @@ fun SettingsScreen(modifier: Modifier) {
         Slider(value = retention.toFloat(), onValueChange = { retention = it.toInt() }, onValueChangeFinished = { prefs.retentionDays = retention }, valueRange = 1f..30f)
 
         NotificationsSection()
+
+        Text(Texts.tr("Phone sensors", "Sensori del telefono"), style = MaterialTheme.typography.titleMedium)
+        var bleMode by remember { mutableIntStateOf(prefs.phoneBleMode) }
+        Text(Texts.tr("Use the phone's Bluetooth as a receiver", "Usa il Bluetooth del telefono come ricevitore"))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf(0 to Texts.tr("Off", "No"), 1 to Texts.tr("Without probe", "Senza sonda"), 2 to Texts.tr("Always", "Sempre")).forEach { (v, l) ->
+                FilterChip(selected = bleMode == v, onClick = { bleMode = v; prefs.phoneBleMode = v }, label = { Text(l) })
+            }
+        }
+        var drift by remember { mutableStateOf(prefs.driftGuard) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                Texts.tr("Reject GPS drift while the phone is still (accelerometer)", "Scarta la deriva GPS quando il telefono è fermo (accelerometro)"),
+                modifier = Modifier.weight(1f),
+            )
+            Switch(checked = drift, onCheckedChange = { drift = it; prefs.driftGuard = it })
+        }
 
         OutlinedTextField(
             value = own, onValueChange = { own = it; prefs.ownSsids = it }, modifier = Modifier.fillMaxWidth(),
@@ -637,4 +662,42 @@ internal fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
         s.phase == dev.retrovision.app.probe.Phase.STREAMING -> Health("●", Texts.tr("Healthy", "In salute"), ok)
         else -> Health("●", Texts.tr("Connecting…", "Connessione…"), warn)
     }
+}
+
+
+/** The phone's own receivers, and what "phone only" can and cannot do. */
+@Composable
+private fun PhoneCard(probeStreaming: Boolean, running: Boolean) {
+    val bleOn by Collector.phoneBleActive.collectAsState()
+    val heard by Collector.phoneBleHeard.collectAsState()
+    val coded by Collector.phoneCodedPhy.collectAsState()
+    val still by Collector.phoneStill.collectAsState()
+    val drift by Collector.driftRejected.collectAsState()
+    var classic by remember { mutableStateOf(false) }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(Texts.tr("Phone sensors", "Sensori del telefono"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Bluetooth LE: " + (if (bleOn) Texts.tr("listening", "in ascolto") + " · $heard" else Texts.tr("off", "spento")) +
+                    (if (bleOn && coded) " · Long Range" else ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                Texts.tr("Motion: ", "Movimento: ") + (if (still) Texts.tr("still", "fermo") else Texts.tr("moving", "in movimento")) +
+                    (if (drift > 0) Texts.tr(" · $drift drifting GPS fixes rejected", " · $drift posizioni GPS in deriva scartate") else ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (running && !probeStreaming && bleOn) {
+                Text(
+                    Texts.tr(
+                        "Phone-only mode: trackers, Bluetooth drones, BLE spam and notable Bluetooth devices work. Wi-Fi probe requests, Wi-Fi attacks and Wi-Fi Remote ID need the probe.",
+                        "Modalità solo telefono: tracker, droni via Bluetooth, BLE spam e dispositivi Bluetooth notevoli funzionano. Probe request, attacchi Wi-Fi e Remote ID via Wi-Fi richiedono la sonda.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+            OutlinedButton(onClick = { classic = true }) { Text(Texts.tr("Scan Classic Bluetooth (~12 s)", "Scansione Bluetooth Classic (~12 s)")) }
+        }
+    }
+    if (classic) ClassicScanDialog(onClose = { classic = false })
 }
