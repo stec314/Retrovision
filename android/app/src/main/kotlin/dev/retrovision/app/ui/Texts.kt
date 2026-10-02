@@ -145,6 +145,14 @@ object Texts {
             "${r.addresses} randomised addresses linked to one device",
             "${r.addresses} indirizzi casuali collegati a un solo dispositivo",
         )
+        is Reason.JoinedAfterYou -> tr(
+            "Arrived after you and left with you at ${r.stops} stop(s)",
+            "Arrivato dopo di te e ripartito con te in ${r.stops} sost${if (r.stops == 1) "a" else "e"}",
+        )
+        is Reason.StayedThroughTurns -> tr(
+            "Stayed with you through ${r.turns} of your ${r.of} turns",
+            "Rimasto con te in ${r.turns} delle tue ${r.of} svolte",
+        )
         is Reason.Notable -> tr(
             "Looks like: ${r.name} (${notableKind(r.kind)}) — a pattern match, not proof",
             "Sembra: ${r.name} (${notableKind(r.kind)}) — somiglianza, non prova",

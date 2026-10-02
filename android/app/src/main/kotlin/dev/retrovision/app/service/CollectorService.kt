@@ -440,16 +440,24 @@ class CollectorService : Service() {
         val rows = dao.sightingsSince(from)
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
+        val conn = checkWifiConnection(now)
+        val here = Collector.location.value
+        // Connected to one of your own networks = you're at a routine place, even indoors without GPS.
+        val familiar = dao.familiarNow().map { it.toModel() } +
+            if (conn?.own == true && here != null) listOf(
+                dev.retrovision.core.analysis.FamiliarPlace(-1, here.lat, here.lon, 150.0, conn.ssid, dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED),
+            ) else emptyList()
         val result = Analyzer(cfg).analyze(
             now,
             rows.map { EntitySighting(it.entityId, it.toSighting()) },
             fixes,
             IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet()),
-            familiar = dao.familiarNow().map { it.toModel() },
+            familiar = familiar,
             residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
         )
         Collector.analysis.value = result
         learnBaseline(result, now)
+        learnCompanions(result, now)
 
         // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
         val recentWifi = rows.asSequence()
@@ -494,8 +502,7 @@ class CollectorService : Service() {
             }
         }
 
-        val atFamiliar = prefs.alertsOnlyAwayFromFamiliar && run {
-            val here = Collector.location.value
+        val atFamiliar = prefs.alertsOnlyAwayFromFamiliar && (conn?.own == true) || prefs.alertsOnlyAwayFromFamiliar && run {
             here != null && dao.familiarNow().map { it.toModel() }.any {
                 it.state == dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED && it.contains(here.lat, here.lon)
             }
@@ -543,6 +550,79 @@ class CollectorService : Service() {
                 dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, (b.days + 1).coerceAtMost(30), day, now))
             }
         }
+    }
+
+    /**
+     * Devices that travel with you day after day are most likely yours (watch, earbuds, car).
+     * After [COMPANION_DAYS] days the app ASKS; it never ignores on its own, and never proposes a
+     * tracker tag: a planted tracker also "travels with you every day".
+     */
+    private suspend fun learnCompanions(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val dao = app.db.dao()
+        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        for (e in result.entities) {
+            if (e.kind == dev.retrovision.core.analysis.EntityKind.BLE_TRACKER || e.tracker != null) continue
+            if (e.isDrone) continue
+            val travelled = e.reasons.any { it is dev.retrovision.core.analysis.Reason.MovedWithYou } && e.placeIds.size >= 2
+            if (!travelled) continue
+            val c = dao.companion(e.entityId)
+            if (c != null && (c.state >= 2 || c.lastDay == day)) continue
+            val days = (c?.days ?: 0) + 1
+            val state = if (days >= COMPANION_DAYS) 1 else 0
+            dao.putCompanion(dev.retrovision.app.data.CompanionRow(e.entityId, days, day, state, Texts.entityLabel(e), now))
+        }
+    }
+
+    /**
+     * Reads the phone's own Wi-Fi association. For your networks, the first access point seen is
+     * trusted; later ones from the same vendor (mesh nodes, extenders) too. Joining your network
+     * through an unknown access point means an evil twin got YOUR phone, not just the air.
+     */
+    @Suppress("DEPRECATION")
+    private fun checkWifiConnection(now: Long): dev.retrovision.app.WifiConn? {
+        val wm = applicationContext.getSystemService(android.net.wifi.WifiManager::class.java) ?: return null
+        val info = runCatching { wm.connectionInfo }.getOrNull() ?: run { Collector.wifiConnection.value = null; return null }
+        val ssid = info.ssid?.removeSurrounding("\"")?.takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
+        val bssid = info.bssid?.lowercase()?.takeIf { it != "02:00:00:00:00:00" && it != "00:00:00:00:00:00" }
+        if (ssid == null || bssid == null) { Collector.wifiConnection.value = null; return null }
+        val own = ssid in prefs.ownSsidSet()
+        var trusted = true
+        if (own) {
+            val known = prefs.trustedAps.filter { it.startsWith("$ssid|") }.map { it.substringAfter('|') }
+            fun oui(b: String) = b.split(':').take(3).mapIndexed { i, o -> if (i == 0) "%02x".format(o.toInt(16) and 0xFD) else o }.joinToString(":")
+            trusted = when {
+                bssid in known -> true
+                known.isEmpty() || known.any { oui(it) == oui(bssid) } -> { prefs.trustedAps = prefs.trustedAps + "$ssid|$bssid"; true }
+                else -> false
+            }
+            if (!trusted && prefs.alertsEnabled) {
+                val key = "conn:$ssid|$bssid"
+                val last = notifiedAt[key]
+                if (last == null || now - last > 6 * 3600_000L) {
+                    notifiedAt[key] = now
+                    notifyUntrustedAp(ssid, bssid)
+                }
+            }
+        }
+        return dev.retrovision.app.WifiConn(ssid, bssid, own, trusted).also { Collector.wifiConnection.value = it }
+    }
+
+    private fun notifyUntrustedAp(ssid: String, bssid: String) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val text = Texts.tr(
+            "Your phone joined “$ssid” through an access point it has never used ($bssid). If you didn't add a router or extender, someone may be impersonating your network. Settings → trust it if it's yours.",
+            "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Se non hai aggiunto router o ripetitori, qualcuno potrebbe impersonare la tua rete. Impostazioni → fidati se è tuo.",
+        )
+        val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Unknown access point for your network", "Access point sconosciuto per la tua rete"))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(("ap" + ssid + bssid).hashCode(), n)
     }
 
     private suspend fun learnFamiliar(now: Long) {
@@ -663,6 +743,7 @@ class CollectorService : Service() {
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_PROBE_LOST = 2
         private const val BASELINE_MIN_DAYS = 3
+        private const val COMPANION_DAYS = 3
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))

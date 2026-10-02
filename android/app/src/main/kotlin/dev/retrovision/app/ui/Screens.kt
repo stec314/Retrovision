@@ -182,6 +182,9 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
+        RouteCheckCard(analysis)
+        CompanionsCard()
+
         val drones by Collector.drones.collectAsState()
         if (drones.isNotEmpty()) {
             Card(
@@ -460,6 +463,8 @@ fun SettingsScreen(modifier: Modifier) {
 
         NotificationsSection()
 
+        TrustedApsSection()
+
         Text(Texts.tr("Phone sensors", "Sensori del telefono"), style = MaterialTheme.typography.titleMedium)
         var bleMode by remember { mutableIntStateOf(prefs.phoneBleMode) }
         Text(Texts.tr("Use the phone's Bluetooth as a receiver", "Usa il Bluetooth del telefono come ricevitore"))
@@ -700,4 +705,104 @@ private fun PhoneCard(probeStreaming: Boolean, running: Boolean) {
         }
     }
     if (classic) ClassicScanDialog(onClose = { classic = false })
+}
+
+
+/** Route check: who stayed with you through your recent changes of direction. */
+@Composable
+private fun RouteCheckCard(analysis: dev.retrovision.core.analysis.AnalysisResult?) {
+    val a = analysis ?: return
+    if (a.turns < 2) return
+    val stayed = a.entities.mapNotNull { e ->
+        e.reasons.filterIsInstance<dev.retrovision.core.analysis.Reason.StayedThroughTurns>().firstOrNull()?.let { e to it.turns }
+    }.sortedByDescending { it.second }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(Texts.tr("Route check", "Verifica percorso"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                Texts.tr(
+                    "${a.turns} turns in the window. On a straight road everyone \"follows\" you; what stays through turns matters.",
+                    "${a.turns} svolte nella finestra. Su una strada dritta tutti ti \"seguono\": conta chi resta anche dopo le svolte.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (stayed.isEmpty()) Text(Texts.tr("Nothing stayed with you through 2+ turns.", "Niente è rimasto con te per 2 o più svolte."))
+            stayed.take(6).forEach { (e, n) -> Text("• ${Texts.entityLabel(e)} — $n/${a.turns}", style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+}
+
+/** "Is this yours?" — devices that travelled with you on several days. Never proposes trackers. */
+@Composable
+private fun CompanionsCard() {
+    val dao = app.db.dao()
+    val list by remember { dao.companionSuggestions() }.collectAsState(initial = emptyList())
+    val scope = rememberCoroutineScope()
+    if (list.isEmpty()) return
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(Texts.tr("Is this yours?", "È tuo?"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                Texts.tr(
+                    "These travelled with you on ${list.first().days}+ days. If they're yours (watch, earbuds, car), ignore them to cut false alerts. Trackers are never proposed here.",
+                    "Hanno viaggiato con te per ${list.first().days}+ giorni. Se sono tuoi (orologio, cuffie, auto) ignorali per ridurre i falsi allarmi. I tracker non vengono mai proposti qui.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            list.take(5).forEach { c ->
+                Text(c.label, style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            dao.addIgnore(IgnoreRow(c.entityId, c.label, System.currentTimeMillis()))
+                            dao.putCompanion(dev.retrovision.app.data.CompanionRow(c.entityId, c.days, c.lastDay, 2, c.label, System.currentTimeMillis()))
+                            dao.addFeedback(dev.retrovision.app.data.FeedbackRow(entityId = c.entityId, label = 1, score = 0.0, reasons = "Companion", timeMs = System.currentTimeMillis()))
+                        }
+                    }) { Text(Texts.tr("Yes, mine", "Sì, è mio")) }
+                    OutlinedButton(onClick = {
+                        scope.launch {
+                            dao.putCompanion(dev.retrovision.app.data.CompanionRow(c.entityId, c.days, c.lastDay, 3, c.label, System.currentTimeMillis()))
+                        }
+                    }) { Text(Texts.tr("No", "No")) }
+                }
+            }
+        }
+    }
+}
+
+/** Your phone's Wi-Fi association and the access points trusted for your own networks. */
+@Composable
+private fun TrustedApsSection() {
+    val prefs = app.prefs
+    val conn by Collector.wifiConnection.collectAsState()
+    var trusted by remember { mutableStateOf(prefs.trustedAps) }
+    Text(Texts.tr("Your network's access points", "Access point della tua rete"), style = MaterialTheme.typography.titleMedium)
+    Text(
+        Texts.tr(
+            "When your phone joins one of your networks, its access point is remembered. Joining it later through an unknown one (another vendor) raises an alert: that's an evil twin that got your phone.",
+            "Quando il telefono si collega a una tua rete, l'access point viene ricordato. Se in seguito si collega tramite uno sconosciuto (altro produttore) scatta un'allerta: è un evil twin che ha agganciato il tuo telefono.",
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    conn?.let { c ->
+        Text(
+            Texts.tr("Connected: ", "Connesso: ") + "${c.ssid} · ${c.bssid}" +
+                if (!c.own) "" else if (c.trusted) Texts.tr(" · trusted", " · fidato") else Texts.tr(" · UNKNOWN", " · SCONOSCIUTO"),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (c.own && !c.trusted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+        )
+        if (c.own && !c.trusted) {
+            OutlinedButton(onClick = {
+                prefs.trustedAps = prefs.trustedAps + "${c.ssid}|${c.bssid}"
+                trusted = prefs.trustedAps
+                Collector.wifiConnection.value = c.copy(trusted = true)
+            }) { Text(Texts.tr("It's mine: trust this access point", "È mio: fidati di questo access point")) }
+        }
+    }
+    if (trusted.isNotEmpty()) {
+        Text(trusted.sorted().joinToString("\n") { "• " + it.replace("|", " · ") }, style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = { prefs.trustedAps = emptySet(); trusted = emptySet() }) {
+            Text(Texts.tr("Forget trusted access points", "Dimentica gli access point fidati"))
+        }
+    }
 }

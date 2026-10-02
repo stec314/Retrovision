@@ -101,6 +101,10 @@ sealed class Reason {
     data class RotatedAddresses(val addresses: Int) : Reason()
     /** Matches a notable-device signature (pentest tool, ALPR camera, body cam, glasses...). Information, not proof. */
     data class Notable(val name: String, val kind: NotableKind) : Reason()
+    /** Not there when you arrived at a stop, appeared later, and left when you left — [stops] times. */
+    data class JoinedAfterYou(val stops: Int) : Reason()
+    /** Heard right before and right after [turns] of your [of] changes of direction. */
+    data class StayedThroughTurns(val turns: Int, val of: Int) : Reason()
     /** A drone: [remoteId] true when it broadcast Remote ID ([id] is then its serial). */
     data class Drone(val id: String?, val remoteId: Boolean) : Reason()
 }
@@ -162,6 +166,9 @@ class AnalysisResult(
     /** Sorted by score, descending. Ignored entities are not included. */
     val entities: List<EntityReport>,
     val ignoredEntities: Int,
+    /** Your changes of direction and stops in the window (route-check context). */
+    val turns: Int = 0,
+    val stops: Int = 0,
 ) {
     val alerts: List<EntityReport> get() = entities.filter { it.alert }
 }
@@ -202,6 +209,17 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             .filter { it.sighting.timeMs in from..nowMs }
             .groupBy { it.entityId }
 
+        // Your route: stops and turns, and when the receivers were hearing anything at all.
+        val stops = Route.stops(timeline.fixes, { placeOfFix[it]?.id })
+        val turns = Route.turns(timeline.fixes)
+        val activeMinutes = HashSet<Long>()
+        for (list in byEntity.values) for (es in list) activeMinutes += es.sighting.timeMs / 60_000L
+        val route = RouteContext(
+            stops, turns,
+            elsewhere = { t, place -> timeline.nearest(t)?.let { placeOfFix[it]?.id != place } ?: false },
+            sensorActive = { t -> (t / 60_000L) in activeMinutes },
+        )
+
         var ignored = 0
         val reports = ArrayList<EntityReport>(byEntity.size)
         for ((id, list) in byEntity) {
@@ -209,10 +227,10 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 ignored++
                 continue
             }
-            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents)
+            reports += score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route)
         }
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
-        return AnalysisResult(nowMs, clusterer.places, reports, ignored)
+        return AnalysisResult(nowMs, clusterer.places, reports, ignored, turns.size, stops.size)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
@@ -234,6 +252,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         placeOfFix: Map<GeoFix, Place>,
         familiarIds: Set<Int>,
         isResident: Boolean,
+        route: RouteContext,
     ): EntityReport {
         val first = list.first().sighting.timeMs
         val last = list.last().sighting.timeMs
@@ -390,6 +409,19 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             score += 0.15
         }
         if (addresses.size > 1) reasons += Reason.RotatedAddresses(addresses.size)
+
+        // How it behaved around your stops and turns.
+        val b = Route.behaviour(
+            LongArray(list.size) { list[it].sighting.timeMs }, route.stops, route.turns, route.elsewhere, route.sensorActive,
+        )
+        if (b.joinedAfterYou > 0) {
+            reasons += Reason.JoinedAfterYou(b.joinedAfterYou)
+            if (b.joinedAfterYou >= 2) score += 0.15
+        }
+        if (b.stayedThroughTurns >= 2) {
+            reasons += Reason.StayedThroughTurns(b.stayedThroughTurns, route.turns.size)
+            if (b.stayedThroughTurns >= 3) score += 0.10
+        }
         val drone = remoteId || notable.any { it.kind == NotableKind.DRONE }
         if (drone) {
             reasons += Reason.Drone(droneId, remoteId)
@@ -449,6 +481,13 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             isDrone = drone,
         )
     }
+
+    class RouteContext(
+        val stops: List<Route.Stop>,
+        val turns: List<Route.Turn>,
+        val elsewhere: (Long, Int) -> Boolean,
+        val sensorActive: (Long) -> Boolean,
+    )
 
     /**
      * Longest stretch in which the entity was heard without a gap of more than [COMOVE_GAP_MS]

@@ -19,6 +19,9 @@ data class ConnectionUi(
     val error: String = "",
 )
 
+/** Phone's current Wi-Fi association. [own] = one of your networks; [trusted] = known access point for it. */
+data class WifiConn(val ssid: String, val bssid: String, val own: Boolean, val trusted: Boolean)
+
 data class FlashUi(
     val running: Boolean = false,
     val stage: String = "",
@@ -77,6 +80,9 @@ object Collector {
     val phoneCodedPhy = MutableStateFlow(false)
     val phoneStill = MutableStateFlow(false)
     val driftRejected = MutableStateFlow(0L)
+
+    /** The Wi-Fi network the phone is connected to (null when none / unknown). */
+    val wifiConnection = MutableStateFlow<WifiConn?>(null)
 
     /** Drones heard recently (Remote ID or drone-radio signatures). */
     val drones = MutableStateFlow<List<dev.retrovision.core.analysis.Drones.Drone>>(emptyList())

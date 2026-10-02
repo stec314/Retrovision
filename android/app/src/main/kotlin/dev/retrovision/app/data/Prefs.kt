@@ -17,6 +17,11 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("driftGuard", true)
         set(v) = p.edit().putBoolean("driftGuard", v).apply()
 
+    /** "ssid|bssid" pairs your phone has joined for your own networks (trust on first use). */
+    var trustedAps: Set<String>
+        get() = p.getStringSet("trustedAps", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("trustedAps", v).apply()
+
     /** Notify when a drone is heard nearby. */
     var droneAlerts: Boolean
         get() = p.getBoolean("droneAlerts", true)
