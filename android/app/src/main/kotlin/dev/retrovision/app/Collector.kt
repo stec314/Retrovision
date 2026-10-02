@@ -3,6 +3,7 @@ package dev.retrovision.app
 import dev.retrovision.app.probe.ProbeSession
 import dev.retrovision.app.probe.SessionState
 import dev.retrovision.core.analysis.AnalysisResult
+import dev.retrovision.core.analysis.WifiThreats
 import dev.retrovision.core.identity.DeviceCategory
 import dev.retrovision.core.model.GeoFix
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -62,4 +63,7 @@ object Collector {
 
     /** Live radar frame (proximity + indicative bearing), refreshed a few times a second. */
     val liveRadar = MutableStateFlow(RadarFrame())
+
+    /** Active Wi-Fi attacks detected in the recent window. */
+    val threats = MutableStateFlow<List<WifiThreats.Threat>>(emptyList())
 }

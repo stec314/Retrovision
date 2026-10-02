@@ -405,6 +405,23 @@ class CollectorService : Service() {
         )
         Collector.analysis.value = result
 
+        // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
+        val recentWifi = rows.asSequence()
+            .filter { it.radio == 0 && now - it.timeMs <= 3 * 60_000L }
+            .map { it.toSighting() }.toList()
+        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet())
+        Collector.threats.value = threats
+        if (prefs.alertsEnabled && !inQuietHours(now)) {
+            for (th in threats.filter { it.severity >= 0.6 }) {
+                val key = "threat:${th.kind}:${th.bssid}:${th.ssid}"
+                val last = notifiedAt[key]
+                if (last == null || now - last > 10 * 60_000L) {
+                    notifiedAt[key] = now
+                    notifyThreat(th)
+                }
+            }
+        }
+
         if (prefs.alertsEnabled && !inQuietHours(now)) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
             for (a in result.alerts) {
@@ -471,6 +488,24 @@ class CollectorService : Service() {
                 }
             }
         }
+    }
+
+    private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val title = when (th.kind) {
+            dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD -> Texts.tr("Wi-Fi deauth attack", "Attacco Wi-Fi deauth")
+            dev.retrovision.core.analysis.WifiThreats.Kind.KARMA_AP -> Texts.tr("Fake Wi-Fi access point", "Access point Wi-Fi fasullo")
+            dev.retrovision.core.analysis.WifiThreats.Kind.EVIL_TWIN_OWN -> Texts.tr("Clone of your network", "Clone della tua rete")
+        }
+        val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(title)
+            .setContentText(Texts.threat(th))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(("t" + th.kind + th.bssid + th.ssid).hashCode(), n)
     }
 
     private fun notifyProbeLost() {

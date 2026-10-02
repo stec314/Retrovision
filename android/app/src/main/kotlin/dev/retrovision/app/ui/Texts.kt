@@ -15,6 +15,18 @@ object Texts {
     fun notifRunning() = tr("Listening for the probe", "In ascolto della sonda")
     fun channelOngoing() = tr("Collection running", "Raccolta in corso")
     fun channelAlerts() = tr("Possible following", "Possibile pedinamento")
+    fun threat(t: dev.retrovision.core.analysis.WifiThreats.Threat): String = when (t.kind) {
+        dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD ->
+            tr("${t.count} deauth/disassoc frames — someone is forcing devices off a network.",
+               "${t.count} frame deauth/disassoc — qualcuno sta buttando i dispositivi fuori da una rete.")
+        dev.retrovision.core.analysis.WifiThreats.Kind.KARMA_AP ->
+            tr("An AP answered for ${t.distinctSsids} different networks — a fake hotspot impersonating known Wi-Fi.",
+               "Un AP ha risposto per ${t.distinctSsids} reti diverse — un hotspot fasullo che impersona reti note.")
+        dev.retrovision.core.analysis.WifiThreats.Kind.EVIL_TWIN_OWN ->
+            tr("Your network “${t.ssid}” is advertised by ${t.bssids.size} access points — one may be a clone.",
+               "La tua rete “${t.ssid}” è annunciata da ${t.bssids.size} access point — uno potrebbe essere un clone.")
+    }
+
     fun channelAlertsSilent() = tr("Possible following (silent)", "Possibile pedinamento (silenzioso)")
     fun stop() = tr("Stop", "Ferma")
     fun cannotOpenPort() = tr("Cannot open the serial port", "Impossibile aprire la porta seriale")

@@ -335,6 +335,9 @@ class ProbeSession(
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_AUTH)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_ASSOC_REQ)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_REASSOC_REQ)
+                // Attack detection: deauth/disassoc floods.
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),

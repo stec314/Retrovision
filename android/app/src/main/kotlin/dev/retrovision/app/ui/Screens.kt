@@ -160,6 +160,21 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
+        val threats by Collector.threats.collectAsState()
+        if (threats.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("⚠ " + Texts.tr("Wi-Fi attacks nearby", "Attacchi Wi-Fi nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    threats.take(5).forEach {
+                        Text("• " + Texts.threat(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
+            }
+        }
+
         RetrospectiveCard()
     }
 }
