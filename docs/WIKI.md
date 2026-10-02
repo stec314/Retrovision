@@ -122,6 +122,8 @@ Some OSes reset the sequence counter when they rotate the address, and recent de
 
 **Anonymous phones are never stitched.** Their advertising shape (Apple, Google or Microsoft "continuity" messages) is shared by millions of devices, and BLE has no per-device counter like Wi-Fi's sequence number. This is the biggest honest limit of the tool (see *Limits*). Trails are forgotten after 5 minutes, so no cross-day identity is built from BLE.
 
+**Randomisation is weaker than it looks (but we don't exploit that).** BLE address randomisation — Resolvable Private Addresses (RPA), rotated every ≤15 min — has documented breaks: a predictable rotation interval lets old and new addresses be linked by timing (and RSSI continuity) across the change; and an allowlist side channel lets a device's rotating address be tied to a device it has paired with, because a peripheral answers `SCAN_REQ` only from allow-listed centrals (Zhang & Lin, *Breaking BLE MAC Address Randomization*, CVE-2020-35473; ~18% of 100k real devices were exposed). Retrovision uses the mild version of this — RSSI + timing + a distinctive name, within one movement — and deliberately stops there. It does **not** replay or forge packets (the probe only ever listens), and it does not link anonymous phones by timing/RSSI alone: that is population tracking, the opposite of this tool's job. Knowing it is possible is why "my phone randomises, so I'm private" is only partly true.
+
 **MAC trust.** Each entity shows how much its address can be trusted over time:
 - **Stable**: a vendor or public address. Same device, every time.
 - **Until reboot**: a BLE random static address.
@@ -526,5 +528,6 @@ Retrovision is free software under the **GNU GPL, version 3 or later** (`GPL-3.0
 - Vanhoef et al., *Why MAC Address Randomization is not Enough*, AsiaCCS 2016
 - Matte, Cunche, Rousseau, Vanhoef, *Defeating MAC Address Randomization Through Timing Attacks*, ACM WiSec 2016
 - Puig, Michaelides, Pintor, Bellalta, Wilhelmi, *Can Machine Learning Break Wi-Fi Privacy? A Study on MAC Address Randomization*, arXiv:2606.25788, 2026
+- Zhang & Lin, *Breaking BLE MAC Address Randomization with Allowlist-Based Side Channels*, ACM ToPS 28(4), 2025 (CVE-2020-35473)
 - [AirGuard](https://github.com/seemoo-lab/AirGuard): tracker detection on Android
 - [Chasing Your Tail NG](https://github.com/ArgeliusLabs/Chasing-Your-Tail-NG)
