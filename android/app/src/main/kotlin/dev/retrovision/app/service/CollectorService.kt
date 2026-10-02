@@ -66,6 +66,7 @@ class CollectorService : Service() {
     private var locationManager: LocationManager? = null
     private var lastFixWritten = 0L
     private val notifiedAt = HashMap<String, Long>()
+    private val notifiedScore = HashMap<String, Double>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -135,6 +136,9 @@ class CollectorService : Service() {
         )
         nm.createNotificationChannel(
             NotificationChannel(CH_ALERTS, Texts.channelAlerts(), NotificationManager.IMPORTANCE_HIGH),
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_ALERTS_SILENT, Texts.channelAlertsSilent(), NotificationManager.IMPORTANCE_LOW),
         )
     }
 
@@ -332,11 +336,20 @@ class CollectorService : Service() {
         )
         Collector.analysis.value = result
 
-        for (a in result.alerts) {
-            val last = notifiedAt[a.entityId]
-            if (last == null || now - last > 30 * 60_000L) {
-                notifiedAt[a.entityId] = now
-                notifyAlert(a)
+        if (prefs.alertsEnabled && !inQuietHours(now)) {
+            val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
+            for (a in result.alerts) {
+                val last = notifiedAt[a.entityId]
+                val lastScore = notifiedScore[a.entityId]
+                // A clear escalation (+15 pts) always breaks through the cooldown.
+                val escalated = lastScore != null && a.score >= lastScore + 0.15
+                val cooldownOk = last == null || now - last >= cooldownMs
+                val risesOk = !prefs.alertOnlyIfScoreRises || lastScore == null || a.score + 1e-9 >= lastScore
+                if (escalated || (cooldownOk && risesOk)) {
+                    notifiedAt[a.entityId] = now
+                    notifiedScore[a.entityId] = a.score
+                    notifyAlert(a)
+                }
             }
         }
         // Retention
@@ -368,15 +381,30 @@ class CollectorService : Service() {
         }
     }
 
+    /** True when [now] falls inside the user's quiet hours (local time, may wrap past midnight). */
+    private fun inQuietHours(now: Long): Boolean {
+        if (!prefs.quietHoursEnabled) return false
+        val start = prefs.quietStartHour
+        val end = prefs.quietEndHour
+        if (start == end) return false
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = now
+        val h = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        return if (start < end) h in start until end else h >= start || h < end
+    }
+
     private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {
         val nm = getSystemService(NotificationManager::class.java)
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val channel = if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS
+        val n = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.alertTitle(Texts.entityLabel(a)))
             .setContentText(a.reasons.joinToString(" · ") { Texts.reason(it) })
             .setStyle(NotificationCompat.BigTextStyle().bigText(a.reasons.joinToString("\n") { Texts.reason(it) }))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
+            .setSilent(prefs.alertSilent)
+            .setPriority(if (prefs.alertSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .build()
         nm.notify(a.entityId.hashCode(), n)
@@ -386,6 +414,7 @@ class CollectorService : Service() {
         const val ACTION_STOP = "dev.retrovision.app.STOP"
         private const val CH_ONGOING = "ongoing"
         private const val CH_ALERTS = "alerts"
+        private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
 
         fun start(ctx: Context) {

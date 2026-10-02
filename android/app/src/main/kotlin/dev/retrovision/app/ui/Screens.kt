@@ -362,6 +362,8 @@ fun SettingsScreen(modifier: Modifier) {
         Text(Texts.tr("Keep data for $retention days", "Conserva i dati per $retention giorni"))
         Slider(value = retention.toFloat(), onValueChange = { retention = it.toInt() }, onValueChangeFinished = { prefs.retentionDays = retention }, valueRange = 1f..30f)
 
+        NotificationsSection()
+
         OutlinedTextField(
             value = own, onValueChange = { own = it; prefs.ownSsids = it }, modifier = Modifier.fillMaxWidth(),
             label = { Text(Texts.tr("Your own Wi-Fi names (comma separated)", "Nomi delle tue reti Wi-Fi (separati da virgola)")) },
@@ -416,5 +418,74 @@ fun SettingsScreen(modifier: Modifier) {
             },
             dismissButton = { TextButton(onClick = { wipe = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
+    }
+}
+
+
+/** Lets the user decide how and when alerts notify them. */
+@Composable
+private fun NotificationsSection() {
+    val ctx = LocalContext.current
+    val prefs = app.prefs
+    var enabled by remember { mutableStateOf(prefs.alertsEnabled) }
+    var once by remember { mutableStateOf(prefs.alertOncePerDevice) }
+    var cooldown by remember { mutableIntStateOf(prefs.alertCooldownMin) }
+    var rises by remember { mutableStateOf(prefs.alertOnlyIfScoreRises) }
+    var silent by remember { mutableStateOf(prefs.alertSilent) }
+    var quiet by remember { mutableStateOf(prefs.quietHoursEnabled) }
+    var qStart by remember { mutableIntStateOf(prefs.quietStartHour) }
+    var qEnd by remember { mutableIntStateOf(prefs.quietEndHour) }
+
+    Text(Texts.tr("Alerts", "Allarmi"), style = MaterialTheme.typography.titleMedium)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(Texts.tr("Notify when a device may be following you", "Avvisa quando un dispositivo potrebbe seguirti"), modifier = Modifier.weight(1f))
+        Switch(checked = enabled, onCheckedChange = { enabled = it; prefs.alertsEnabled = it })
+    }
+    if (enabled) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Only once per device (this session)", "Solo una volta per dispositivo (questa sessione)"), modifier = Modifier.weight(1f))
+            Switch(checked = once, onCheckedChange = { once = it; prefs.alertOncePerDevice = it })
+        }
+        if (!once) {
+            Text(Texts.tr("Wait between repeats for the same device: $cooldown min", "Attesa tra ripetizioni per lo stesso dispositivo: $cooldown min"))
+            Slider(
+                value = cooldown.toFloat(),
+                onValueChange = { cooldown = (it / 5).toInt() * 5 },
+                onValueChangeFinished = { prefs.alertCooldownMin = cooldown },
+                valueRange = 5f..360f,
+            )
+            Text(
+                Texts.tr(
+                    "A clear jump in score (+15%) always gets through, whatever the wait.",
+                    "Un salto netto del punteggio (+15%) passa sempre, qualunque sia l'attesa.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Repeat only if the score went up", "Ripeti solo se il punteggio è salito"), modifier = Modifier.weight(1f))
+            Switch(checked = rises, onCheckedChange = { rises = it; prefs.alertOnlyIfScoreRises = it })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Silent (no sound or vibration)", "Silenzioso (niente suono o vibrazione)"), modifier = Modifier.weight(1f))
+            Switch(checked = silent, onCheckedChange = { silent = it; prefs.alertSilent = it })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Quiet hours", "Ore di silenzio"), modifier = Modifier.weight(1f))
+            Switch(checked = quiet, onCheckedChange = { quiet = it; prefs.quietHoursEnabled = it })
+        }
+        if (quiet) {
+            Text(Texts.tr("From $qStart:00 to $qEnd:00 (alerts held until it ends)", "Dalle $qStart:00 alle $qEnd:00 (gli allarmi attendono la fine)"))
+            Text(Texts.tr("Start", "Inizio") + " $qStart:00", style = MaterialTheme.typography.bodySmall)
+            Slider(value = qStart.toFloat(), onValueChange = { qStart = it.toInt() }, onValueChangeFinished = { prefs.quietStartHour = qStart }, valueRange = 0f..23f, steps = 22)
+            Text(Texts.tr("End", "Fine") + " $qEnd:00", style = MaterialTheme.typography.bodySmall)
+            Slider(value = qEnd.toFloat(), onValueChange = { qEnd = it.toInt() }, onValueChangeFinished = { prefs.quietEndHour = qEnd }, valueRange = 0f..23f, steps = 22)
+        }
+        TextButton(onClick = {
+            val i = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { ctx.startActivity(i) }
+        }) { Text(Texts.tr("Sound & vibration (system settings)", "Suono e vibrazione (impostazioni di sistema)")) }
     }
 }

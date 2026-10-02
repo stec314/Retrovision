@@ -15,6 +15,7 @@ object Texts {
     fun notifRunning() = tr("Listening for the probe", "In ascolto della sonda")
     fun channelOngoing() = tr("Collection running", "Raccolta in corso")
     fun channelAlerts() = tr("Possible following", "Possibile pedinamento")
+    fun channelAlertsSilent() = tr("Possible following (silent)", "Possibile pedinamento (silenzioso)")
     fun stop() = tr("Stop", "Ferma")
     fun cannotOpenPort() = tr("Cannot open the serial port", "Impossibile aprire la porta seriale")
     fun alertTitle(label: String) = tr("Seen with you again: $label", "Ti segue? $label")
