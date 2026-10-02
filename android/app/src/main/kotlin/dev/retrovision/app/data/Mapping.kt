@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.data
 
 import dev.retrovision.core.model.BleAddressKind
@@ -28,6 +30,8 @@ fun Sighting.toRow(entityId: String): SightingRow = SightingRow(
     advType = ble?.advType ?: 0,
     advData = ble?.advData ?: EMPTY,
     txPower = ble?.txPowerDbm ?: 0,
+    source = probeId,
+    tsf = wifi?.tsfUs ?: -1,
 )
 
 fun SightingRow.toSighting(): Sighting {
@@ -37,8 +41,9 @@ fun SightingRow.toSighting(): Sighting {
             timeMs, Radio.WIFI, mac, rssi, merged,
             wifi = WifiDetail(
                 WifiKind.entries[wifiKind.coerceIn(0, WifiKind.entries.size - 1)], channel, ssid,
-                if (bssid >= 0) MacAddress(bssid) else null, seq, ies,
+                if (bssid >= 0) MacAddress(bssid) else null, seq, ies, tsfUs = tsf,
             ),
+            probeId = source,
         )
     } else {
         Sighting(
@@ -47,6 +52,31 @@ fun SightingRow.toSighting(): Sighting {
                 BleAddressKind.entries[bleAddrKind.coerceIn(0, BleAddressKind.entries.size - 1)],
                 advType, advData, txPower,
             ),
+            probeId = source,
+        )
+    }
+}
+
+/** Like [toSighting] but drops raw IEs (unused by analysis) to save memory on bulk loads. */
+fun SightingRow.toSightingLight(): Sighting {
+    val mac = MacAddress(address)
+    return if (radio == 0) {
+        Sighting(
+            timeMs, Radio.WIFI, mac, rssi, merged,
+            wifi = WifiDetail(
+                WifiKind.entries[wifiKind.coerceIn(0, WifiKind.entries.size - 1)], channel, ssid,
+                if (bssid >= 0) MacAddress(bssid) else null, seq, ByteArray(0), tsfUs = tsf,
+            ),
+            probeId = source,
+        )
+    } else {
+        Sighting(
+            timeMs, Radio.BLE, mac, rssi, merged,
+            ble = BleDetail(
+                BleAddressKind.entries[bleAddrKind.coerceIn(0, BleAddressKind.entries.size - 1)],
+                advType, advData, txPower,
+            ),
+            probeId = source,
         )
     }
 }

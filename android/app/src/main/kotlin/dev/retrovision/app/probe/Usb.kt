@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.probe
 
 import android.app.PendingIntent
@@ -56,20 +58,31 @@ class UsbAccess(private val ctx: Context) {
         }
     }
 
-    /** Opens the first serial port of [d] at 115200 8N1. Native USB ignores the line settings. */
-    fun openPort(d: UsbDevice): UsbSerialPort? {
+    /**
+     * Opens the first serial port of [d] at [baud] 8N1. Native USB ignores the line settings.
+     * With [release] the DTR/RTS lines are deasserted, so the auto-reset circuit of
+     * UART boards (NodeMCU, DevKitC) lets the chip run instead of holding it in reset/download.
+     */
+    fun openPort(d: UsbDevice, baud: Int = ROM_BAUD, release: Boolean = false): UsbSerialPort? {
         val table = UsbSerialProber.getDefaultProbeTable()
             .apply { addProduct(UsbIds.ESPRESSIF, 0x1001, CdcAcmSerialDriver::class.java) }
         val driver = UsbSerialProber(table).probeDevice(d) ?: return null
         val conn = mgr.openDevice(d) ?: return null
         val port = driver.ports.firstOrNull() ?: return null
         port.open(conn)
-        port.setParameters(115200, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+        port.setParameters(baud, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+        if (release && !UsbIds.isNativeUsb(d)) {
+            runCatching { port.dtr = false; port.rts = false }
+        }
         return port
     }
 
     companion object {
         const val ACTION_PERMISSION = "dev.retrovision.app.USB_PERMISSION"
+        /** ROM bootloader speed (flashing). */
+        const val ROM_BAUD = 115200
+        /** Probe firmware speed on UART boards (classic ESP32 behind CP210x/CH340). */
+        const val PROBE_BAUD = 921600
     }
 }
 

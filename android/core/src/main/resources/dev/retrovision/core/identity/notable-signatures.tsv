@@ -1,0 +1,363 @@
+# Retrovision notable-device signatures.
+# Derived from the Fieldwatch signature catalog v88 (c) 2026 Off Grid Pete LLC, MIT License,
+# https://github.com/OffGridPete/Fieldwatch  -- subset: hacking tools, surveillance, law-enforcement
+# gear, smart glasses, recording pendants, drones. Regenerate with tools/notable/import_fieldwatch.py.
+# F<TAB>id<TAB>name<TAB>kind<TAB>note ; R<TAB>rule<TAB>radio(WIFI|BLE|*)<TAB>text<TAB>companyId<TAB>dataPrefixHex
+F	fleet-airlink	AirLink	LAW_ENFORCEMENT	Sierra Wireless AirLink vehicle gateway. Common in US police and public-safety fleets; also commercial fleet. Hidden or renamed SSIDs still hit on the Sierra Wireless IEEE OUI. Pattern match, not that agency or that car. Look with your eyes.
+R	NAME_CONTAINS	WIFI	AirLink	0	
+R	NAME_GLOB	WIFI	AirLink*	0	
+R	NAME_GLOB	WIFI	AIRLINK*	0	
+R	OUI	WIFI	00:14:3E	0	
+R	OUI	WIFI	00:A0:D5	0	
+R	OUI	WIFI	28:A3:31	0	
+R	OUI	WIFI	50:13:9D	0	
+R	OUI	WIFI	64:CE:6E	0	
+R	OUI	WIFI	84:DB:2F	0	
+R	OUI	WIFI	CC:93:4A	0	
+F	fleet-autel	Autel	DRONE	Autel drone, controller, or setup Wi-Fi. In-flight digital license plate is the Remote ID row.
+R	NAME_CONTAINS	*	Autel	0	
+R	NAME_GLOB	*	Autel*	0	
+R	NAME_GLOB	WIFI	Autel_*	0	
+R	NAME_GLOB	BLE	Autel*	0	
+F	fleet-avigilon	Avigilon	SURVEILLANCE	Motorola Avigilon cameras / LPR. Used on municipal poles and commercial sites — video and sometimes plates. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Avigilon	0	
+R	NAME_GLOB	*	Avigilon*	0	
+F	fleet-axis	Axis	SURVEILLANCE	Axis Communications cameras, common on municipal poles and public CCTV. Name-only (AXIS-). Pattern match, not that camera. Look with your eyes.
+R	NAME_GLOB	*	AXIS-*	0	
+R	NAME_GLOB	*	Axis-*	0	
+R	NAME_CONTAINS	*	AXIS-	0	
+R	NAME_CONTAINS	*	Axis Camera	0	
+F	fleet-axon	Axon	LAW_ENFORCEMENT	Axon body-worn, in-car (Fleet), dock, or TASER gear. IEEE OUI 00:25:DF is Axon Enterprise. Body 3/4 often advertise BLE on that public OUI while worn. A name like Axon Body is a pattern, not that officer. Quiet or LTE-only units will not appear. The word Axon also hits some ZTE phones. Look with your eyes. Not identity.
+R	OUI	*	00:25:DF	0	
+R	NAME_CONTAINS	*	Axon Fleet	0	
+R	NAME_CONTAINS	*	Axon Body	0	
+R	NAME_CONTAINS	*	Axon Dock	0	
+R	NAME_GLOB	*	Axon*	0	
+R	SERVICE_UUID	*	FE6B	0	
+R	SERVICE_UUID	*	FE6C	0	
+R	SERVICE_UUID	*	FC81	0	
+R	MANUFACTURER_ID	*		845	
+R	SERVICE_DATA	BLE		0	425743444556494345
+F	fleet-bee	Bee Pendant	RECORDER	Bee Pioneer wearable recorder (Amazon). BLE service 03d5d5c4. It records conversations. Not proof someone is recording you. A miss is not a clean bill (off, or a different brand). Look with your eyes.
+R	SERVICE_UUID	*	03D5D5C4-A86C-11EE-9D89-8F2089A49E7E	0	
+R	NAME_CONTAINS	BLE	Bee Pioneer	0	
+R	NAME_GLOB	BLE	Bee Pioneer*	0	
+F	fleet-bliptrack	BlipTrack	SURVEILLANCE	BLIP Systems BlipTrack roadside Bluetooth/Wi-Fi travel-time sensor. Same job as BlueTOAD Spectra: samples passing phones and in-car radios at two points for speed. Quiet or Ethernet-only cabinets may not advertise. Pattern match, not that cabinet.
+R	OUI	*	00:0E:A5	0	
+R	NAME_CONTAINS	*	BlipTrack	0	
+R	NAME_GLOB	*	BlipTrack*	0	
+R	NAME_CONTAINS	*	BLIP Systems	0	
+R	NAME_GLOB	*	BLIP-Track*	0	
+F	fleet-bluetoad	BlueTOAD Spectra	SURVEILLANCE	Iteris roadside Bluetooth travel-time reader (Vantage Velocity, now BlueTOAD Spectra / Spectra CV). Samples phones, headsets, and in-car Bluetooth as vehicles pass; matching the same ID at two points gives speed. About 100 m. A sample, not a full count. Quiet or Ethernet-only cabinets may not advertise. Spectra CV also uses 5.9 GHz C-V2X, which Fieldwatch cannot hear. IEEE Iteris OUI can also hit other Iteris roadside kit. Pattern match, not that cabinet.
+R	OUI	*	00:14:7B	0	
+R	NAME_CONTAINS	*	BlueTOAD	0	
+R	NAME_GLOB	*	BlueTOAD*	0	
+R	NAME_CONTAINS	*	Vantage Velocity	0	
+R	NAME_GLOB	*	VantageVelocity*	0	
+R	NAME_GLOB	*	Vantage-Velocity*	0	
+R	NAME_CONTAINS	*	Spectra CV	0	
+R	NAME_GLOB	*	SpectraCV*	0	
+R	NAME_GLOB	*	Spectra-CV*	0	
+R	NAME_CONTAINS	*	TrafficCast	0	
+R	NAME_GLOB	*	TrafficCast*	0	
+R	NAME_CONTAINS	*	VantageARGUS	0	
+R	NAME_GLOB	*	VantageARGUS*	0	
+R	NAME_CONTAINS	*	BlueARGUS	0	
+R	NAME_GLOB	*	BlueARGUS*	0	
+F	fleet-brilliant-frame	Brilliant Frame	GLASSES	Brilliant Labs Frame AR glasses. BLE service 7A230001. Not proof someone is recording. A miss is not a clean bill (off, or a different brand). Look with your eyes.
+R	SERVICE_UUID	*	7A230001-5475-A6A4-654C-576174636800	0	
+R	NAME_CONTAINS	BLE	Brilliant Frame	0	
+R	NAME_GLOB	BLE	Brilliant Frame*	0	
+F	fleet-bruce	Bruce	HACKING	Bruce ESP32 pentest firmware default AP (BruceNet). Same boards are DIY. Evil-portal SSIDs look like ordinary Wi-Fi and will not hit this row. Not proof of an attack. Look with your eyes.
+R	NAME_CONTAINS	WIFI	BruceNet	0	
+R	NAME_GLOB	WIFI	BruceNet*	0	
+F	fleet-compex	Compex	LAW_ENFORCEMENT	Compex Wi-Fi AP. Some US public-safety agencies use these in vehicles. The same IEEE OUIs appear on other Compex radios. Pattern match, not that agency. Look with your eyes.
+R	NAME_GLOB	WIFI	114K-*	0	
+R	OUI	WIFI	00:40:29	0	
+R	OUI	WIFI	00:80:48	0	
+R	OUI	WIFI	04:F0:21	0	
+F	fleet-cradlepoint	Cradlepoint	LAW_ENFORCEMENT	Ericsson Cradlepoint vehicle router (IBR / R-series). Common in US police and public-safety fleets; also utilities, EMS, and commercial fleet. Hidden or renamed SSIDs still hit on the CradlePoint IEEE OUI. Pattern match, not that agency or that car. Look with your eyes.
+R	NAME_CONTAINS	WIFI	Cradlepoint	0	
+R	NAME_GLOB	WIFI	Cradlepoint*	0	
+R	NAME_GLOB	WIFI	IBR*	0	
+R	NAME_GLOB	WIFI	IBR900*	0	
+R	NAME_GLOB	WIFI	IBR1100*	0	
+R	NAME_GLOB	WIFI	IBR1700*	0	
+R	NAME_GLOB	WIFI	IBR600*	0	
+R	NAME_GLOB	WIFI	IBR600C*	0	
+R	NAME_GLOB	WIFI	IBR650*	0	
+R	NAME_GLOB	WIFI	IBR950*	0	
+R	NAME_GLOB	WIFI	IBR200*	0	
+R	NAME_GLOB	WIFI	R1900*	0	
+R	NAME_GLOB	WIFI	R2100*	0	
+R	NAME_GLOB	WIFI	R2105*	0	
+R	NAME_GLOB	WIFI	R920*	0	
+R	OUI	WIFI	00:30:44	0	
+R	OUI	WIFI	00:E0:1C	0	
+F	fleet-dahua	Dahua	SURVEILLANCE	Dahua cameras. Common on commercial CCTV and some public poles. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Dahua	0	
+R	NAME_CONTAINS	*	DAHUA	0	
+R	NAME_GLOB	*	Dahua*	0	
+F	fleet-digital-ally	Digital Ally	LAW_ENFORCEMENT	Digital Ally body-worn or in-car (FirstVu / EVO family). IEEE OUI 00:23:BD is Digital Ally, Inc. — camera gear, not a chip vendor. Patrol units may stay on LTE and stay quiet. Pattern match, not that officer. Look with your eyes. Not identity.
+R	OUI	*	00:23:BD	0	
+R	NAME_CONTAINS	*	Digital Ally	0	
+R	NAME_GLOB	*	DigitalAlly*	0	
+R	NAME_CONTAINS	*	FirstVu	0	
+R	NAME_GLOB	*	FirstVu*	0	
+R	NAME_CONTAINS	*	EVO-HD	0	
+R	NAME_CONTAINS	*	VuLink	0	
+F	fleet-dji	DJI	DRONE	DJI aircraft, controller, or setup Wi-Fi. Handheld Osmo cameras are the Osmo row. In-flight digital license plate is the Remote ID row.
+R	MANUFACTURER_ID	*		2218	
+R	NAME_CONTAINS	BLE	DJI	0	
+R	NAME_GLOB	BLE	DJI*	0	
+R	NAME_CONTAINS	WIFI	DJI	0	
+R	NAME_GLOB	WIFI	DJI*	0	
+F	fleet-even-g1	Even G1	GLASSES	Even Realities G1 glasses. Name-only when advertised (Even G1). Not proof of recording. A miss is not a clean bill (off, renamed, or paired and quiet). Look with your eyes.
+R	NAME_CONTAINS	BLE	Even G1	0	
+R	NAME_GLOB	BLE	Even G1*	0	
+F	fleet-fieldy	Fieldy	RECORDER	Fieldy wearable AI note-taker (pendant). It records conversations and transcribes them. Not proof someone is recording you. A miss is not a clean bill (off, paired and quiet, or a different brand). Look with your eyes.
+R	NAME_CONTAINS	BLE	Fieldy	0	
+R	NAME_GLOB	BLE	Fieldy*	0	
+F	fleet-flipper	Flipper Zero	HACKING	Flipper Zero (or other Flipper Devices) BLE. Default name starts with Flipper; newer units use IEEE OUI 0C:FA:22. Custom firmware can change the name and MAC. Not proof of an attack. A miss is not a clean bill (Bluetooth off, or renamed). Look with your eyes.
+R	OUI	*	0C:FA:22	0	
+R	NAME_CONTAINS	BLE	Flipper	0	
+R	NAME_GLOB	BLE	Flipper*	0	
+R	NAME_CONTAINS	BLE	Flipper Zero	0	
+F	fleet-flock-cameras	Flock Safety Cameras	SURVEILLANCE	Flock-style roadside ALPR / camera pole — reads plates and can be used to locate a vehicle. IEEE B4:1E:52 or a Flock-* SSID is the strong hit. Current poles are often quiet on Wi-Fi and BLE. Pattern match, not that camera. Look with your eyes.
+R	OUI	*	B4:1E:52	0	
+R	NAME_CONTAINS	*	Flock	0	
+R	NAME_CONTAINS	*	FLCK	0	
+R	NAME_GLOB	*	Flock-*	0	
+R	NAME_GLOB	*	Flock-??????	0	
+R	NAME_CONTAINS	*	CONDOR	0	
+R	NAME_CONTAINS	*	FALCON	0	
+R	NAME_CONTAINS	*	SPARROW	0	
+F	fleet-friend-pendant	Friend Pendant	RECORDER	Friend Pendant / necklace. BLE service 1a3fd0e7. It listens to conversations. Not proof someone is recording you. A miss is not a clean bill (off, or a different brand). Look with your eyes.
+R	SERVICE_UUID	*	1A3FD0E7-B1F3-AC9E-2E49-B647B2C4F8DA	0	
+R	NAME_CONTAINS	BLE	Friend Pendant	0	
+R	NAME_GLOB	BLE	Friend Pendant*	0	
+F	fleet-fs-ext-battery	FS Ext Battery	SURVEILLANCE	Usually associated with a Flock-style camera — an external battery pack on the pole. Name hits are stronger. Current poles are often quiet on Wi-Fi and BLE. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	FS Ext Battery	0	
+R	NAME_GLOB	*	FS_*	0	
+R	NAME_GLOB	*	FS Ext*	0	
+R	OUI	*	04:0D:84	0	
+R	OUI	*	1C:34:F1	0	
+R	OUI	*	38:5B:44	0	
+R	OUI	*	94:34:69	0	
+R	OUI	*	B4:E3:F9	0	
+R	OUI	*	F0:82:C0	0	
+F	fleet-genetec	Genetec AutoVu	SURVEILLANCE	Genetec AutoVu is municipal / parking ALPR — reads plates at lots and roadside. Name-only when advertised. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Genetec	0	
+R	NAME_CONTAINS	*	AutoVu	0	
+R	NAME_GLOB	*	Genetec*	0	
+R	NAME_GLOB	*	AutoVu*	0	
+F	fleet-ghostesp	GhostESP	HACKING	GhostESP ESP32 audit firmware default AP (GhostNet). Same boards are DIY. Not proof of an attack. A miss is not a clean bill (renamed). Look with your eyes.
+R	NAME_CONTAINS	WIFI	GhostNet	0	
+R	NAME_GLOB	WIFI	GhostNet*	0	
+F	fleet-hak5-pineapple	Hak5 Pineapple	HACKING	Hak5 WiFi Pineapple setup or management AP (Pineapple_XXXX). That is the admin radio, not every rogue SSID PineAP might impersonate — those look like ordinary café Wi-Fi. A miss is not a clean bill (renamed, or only cloning). Pattern match, not identity. Look with your eyes.
+R	NAME_GLOB	*	Pineapple_*	0	
+R	NAME_CONTAINS	*	Pineapple_	0	
+R	NAME_CONTAINS	*	WiFi Pineapple	0	
+R	NAME_CONTAINS	*	Hak5	0	
+R	NAME_GLOB	*	Hak5*	0	
+F	fleet-hanwha-wisenet	Hanwha Wisenet	SURVEILLANCE	Hanwha Vision / Wisenet cameras. Common on commercial CCTV and some public poles. A *_WISENET setup SSID is the stronger hit; IEEE 00:09:18 is Samsung Techwin. Pattern match, not that camera. Look with your eyes.
+R	OUI	*	00:09:18	0	
+R	NAME_CONTAINS	*	Wisenet	0	
+R	NAME_GLOB	*	Wisenet*	0	
+R	NAME_GLOB	*	*_WISENET	0	
+R	NAME_GLOB	*	*WISENET*	0	
+R	NAME_CONTAINS	*	Hanwha	0	
+R	NAME_GLOB	*	Hanwha*	0	
+F	fleet-hayden-ai	Hayden AI	SURVEILLANCE	Hayden AI cameras ride on buses and city vehicles — video and plates. Name-only when advertised. LTE-only units will not appear. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Hayden AI	0	
+R	NAME_GLOB	*	HaydenAI*	0	
+R	NAME_GLOB	*	Hayden-AI*	0	
+F	fleet-hikvision	Hikvision	SURVEILLANCE	Hikvision cameras. Common on commercial CCTV and some public poles. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Hikvision	0	
+R	NAME_CONTAINS	*	HIKVISION	0	
+R	NAME_GLOB	*	Hikvision*	0	
+F	fleet-hobby-ble	Hobby BLE serial	HACKING	These default BLE serial names are cheap hobby modules. Some pump/ATM overlays have used boards like this so someone nearby can pull data over Bluetooth. The same modules show up on printers, cars, and DIY. If this radio is loud next to a card reader, treat it with caution and look with your eyes. Not proof of a skimmer. A miss is not a clean bill (name changed, Classic HC-05/HC-06, or cellular). Fieldwatch does not connect and does not try default PINs. Fieldwatch does not see Classic HC-05/HC-06.
+R	NAME_CONTAINS	BLE	HMSoft	0	
+R	NAME_GLOB	BLE	HMSoft*	0	
+R	NAME_CONTAINS	BLE	HM-10	0	
+R	NAME_GLOB	BLE	HM-10*	0	
+R	NAME_CONTAINS	BLE	CC41-A	0	
+R	NAME_GLOB	BLE	CC41*	0	
+R	NAME_CONTAINS	BLE	AT-09	0	
+R	NAME_GLOB	BLE	AT-09*	0	
+R	NAME_CONTAINS	BLE	JDY-08	0	
+R	NAME_CONTAINS	BLE	JDY-10	0	
+R	NAME_CONTAINS	BLE	JDY-16	0	
+R	NAME_CONTAINS	BLE	JDY-31	0	
+R	NAME_GLOB	BLE	JDY-*	0	
+R	NAME_CONTAINS	BLE	BT05	0	
+R	NAME_CONTAINS	BLE	MLT-BT05	0	
+R	NAME_CONTAINS	BLE	ESP32	0	
+R	NAME_GLOB	BLE	ESP32-*	0	
+F	fleet-hoverair	HOVERAir	DRONE	HOVERAir pocket selfie drone. In-flight digital license plate (PRO / PROMAX) is the Remote ID row.
+R	NAME_CONTAINS	*	HOVERAir	0	
+R	NAME_GLOB	*	HOVERAir*	0	
+R	NAME_GLOB	WIFI	Hover*	0	
+R	NAME_GLOB	WIFI	HoverX1*	0	
+R	NAME_GLOB	BLE	Hover*	0	
+R	NAME_GLOB	BLE	HOVERAir*	0	
+F	fleet-limitless	Limitless Pendant	RECORDER	Limitless Pendant wearable recorder. BLE service 632de001. It records conversations. Not proof someone is recording you. A miss is not a clean bill (off, paired and quiet, or a different brand). Look with your eyes.
+R	SERVICE_UUID	*	632DE001-604C-446B-A80F-7963E950F3FB	0	
+R	NAME_CONTAINS	BLE	Limitless	0	
+R	NAME_GLOB	BLE	Limitless*	0	
+F	fleet-lvt	LVT LiveView	SURVEILLANCE	LVT / LiveView solar camera trailer — parking lots, construction, some city parks. Video and sometimes plates. Most units use cellular and stay quiet on Wi-Fi/BLE. A LiveView or LVT- name is a pattern, not that trailer. Look with your eyes.
+R	NAME_CONTAINS	*	LiveView	0	
+R	NAME_GLOB	*	LiveView*	0	
+R	NAME_GLOB	*	LVT-*	0	
+R	NAME_GLOB	*	LVT_*	0	
+F	fleet-marauder	Marauder / Deauther	HACKING	ESP32 Marauder or Spacehuhn-style Wi-Fi deauther default names. Same boards are DIY. Not proof of an attack. A miss is not a clean bill (renamed). Look with your eyes.
+R	NAME_CONTAINS	*	MarauderAP	0	
+R	NAME_CONTAINS	*	Marauder	0	
+R	NAME_GLOB	*	Marauder*	0	
+R	NAME_CONTAINS	*	ESP32 Marauder	0	
+R	NAME_CONTAINS	*	Deauther	0	
+R	NAME_GLOB	*	Deauther*	0	
+F	fleet-miovision	Miovision	SURVEILLANCE	Miovision traffic cameras at intersections. Video and sometimes plates. Name-only when advertised. Many units are cellular-only and stay quiet. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Miovision	0	
+R	NAME_GLOB	*	Miovision*	0	
+F	fleet-vigilant	Motorola Vigilant	SURVEILLANCE	Motorola Vigilant is LPR — plate readers used by agencies and parking. Name-only when advertised. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Vigilant Solutions	0	
+R	NAME_CONTAINS	*	Motorola Vigilant	0	
+R	NAME_CONTAINS	*	Vigilant	0	
+F	fleet-novatel	Novatel Wireless	LAW_ENFORCEMENT	Novatel Wireless / Inseego OUI 28:80:A2. Reported in public-safety vehicle AP work. Same prefix is also on some Inseego consumer MiFi radios. Pattern match, not that agency. Look with your eyes.
+R	OUI	WIFI	28:80:A2	0	
+F	fleet-omi	Omi	RECORDER	Omi pendant or OpenGlass camera glasses. Name or BLE service 23ba7924. It can record audio (OpenGlass also has a camera). Not proof someone is recording you. A miss is not a clean bill (off, renamed, or a DIY board using other names). Look with your eyes.
+R	SERVICE_UUID	*	23BA7924-0000-1000-7450-346EAC492E92	0	
+R	NAME_GLOB	BLE	Omi	0	
+R	NAME_GLOB	BLE	Omi-*	0	
+R	NAME_CONTAINS	BLE	OpenGlass	0	
+R	NAME_GLOB	BLE	OpenGlass*	0	
+F	fleet-panasonic-ipro	Panasonic i-PRO	SURVEILLANCE	Panasonic i-PRO camera or Arbitrator in-car video. Used on buildings and some patrol cars — video and sometimes plates. Name-only (i-PRO / Arbitrator). Not every Panasonic radio. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	i-PRO	0	
+R	NAME_GLOB	*	i-PRO*	0	
+R	NAME_GLOB	*	iPRO*	0	
+R	NAME_CONTAINS	*	Arbitrator	0	
+R	NAME_GLOB	*	Arbitrator*	0	
+F	fleet-parrot	Parrot	DRONE	Parrot ANAFI or Bebop drone. In-flight digital license plate is the Remote ID row. Not a Parrot car kit.
+R	NAME_CONTAINS	*	ANAFI	0	
+R	NAME_GLOB	*	ANAFI*	0	
+R	NAME_CONTAINS	*	Bebop	0	
+R	NAME_GLOB	*	Bebop*	0	
+R	NAME_GLOB	BLE	ANAFI*	0	
+R	NAME_GLOB	WIFI	ANAFI*	0	
+R	NAME_GLOB	BLE	Bebop*	0	
+R	NAME_GLOB	WIFI	Bebop*	0	
+F	fleet-penguin	Penguin	SURVEILLANCE	Penguin is a Flock-family external battery (XUNTONG manufacturer ID). Name hits are older firmware and low uniqueness. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Penguin	0	
+R	NAME_CONTAINS	*	PENGUIN	0	
+R	NAME_GLOB	*	Penguin*	0	
+R	MANUFACTURER_ID	*		2504	
+F	fleet-pigvision	Pigvision	SURVEILLANCE	Pigvision is a Flock-family / roadside camera name. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Pigvision	0	
+R	NAME_CONTAINS	*	PigVision	0	
+R	NAME_CONTAINS	*	PIGVISION	0	
+R	NAME_GLOB	*	Pigvision*	0	
+F	fleet-plaud	Plaud Note	RECORDER	Plaud Note / NotePin AI recorder. It records meetings. Not proof someone is recording you. A miss is not a clean bill (off, renamed, or a different brand). Look with your eyes.
+R	NAME_CONTAINS	BLE	Plaud Note	0	
+R	NAME_GLOB	BLE	Plaud Note*	0	
+R	NAME_GLOB	BLE	Plaud NotePin*	0	
+F	fleet-porkchop	Porkchop	HACKING	M5PORKCHOP / Porkchop — pocket Wi-Fi pentest firmware (Cardputer or Cheap Yellow Display). Default CYD remote AP is named PORKCHOP. BACON-mode fake APs brand vendor IE 50:52:4B. A miss is not a clean bill (renamed, passive only, or no AP). Pattern match, not identity, not proof of an attack. Look with your eyes.
+R	NAME_CONTAINS	*	PORKCHOP	0	
+R	NAME_GLOB	*	PORKCHOP*	0	
+R	NAME_GLOB	*	M5PORKCHOP*	0	
+R	VENDOR_IE_OUI	*	50:52:4B	0	
+F	fleet-pwnagotchi	Pwnagotchi	HACKING	Pwnagotchi-style Wi-Fi handshake collector. Classic units beacon BSSID de:ad:be:ef:de:ad. A pwnagotchi name is a pattern. Not proof of an attack. Look with your eyes.
+R	MAC_PREFIX	*	DE:AD:BE:EF:DE:AD	0	
+R	NAME_CONTAINS	*	pwnagotchi	0	
+R	NAME_GLOB	*	pwnagotchi*	0	
+F	fleet-raven	Raven / ShotSpotter	SURVEILLANCE	Flock Raven or ShotSpotter-style acoustic gunshot sensor, usually on a pole with cameras. BLE UUIDs 3100–3500 are the Raven radio. The XUNTONG battery manufacturer ID is Penguin, not this row. Current Flock-family poles are often quiet on Wi-Fi and BLE.
+R	NAME_CONTAINS	*	RAVEN	0	
+R	NAME_CONTAINS	*	ShotSpotter	0	
+R	NAME_CONTAINS	*	SoundThinking	0	
+R	NAME_CONTAINS	*	Shot Spotter	0	
+R	SERVICE_UUID	*	3100	0	
+R	SERVICE_UUID	*	3200	0	
+R	SERVICE_UUID	*	3300	0	
+R	SERVICE_UUID	*	3400	0	
+R	SERVICE_UUID	*	3500	0	
+R	OUI	*	D4:11:D6	0	
+F	fleet-meta-glasses	Ray-Ban / Meta glasses	GLASSES	Meta / Luxottica BLE — often Ray-Ban Meta smart glasses. The same company IDs show up on Quest headsets and other Meta wearables. Not proof someone is recording. A miss is not a clean bill (paired and quiet, asleep, or a different brand). Look with your eyes.
+R	MANUFACTURER_ID	*		427	
+R	MANUFACTURER_ID	*		1422	
+R	MANUFACTURER_ID	*		3411	
+R	NAME_CONTAINS	BLE	Ray-Ban	0	
+R	NAME_CONTAINS	BLE	RayBan	0	
+R	NAME_GLOB	BLE	Ray-Ban*	0	
+R	NAME_GLOB	BLE	RayBan*	0	
+R	NAME_CONTAINS	BLE	Meta View	0	
+R	NAME_CONTAINS	BLE	Oakley Meta	0	
+R	SERVICE_UUID	*	FEB7	0	
+R	SERVICE_UUID	*	FEB8	0	
+F	fleet-rekor	Rekor	SURVEILLANCE	Rekor is highway / transit ALPR — reads plates on roads and at checkpoints. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Rekor	0	
+R	NAME_GLOB	*	Rekor*	0	
+F	fleet-remote-id	Remote ID	DRONE	In-flight drone digital license plate (ASTM / FAA Remote ID). Decoded fields can show ID, position, heading, and operator. Pattern match, not a tail number. Wi-Fi Remote ID often misses on stock Android.
+R	SERVICE_UUID	*	FFFA	0	
+R	VENDOR_IE_OUI	*	FA:0B:BC	0	
+F	fleet-reveal-media	Reveal Media	LAW_ENFORCEMENT	Reveal Media body-worn camera (D-series / BodyWorn). Name-only when advertised. Patrol units may stay quiet. Pattern match, not that officer. Look with your eyes.
+R	NAME_CONTAINS	*	Reveal Media	0	
+R	NAME_GLOB	*	Reveal D*	0	
+R	NAME_GLOB	*	Reveal-D*	0	
+R	NAME_CONTAINS	*	BodyWorn	0	
+R	NAME_GLOB	*	BodyWorn*	0	
+R	NAME_GLOB	*	RS2-*	0	
+F	fleet-rhombus	Rhombus	SURVEILLANCE	Rhombus cloud cameras on buildings and some public sites. IEEE CC:47:BD or a Rhombus name. BLE often only while unregistered or offline. Pattern match, not that camera. Look with your eyes.
+R	OUI	*	CC:47:BD	0	
+R	NAME_CONTAINS	*	Rhombus	0	
+R	NAME_GLOB	*	Rhombus*	0	
+F	fleet-skydio	Skydio	DRONE	Skydio drone (common in US public-safety / enterprise). In-flight Remote ID is often Wi-Fi and easy to miss — the Remote ID row is the license plate.
+R	NAME_CONTAINS	*	Skydio	0	
+R	NAME_GLOB	*	Skydio*	0	
+R	NAME_GLOB	BLE	Skydio*	0	
+R	NAME_GLOB	WIFI	Skydio*	0	
+F	fleet-snap-spectacles	Snap Spectacles	GLASSES	Snapchat BLE company ID — used by Snap Spectacles. Other Snap BLE products could match. Not proof of recording. Look with your eyes.
+R	MANUFACTURER_ID	*		962	
+R	NAME_CONTAINS	BLE	Snap Spectacles	0	
+R	NAME_CONTAINS	BLE	Spectacles	0	
+R	NAME_GLOB	BLE	Spectacles*	0	
+R	SERVICE_UUID	*	FE45	0	
+F	fleet-tattile	Tattile	SURVEILLANCE	Tattile plate readers on roads and at gates. Name-only when advertised. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Tattile	0	
+R	NAME_GLOB	*	Tattile*	0	
+F	fleet-unifi-protect	UniFi Protect	SURVEILLANCE	UniFi Protect Instant camera in BLE setup. Not a UniFi Wi-Fi access point.
+R	NAME_GLOB	BLE	UVC G* Instant	0	
+R	NAME_CONTAINS	BLE	UVC G3 Instant	0	
+R	NAME_CONTAINS	BLE	UVC G4 Instant	0	
+R	NAME_CONTAINS	BLE	UVC G6 Instant	0	
+F	fleet-uniview	Uniview	SURVEILLANCE	Uniview / UNV cameras. Common on commercial CCTV and some public poles. IEEE Zhejiang Uniview OUIs or a Uniview / UNV- name. Pattern match, not that camera. Look with your eyes.
+R	OUI	*	14:BA:88	0	
+R	OUI	*	48:EA:63	0	
+R	OUI	*	6C:F1:7E	0	
+R	OUI	*	88:26:3F	0	
+R	OUI	*	C4:79:05	0	
+R	NAME_CONTAINS	*	Uniview	0	
+R	NAME_GLOB	*	Uniview*	0	
+R	NAME_GLOB	*	UNV-*	0	
+R	NAME_CONTAINS	*	Uniarch	0	
+R	NAME_GLOB	*	Uniarch*	0	
+F	fleet-utility-inc	Utility Inc	LAW_ENFORCEMENT	Utility, Inc radio. Reported in public-safety vehicle AP work. Pattern match, not that agency. Look with your eyes.
+R	OUI	WIFI	00:09:BC	0	
+R	OUI	WIFI	00:16:ED	0	
+F	fleet-verkada	Verkada	SURVEILLANCE	Verkada cloud cameras, including LPR-capable bullets. Used on buildings and some public sites — video and sometimes plates. Name-only. Pattern match, not that camera. Look with your eyes.
+R	NAME_CONTAINS	*	Verkada	0	
+R	NAME_GLOB	*	Verkada*	0	
+F	fleet-vuzix	Vuzix	GLASSES	Vuzix BLE glasses. Not proof of recording. A miss is not a clean bill (paired and quiet, asleep, or a different brand). Look with your eyes.
+R	MANUFACTURER_ID	*		1548	
+R	NAME_CONTAINS	BLE	Vuzix	0	
+R	NAME_GLOB	BLE	Vuzix*	0	
+F	fleet-watchguard	WatchGuard Video	LAW_ENFORCEMENT	WatchGuard Video body-worn or in-car (VISTA / V300 family). IEEE OUI 00:1D:96 is WatchGuard Video, not the WatchGuard firewall company. Patrol units may stay quiet. Pattern match, not identity. Look with your eyes.
+R	OUI	*	00:1D:96	0	
+R	NAME_CONTAINS	*	WatchGuard	0	
+R	NAME_CONTAINS	*	Watchguard	0	
+R	NAME_GLOB	*	WatchGuard*	0	
+R	NAME_CONTAINS	*	VISTA WiFi	0	
+R	NAME_CONTAINS	*	VISTA XLT	0	
+F	fleet-wolfcom	Wolfcom	LAW_ENFORCEMENT	Wolfcom body-worn or in-car camera. Name-only when advertised. Patrol units may stay quiet. Pattern match, not that officer. Look with your eyes.
+R	NAME_CONTAINS	*	Wolfcom	0	
+R	NAME_GLOB	*	Wolfcom*	0	
+R	NAME_GLOB	*	WOLFCOM*	0	

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Builds the compact vendor tables bundled in the APK.
 
   build_vendors.py oui OUT.tsv oui.csv [mam.csv oui36.csv ...]   # IEEE registry CSVs

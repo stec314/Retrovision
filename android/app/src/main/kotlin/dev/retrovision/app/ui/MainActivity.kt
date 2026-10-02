@@ -1,19 +1,18 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -25,7 +24,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+            RetrovisionTheme {
                 AppRoot()
             }
         }
@@ -35,6 +34,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    val wikiOpen by WikiNav.open.collectAsState()
+    if (wikiOpen) {
+        WikiScreen(onClose = { WikiNav.open.value = false })
+        return
+    }
     val tabs = listOf(
         "📡" to Texts.tr("Status", "Stato"),
         "🔎" to Texts.tr("Devices", "Dispositivi"),

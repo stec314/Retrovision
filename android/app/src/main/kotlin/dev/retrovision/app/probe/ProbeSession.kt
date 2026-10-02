@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.probe
 
 import com.google.protobuf.InvalidProtocolBufferException
@@ -21,6 +23,7 @@ import dev.retrovision.proto.v1.HelloAck
 import dev.retrovision.proto.v1.Observation
 import dev.retrovision.proto.v1.RadioMode
 import dev.retrovision.proto.v1.RadioSchedule
+import dev.retrovision.proto.v1.LedMode
 import dev.retrovision.proto.v1.Reboot
 import dev.retrovision.proto.v1.TimeSyncRequest
 import dev.retrovision.proto.v1.WifiConfig
@@ -76,6 +79,8 @@ class ProbeSession(
     private val scope: CoroutineScope,
     private val onSighting: (Sighting) -> Unit,
     private val nowUs: () -> Long = WallClock::nowUs,
+    private val ledOn: () -> Boolean = { true },
+    private val dataFrames: () -> Boolean = { false },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -88,12 +93,67 @@ class ProbeSession(
     private var syncJob: Job? = null
     private var maintainJob: Job? = null
 
+    // ---- link health (see [tick]) ----
+    private var startedMs = 0L
+    private var lastRxMs = 0L
+    /** Frames received while we still wait for a Hello: the probe is mid-session from a previous host. */
+    private var orphanFrames = 0L
+    private var lastKickMs = 0L
+    var recoveries = 0L
+        private set
+
     private val _state = MutableStateFlow(SessionState())
     val state: StateFlow<SessionState> = _state
 
     /** Flush anything the probe has half-sent, as the protocol recommends after opening the port. */
     fun start() {
-        synchronized(lock) { runCatching { transport.write(byteArrayOf(0)) } }
+        synchronized(lock) {
+            startedMs = System.currentTimeMillis()
+            runCatching { transport.write(byteArrayOf(0)) }
+        }
+    }
+
+    enum class Health { OK, KICKED, DEAD }
+
+    /**
+     * Link watchdog, called periodically by the connection loop. Recovers the two ways a probe
+     * can get stuck without the cable ever leaving:
+     *
+     *  1. Orphaned session: the app reopened the port (service restart, read error) but the probe
+     *     still believes its old session is up, so it streams status/observations and never says
+     *     Hello again. We would wait forever ("waiting for the probe to introduce itself", 0 obs).
+     *     -> ask it to reboot; it comes back with a fresh Hello.
+     *  2. Silence: nothing at all from the probe (stalled USB TX, wedged firmware).
+     *     -> reboot it; if it still says nothing, report DEAD so the caller reopens the port.
+     *
+     * Reboot is honoured by the firmware in every state, including before the handshake.
+     */
+    fun tick(nowMs: Long = System.currentTimeMillis()): Health = synchronized(lock) { tickLocked(nowMs) }
+
+    private fun tickLocked(nowMs: Long): Health {
+        val phase = _state.value.phase
+        if (phase == Phase.REJECTED) return Health.OK
+        val quietFor = nowMs - maxOf(lastRxMs, startedMs)
+        val canKick = nowMs - lastKickMs > KICK_EVERY_MS
+        val stuck = when (phase) {
+            // Hello comes every 2 s: frames without one = orphan; nothing for 8 s = silent.
+            Phase.WAITING_HELLO -> (orphanFrames > 0 && nowMs - startedMs > 3_000) || quietFor > 8_000
+            // Status comes every 10 s.
+            else -> quietFor > 30_000
+        }
+        if (!stuck) return Health.OK
+        if (quietFor > DEAD_AFTER_MS) return Health.DEAD
+        if (!canKick) return Health.OK
+        lastKickMs = nowMs
+        recoveries++
+        orphanFrames = 0
+        update { it.copy(lastLog = "app: probe link stuck, restarting the probe (#$recoveries)") }
+        send(
+            Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                Command.newBuilder().setReboot(Reboot.newBuilder().setIntoBootloader(false)),
+            ).build(),
+        )
+        return Health.KICKED
     }
 
     fun stop() {
@@ -126,6 +186,8 @@ class ProbeSession(
     // ---- handlers (lock held) --------------------------------------------------
 
     private fun handle(env: Envelope) {
+        lastRxMs = System.currentTimeMillis()
+        if (_state.value.phase == Phase.WAITING_HELLO && env.payloadCase != Envelope.PayloadCase.HELLO) orphanFrames++
         trackSeq(env.seq)
         when (env.payloadCase) {
             Envelope.PayloadCase.HELLO -> onHello(env.hello)
@@ -234,6 +296,7 @@ class ProbeSession(
                     seq = w.seqCtrl ushr 4,
                     ies = w.rawIes.toByteArray(),
                     iesTruncated = w.rawIesTruncated,
+                    tsfUs = if (w.tsfUs != 0L) w.tsfUs else -1,
                 )
                 update { it.copy(wifiObs = it.wifiObs + 1) }
                 onSighting(Sighting(timeMs, Radio.WIFI, addr, o.rssiDbm, maxOf(1, o.mergedCount), wifi = detail, probeId = probeId))
@@ -310,12 +373,35 @@ class ProbeSession(
         _state.value = f(_state.value)
     }
 
-    private fun defaultConfig(): Config = Config.newBuilder()
+    /** Resend the running config (LED, data-frame capture) to the probe. Takes effect immediately. */
+    fun resendConfig() {
+        synchronized(lock) {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                    Command.newBuilder().setSetConfig(defaultConfig()),
+                ).build(),
+            )
+        }
+    }
+
+    fun setLedEnabled(on: Boolean) = resendConfig()
+
+    private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
+
+    private fun configWith(led: Boolean, data: Boolean): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_BEACON)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_RESP)
+                // Clients joining a network: shows who is actually connecting, not only searching.
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_AUTH)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_ASSOC_REQ)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_REASSOC_REQ)
+                // Attack detection: deauth/disassoc floods.
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
+                .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
+                .apply { if (data) addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DATA) }
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),
@@ -323,11 +409,14 @@ class ProbeSession(
         .setBle(BleConfig.newBuilder().setEnabled(true).setExtended(true).setDedupMs(1_000))
         .setSchedule(RadioSchedule.newBuilder().setMode(RadioMode.RADIO_MODE_COEX))
         .setStatusIntervalS(10)
+        .setLed(if (led) LedMode.LED_MODE_ON else LedMode.LED_MODE_OFF)
         .build()
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 0
+        const val PROTOCOL_MINOR = 1
+        private const val KICK_EVERY_MS = 12_000L
+        private const val DEAD_AFTER_MS = 45_000L
     }
 }
 

@@ -1,0 +1,46 @@
+# Retrovision probe, classic ESP32 (NodeMCU-32S, ESP32-DevKitC, WROOM-32 boards).
+# Target: idf.py set-target esp32
+CONFIG_IDF_TARGET="esp32"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+# Wi-Fi + BLE + protocol does not fit the default 1 MB app slot.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# --- UART link -------------------------------------------------------------
+# UART0 (behind the CP210x/CH340 bridge) carries the binary protocol ONLY,
+# at 921600 baud. No console on it; application logs travel as Log frames.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+CONFIG_LOG_COLORS=n
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- Wi-Fi sniffer -------------------------------------------------------
+CONFIG_ESP_WIFI_NVS_ENABLED=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
+
+# --- BLE observer (NimBLE) -----------------------------------------------
+# The classic ESP32 radio is Bluetooth 4.2: legacy advertising only, no extended/coded PHY.
+CONFIG_BT_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+
+# --- Wi-Fi / BLE coexistence on the single 2.4 GHz radio -------------------
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# --- Robustness ----------------------------------------------------------
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_FREERTOS_HZ=1000
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
+
+# Log v1 emits one vprintf per line, which log_forward.c relies on.
+CONFIG_LOG_VERSION_1=y

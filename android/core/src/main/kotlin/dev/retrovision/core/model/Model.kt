@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.core.model
 
 /** 48-bit IEEE MAC / BLE address, stored in a Long (MSB first, as written). */
@@ -75,6 +77,8 @@ class WifiDetail(
     /** Raw information elements (may be empty if the probe does not forward them). */
     val ies: ByteArray,
     val iesTruncated: Boolean = false,
+    /** Beacon/probe-response timestamp: the AP's uptime in µs (-1 = unknown). */
+    val tsfUs: Long = -1,
 ) {
     val ssidText: String get() = ssidToText(ssid)
 }

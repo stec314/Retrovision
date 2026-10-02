@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Reference implementation of the Retrovision wire framing.
 
     frame   = COBS( envelope_bytes || CRC32_LE(envelope_bytes) ) || 0x00

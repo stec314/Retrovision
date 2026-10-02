@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -25,10 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import dev.retrovision.app.Collector
 import dev.retrovision.app.RetrovisionApp
@@ -43,25 +43,25 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
-import kotlin.math.cos
-import kotlin.math.max
 
 private val app get() = RetrovisionApp.instance
 
 /** Your own movements and the places that count as routine. Nothing here concerns other devices. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun PlacesScreen(modifier: Modifier) {
     val scope = rememberCoroutineScope()
     val rows by remember { app.db.dao().familiarPlaces() }.collectAsState(initial = emptyList())
     val here by Collector.location.collectAsState()
     var fixes by remember { mutableStateOf<List<GeoFix>>(emptyList()) }
+    val mapState = remember { MapUiState() }
     val places = rows.map { it.toModel() }
     val timeFmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(mapState.windowH) {
         while (true) {
             val now = System.currentTimeMillis()
-            fixes = app.db.dao().fixesSince(now - 24 * 3600_000L).map { it.toFix() }
+            fixes = app.db.dao().fixesSince(now - mapState.windowH * 3600_000L).map { it.toFix() }
             delay(30_000)
         }
     }
@@ -80,26 +80,43 @@ fun PlacesScreen(modifier: Modifier) {
             style = MaterialTheme.typography.bodySmall,
         )
 
-        Text(Texts.tr("Your last 24 hours", "Le tue ultime 24 ore"), style = MaterialTheme.typography.titleMedium)
-        TrackMap(fixes, places.filter { it.state == FamiliarPlace.State.CONFIRMED }, here)
+        val routinePlaces = places.filter { it.state == FamiliarPlace.State.CONFIRMED }
+        val map: @Composable (Modifier) -> Unit = { m ->
+            TrackMap(
+                fixes = fixes,
+                visits = visits,
+                routine = routinePlaces,
+                here = here,
+                state = mapState,
+                onSaveRoutine = { e -> saveRoutine(scope, e) },
+                onDeleteRoutine = { id -> scope.launch { app.db.dao().setFamiliarState(id, FamiliarPlace.State.REJECTED.ordinal); Collector.analyzeNow.value = System.nanoTime() } },
+                modifier = m,
+            )
+        }
+        if (mapState.fullscreen) {
+            FullscreenMap(content = { map(Modifier.fillMaxSize()) }, onClose = { mapState.fullscreen = false })
+            Box(Modifier.fillMaxWidth().height(380.dp))
+        } else {
+            map(Modifier.fillMaxWidth().height(380.dp))
+        }
+        Text(
+            Texts.tr(
+                "Pinch to zoom · tap a point or stay · long press to pick a spot · ☰ for period, layers and maps",
+                "Pizzica per lo zoom · tocca un punto o una sosta · tieni premuto per scegliere un punto · ☰ per periodo, livelli e mappe",
+            ),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         OutlinedButton(
             enabled = here != null,
             onClick = {
                 val h = here ?: return@OutlinedButton
-                scope.launch {
-                    app.db.dao().addFamiliar(
-                        FamiliarRow(
-                            lat = h.lat, lon = h.lon, radiusM = 150.0, label = "",
-                            state = FamiliarPlace.State.CONFIRMED.ordinal,
-                            kind = FamiliarPlace.Kind.FREQUENT.ordinal, createdMs = System.currentTimeMillis(),
-                        ),
-                    )
-                    Collector.analyzeNow.value = System.nanoTime()
-                }
+                mapState.startEdit(RoutineEdit(null, h.lat, h.lon, 150.0, ""))
             },
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(Texts.tr("Mark where I am now as routine", "Segna dove sono ora come luogo di routine")) }
+        ) { Text(Texts.tr("Mark where I am now as routine…", "Segna dove sono ora come luogo di routine…")) }
+        OfflineMapsCard()
 
         val suggestions = rows.filter { it.state == FamiliarPlace.State.SUGGESTED.ordinal }
         if (suggestions.isNotEmpty()) {
@@ -115,6 +132,7 @@ fun PlacesScreen(modifier: Modifier) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { setState(scope, r, FamiliarPlace.State.CONFIRMED) }) { Text(Texts.tr("Yes", "Sì")) }
                             OutlinedButton(onClick = { setState(scope, r, FamiliarPlace.State.REJECTED) }) { Text(Texts.tr("No", "No")) }
+                            TextButton(onClick = { mapState.startEdit(RoutineEdit(r.id, r.lat, r.lon, r.radiusM, r.label)) }) { Text(Texts.tr("Adjust area", "Regola area")) }
                         }
                     }
                 }
@@ -124,8 +142,12 @@ fun PlacesScreen(modifier: Modifier) {
         val confirmed = rows.filter { it.state == FamiliarPlace.State.CONFIRMED.ordinal }
         Text(Texts.tr("Routine places", "Luoghi di routine") + " (${confirmed.size})", style = MaterialTheme.typography.titleMedium)
         confirmed.forEach { r ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(kindText(r) + "  %.4f, %.4f".format(r.lat, r.lon), modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                Text(
+                    (r.label.ifEmpty { kindText(r) }) + " · " + Texts.tr("radius", "raggio") + " ${r.radiusM.toInt()} m",
+                    modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = { mapState.startEdit(RoutineEdit(r.id, r.lat, r.lon, r.radiusM, r.label)) }) { Text(Texts.tr("Area", "Area")) }
                 // Marked "rejected" rather than deleted, so the learner does not suggest it again.
                 TextButton(onClick = { setState(scope, r, FamiliarPlace.State.REJECTED) }) { Text(Texts.tr("Remove", "Rimuovi")) }
             }
@@ -139,6 +161,9 @@ fun PlacesScreen(modifier: Modifier) {
                 "${timeFmt.format(Date(v.startMs))}–${timeFmt.format(Date(v.endMs))} · ${v.durationMs / 60_000} min · " +
                     if (routine) Texts.tr("routine place", "luogo di routine") else Texts.tr("other place", "altro luogo"),
                 style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable { mapState.selection = MapSel.Stay(v); mapState.focusOn(v.lat, v.lon) }
+                    .padding(vertical = 6.dp),
             )
         }
     }
@@ -147,51 +172,27 @@ fun PlacesScreen(modifier: Modifier) {
 private fun kindText(r: FamiliarRow) =
     if (r.kind == FamiliarPlace.Kind.HOME_LIKE.ordinal) Texts.tr("Home-like", "Tipo casa") else Texts.tr("Frequent", "Frequente")
 
-private fun setState(scope: kotlinx.coroutines.CoroutineScope, r: FamiliarRow, s: FamiliarPlace.State) {
+private fun saveRoutine(scope: kotlinx.coroutines.CoroutineScope, e: RoutineEdit) {
     scope.launch {
-        app.db.dao().setFamiliarState(r.id, s.ordinal)
+        val dao = app.db.dao()
+        if (e.id == null) {
+            dao.addFamiliar(
+                FamiliarRow(
+                    lat = e.lat, lon = e.lon, radiusM = e.radiusM, label = e.label.trim(),
+                    state = FamiliarPlace.State.CONFIRMED.ordinal,
+                    kind = FamiliarPlace.Kind.FREQUENT.ordinal, createdMs = System.currentTimeMillis(),
+                ),
+            )
+        } else {
+            dao.updateFamiliarArea(e.id, e.lat, e.lon, e.radiusM, e.label.trim(), FamiliarPlace.State.CONFIRMED.ordinal)
+        }
         Collector.analyzeNow.value = System.nanoTime()
     }
 }
 
-/** Tile-less map: your own track, routine places and current position. No network, no other devices. */
-@Composable
-private fun TrackMap(fixes: List<GeoFix>, routine: List<FamiliarPlace>, here: GeoFix?) {
-    val track = MaterialTheme.colorScheme.primary
-    val ring = MaterialTheme.colorScheme.tertiary
-    val grid = MaterialTheme.colorScheme.outline
-    val me = MaterialTheme.colorScheme.error
-    Canvas(Modifier.fillMaxWidth().height(260.dp)) {
-        val all = fixes.map { it.lat to it.lon } + routine.map { it.lat to it.lon } + listOfNotNull(here?.let { it.lat to it.lon })
-        if (all.isEmpty()) return@Canvas
-        val lat0 = all.map { it.first }.average()
-        val lon0 = all.map { it.second }.average()
-        val k = 111_320.0
-        val cosL = cos(Math.toRadians(lat0))
-        fun x(lon: Double) = (lon - lon0) * cosL * k
-        fun y(lat: Double) = (lat - lat0) * k
-        val xs = all.map { x(it.second) }
-        val ys = all.map { y(it.first) }
-        val span = max(max(xs.max() - xs.min(), ys.max() - ys.min()), 300.0) * 1.25
-        val scale = (minOf(size.width, size.height) / span).toFloat()
-        val cx = (xs.max() + xs.min()) / 2
-        val cy = (ys.max() + ys.min()) / 2
-        fun px(lon: Double) = size.width / 2 + ((x(lon) - cx) * scale).toFloat()
-        fun py(lat: Double) = size.height / 2 - ((y(lat) - cy) * scale).toFloat()
-
-        drawRect(grid, style = Stroke(1f))
-        routine.forEach {
-            drawCircle(ring, radius = (it.radiusM * scale).toFloat(), center = Offset(px(it.lon), py(it.lat)), style = Stroke(3f))
-        }
-        val step = max(1, fixes.size / 800)
-        val path = Path()
-        fixes.filterIndexed { i, _ -> i % step == 0 }.forEachIndexed { i, f ->
-            if (i == 0) path.moveTo(px(f.lon), py(f.lat)) else path.lineTo(px(f.lon), py(f.lat))
-        }
-        drawPath(path, track, style = Stroke(3f))
-        here?.let { drawCircle(me, radius = 9f, center = Offset(px(it.lon), py(it.lat))) }
-        // 100 m scale bar
-        val bar = (100 * scale)
-        drawLine(Color.Gray, Offset(16f, size.height - 16f), Offset(16f + bar, size.height - 16f), strokeWidth = 4f)
+private fun setState(scope: kotlinx.coroutines.CoroutineScope, r: FamiliarRow, s: FamiliarPlace.State) {
+    scope.launch {
+        app.db.dao().setFamiliarState(r.id, s.ordinal)
+        Collector.analyzeNow.value = System.nanoTime()
     }
 }

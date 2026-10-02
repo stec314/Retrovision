@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.service
 
 import android.Manifest
@@ -20,6 +22,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import dev.retrovision.app.Collector
+import dev.retrovision.app.RadarBlip
+import dev.retrovision.app.RadarFrame
 import dev.retrovision.app.ConnectionUi
 import dev.retrovision.app.Link
 import dev.retrovision.app.R
@@ -49,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import dev.retrovision.core.analysis.BearingEstimator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -61,11 +66,13 @@ import kotlinx.coroutines.launch
 class CollectorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val app get() = application as RetrovisionApp
+    private val prefs get() = app.prefs
     private val resolver = EntityResolver()
     private val queue = Channel<SightingRow>(capacity = 16_384)
     private var locationManager: LocationManager? = null
     private var lastFixWritten = 0L
     private val notifiedAt = HashMap<String, Long>()
+    private val notifiedScore = HashMap<String, Double>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -84,10 +91,16 @@ class CollectorService : Service() {
             return START_NOT_STICKY
         }
         Collector.running.value = true
+        Collector.probeLedOn.value = app.prefs.probeLedOn
+        Collector.captureDataFrames.value = app.prefs.captureDataFrames
         startLocation()
+        registerWifiCallback()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
         scope.launch { analysisLoop() }
+        scope.launch { radarLoop() }
+        scope.launch { probeWatchLoop() }
+        scope.launch { phoneLoop() }
         return START_NOT_STICKY
     }
 
@@ -97,6 +110,9 @@ class CollectorService : Service() {
         Collector.session = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
         runCatching { locationManager?.removeUpdates(locationListener) }
+        phoneBle?.stop()
+        motion?.stop()
+        netCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         scope.cancel()
         super.onDestroy()
     }
@@ -134,6 +150,9 @@ class CollectorService : Service() {
         )
         nm.createNotificationChannel(
             NotificationChannel(CH_ALERTS, Texts.channelAlerts(), NotificationManager.IMPORTANCE_HIGH),
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(CH_ALERTS_SILENT, Texts.channelAlertsSilent(), NotificationManager.IMPORTANCE_LOW),
         )
     }
 
@@ -180,12 +199,17 @@ class CollectorService : Service() {
         if (loc.hasAccuracy() && loc.accuracy > 150f) return
         val now = System.currentTimeMillis()
         if (now - lastFixWritten < 5000) return
-        lastFixWritten = now
         val fix = dev.retrovision.core.model.GeoFix(
             now, loc.latitude, loc.longitude,
             if (loc.hasAccuracy()) loc.accuracy else 0f,
             if (loc.hasSpeed()) loc.speed else null,
         )
+        // Silent drift: the phone is still (accelerometer + Doppler) but the position wanders.
+        if (prefs.driftGuard && motion?.available == true && !driftGuard.accept(fix, Collector.phoneStill.value)) {
+            Collector.driftRejected.value = driftGuard.rejected
+            return
+        }
+        lastFixWritten = now
         Collector.location.value = fix
         SessionRecorder.write(fix)
         scope.launch {
@@ -193,12 +217,147 @@ class CollectorService : Service() {
         }
     }
 
+    // ---- phone receivers -------------------------------------------------------
+
+    private val driftGuard = dev.retrovision.core.analysis.DriftGuard()
+    private var phoneBle: dev.retrovision.app.phone.PhoneBle? = null
+    private var motion: dev.retrovision.app.phone.MotionMonitor? = null
+
+    private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+
+    /** Keeps the phone's BLE scanner and motion sensor in the state the settings ask for. */
+    private suspend fun phoneLoop() {
+        motion = dev.retrovision.app.phone.MotionMonitor(this).also { m ->
+            m.start()
+            scope.launch { m.still.collect { Collector.phoneStill.value = it } }
+            scope.launch { m.state.collect { Collector.phoneMotion.value = it } }
+        }
+        val ble = dev.retrovision.app.phone.PhoneBle(this, ::onSighting).also { phoneBle = it }
+        scope.launch { ble.active.collect { Collector.phoneBleActive.value = it } }
+        scope.launch { ble.heard.collect { Collector.phoneBleHeard.value = it } }
+        scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
+        var probeGoneSince = 0L
+        while (scope.isActive) {
+            val streaming = Collector.connection.value.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            val nowMs = System.currentTimeMillis()
+            probeGoneSince = if (streaming) 0L else if (probeGoneSince == 0L) nowMs else probeGoneSince
+            val permitted = if (Build.VERSION.SDK_INT >= 31) hasPerm(Manifest.permission.BLUETOOTH_SCAN) else true
+            val want = permitted && when (prefs.phoneBleMode) {
+                2 -> true
+                1 -> !streaming && nowMs - probeGoneSince >= 30_000L // don't flap on brief USB re-enumerations
+                else -> false
+            }
+            if (want && !ble.active.value) ble.start() else if (!want && ble.active.value) ble.stop()
+            delay(5_000)
+        }
+    }
+
     // ---- probe link ------------------------------------------------------------
 
+    private class RSample(val lat: Double, val lon: Double, val rssi: Int, val ms: Long, val source: String)
+    private val radarLock = Any()
+    private val radarBuf = HashMap<String, ArrayDeque<RSample>>()
+
+    /** (address, payload) -> arrival time of BLE adverts heard by the probe, for phone de-duplication. */
+    private val probeHeard = HashMap<Long, Long>()
+    private var probeHeardPrune = 0L
+
+    /** True if this is a phone advert the probe already delivered: same bytes, same device, ≤ 2 s ago. */
+    private fun duplicateOfProbe(s: Sighting): Boolean {
+        val b = s.ble ?: return false
+        val key = s.address.bits * 1_000_003L + b.advData.contentHashCode()
+        val now = android.os.SystemClock.elapsedRealtime()
+        synchronized(probeHeard) {
+            if (now - probeHeardPrune > 10_000L) {
+                probeHeardPrune = now
+                probeHeard.values.removeAll { now - it > 5_000L }
+            }
+            if (s.probeId != dev.retrovision.app.phone.PHONE_SOURCE) {
+                probeHeard[key] = now
+                return false
+            }
+            val t = probeHeard[key] ?: return false
+            return now - t <= 2_000L
+        }
+    }
+
     private fun onSighting(s: Sighting) {
+        if (duplicateOfProbe(s)) return
         SessionRecorder.write(s)
+        // "Identify my phone": a scan was just triggered; this phone's probe requests are the loudest.
+        if (System.currentTimeMillis() < Collector.calibrateUntilMs && s.probeId != dev.retrovision.app.phone.PHONE_SOURCE) {
+            val w = s.wifi
+            if (w != null && w.kind == dev.retrovision.core.model.WifiKind.PROBE_REQ && s.rssi >= -45) {
+                dev.retrovision.core.identity.WifiFingerprint.of(w.ies)?.let { fp ->
+                    Collector.calibrated.value = Collector.calibrated.value + fp
+                }
+            }
+        }
         val res = synchronized(resolver) { resolver.resolve(s) }
+        if (s.rssi != 0) {
+            val fix = Collector.location.value
+            // Radar bearing comes from how RSSI changes as you move: a drifting fix would invent a direction.
+            if (fix != null && fix.accuracyM <= prefs.maxFixAccuracyM && System.currentTimeMillis() - fix.timeMs < 15_000L) {
+                synchronized(radarLock) {
+                    val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
+                    dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs, s.probeId))
+                    while (dq.size > 60) dq.removeFirst()
+                }
+            }
+        }
         queue.trySend(s.toRow(res.entityId)) // full queue: drop rather than block the USB thread
+    }
+
+    /** Builds the live radar frame: smoothed RSSI as distance, movement-derived bearing when usable. */
+    private suspend fun radarLoop() {
+        val smooth = HashMap<String, Double>()
+        while (scope.isActive) {
+            delay(1500)
+            val now = System.currentTimeMillis()
+            val reports = Collector.analysis.value?.entities.orEmpty().associateBy { it.entityId }
+            val blips = ArrayList<RadarBlip>()
+            var movedM = 0.0
+            synchronized(radarLock) {
+                val it = radarBuf.iterator()
+                while (it.hasNext()) {
+                    val (id, dq) = it.next()
+                    while (dq.isNotEmpty() && now - dq.first().ms > 120_000L) dq.removeFirst()
+                    if (dq.isEmpty()) { it.remove(); smooth.remove(id); continue }
+                    // One receiver only: probe and phone antennas read different dBm for the same device.
+                    val src = dq.groupingBy { s -> s.source }.eachCount().maxBy { e -> e.value }.key
+                    val mine = dq.filter { s -> s.source == src }
+                    val recent = mine.filter { now - it.ms <= 20_000L }
+                    if (recent.isEmpty()) continue
+                    val sm = BearingEstimator.ewma(smooth[id], recent.last().rssi).also { smooth[id] = it }
+
+                    // bearing from the last ~90 s of movement
+                    val win = mine.filter { now - it.ms <= 90_000L }
+                    val lat0 = win.map { it.lat }.average()
+                    val lon0 = win.map { it.lon }.average()
+                    val cosL = Math.cos(Math.toRadians(lat0))
+                    val samples = win.map {
+                        BearingEstimator.Sample((it.lon - lon0) * cosL * 111_320.0, (it.lat - lat0) * 111_320.0, it.rssi, it.ms)
+                    }
+                    val est = BearingEstimator.estimate(samples)
+                    val spreadE = samples.maxOfOrNull { it.east }?.minus(samples.minOfOrNull { it.east } ?: 0.0) ?: 0.0
+                    val spreadN = samples.maxOfOrNull { it.north }?.minus(samples.minOfOrNull { it.north } ?: 0.0) ?: 0.0
+                    movedM = maxOf(movedM, Math.hypot(spreadE, spreadN))
+
+                    val rep = reports[id]
+                    blips += RadarBlip(
+                        entityId = id,
+                        label = rep?.let { Texts.entityLabel(it) } ?: id,
+                        rssi = sm,
+                        category = rep?.category ?: dev.retrovision.core.identity.DeviceCategory.BLE_OTHER,
+                        alert = rep?.alert == true,
+                        bearingDeg = est?.takeIf { it.confidence >= 0.4 }?.bearingDeg,
+                        bearingConf = est?.confidence ?: 0.0,
+                    )
+                }
+            }
+            blips.sortByDescending { it.rssi }
+            Collector.liveRadar.value = RadarFrame(blips.take(40), movedM, now)
+        }
     }
 
     private suspend fun connectionLoop() {
@@ -231,7 +390,7 @@ class CollectorService : Service() {
         val name = dev.productName ?: "%04x:%04x".format(dev.vendorId, dev.productId)
         Collector.connection.value = ConnectionUi(Link.CONNECTING, name)
         val port = try {
-            usb.openPort(dev)
+            usb.openPort(dev, UsbAccess.PROBE_BAUD, release = true)
         } catch (e: Exception) {
             null
         }
@@ -245,7 +404,7 @@ class CollectorService : Service() {
                 port.write(data, 1000)
             }
         }
-        val session = ProbeSession(transport, scope, ::onSighting)
+        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value })
         Collector.session = session
         val done = CompletableDeferred<Unit>()
         val io = SerialInputOutputManager(
@@ -265,6 +424,8 @@ class CollectorService : Service() {
         try {
             while (!done.isCompleted && !Collector.usbPaused.get() && usb.isAttached(dev) && scope.isActive) {
                 delay(500)
+                // Recover a stuck probe without making the user unplug it.
+                if (session.tick() == ProbeSession.Health.DEAD) break
             }
         } finally {
             watcher.cancel()
@@ -317,25 +478,97 @@ class CollectorService : Service() {
             lookbackMs = prefs.lookbackMin * 60_000L,
             alertScore = prefs.alertScore.toDouble(),
             alertMinPlaces = prefs.alertMinPlaces,
+            maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
         )
         val from = now - cfg.lookbackMs
         val rows = dao.sightingsSince(from)
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
+        // "False alarm" feedback snoozes that device's alerts for a day.
+        val snoozed = dao.falseAlarmsSince(now - 24 * 3600_000L).toSet()
+        val conn = checkWifiConnection(now)
+        val here = Collector.location.value
+        // Connected to one of your own networks = you're at a routine place, even indoors without GPS.
+        val familiar = dao.familiarNow().map { it.toModel() } +
+            if (conn?.own == true && here != null) listOf(
+                dev.retrovision.core.analysis.FamiliarPlace(-1, here.lat, here.lon, 150.0, conn.ssid, dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED),
+            ) else emptyList()
         val result = Analyzer(cfg).analyze(
             now,
             rows.map { EntitySighting(it.entityId, it.toSighting()) },
             fixes,
-            IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet()),
-            familiar = dao.familiarNow().map { it.toModel() },
+            IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
+            familiar = familiar,
+            residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
         )
         Collector.analysis.value = result
+        learnBaseline(result, now)
+        learnCompanions(result, now)
+        recordFieldTest(result, now)
 
-        for (a in result.alerts) {
-            val last = notifiedAt[a.entityId]
-            if (last == null || now - last > 30 * 60_000L) {
-                notifiedAt[a.entityId] = now
-                notifyAlert(a)
+        // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
+        val recentWifi = rows.asSequence()
+            .filter { it.radio == 0 && now - it.timeMs <= 3 * 60_000L }
+            .map { it.toSighting() }.toList()
+        val recentBle = rows.asSequence()
+            .filter { it.radio == 1 && now - it.timeMs <= 60_000L }
+            .map { it.toSighting() }.toList()
+        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
+            dev.retrovision.core.analysis.WifiThreats.detectBle(recentBle)
+        Collector.threats.value = threats
+
+        // Drones heard in the last 5 minutes (Remote ID and drone-radio signatures).
+        val droneWindow = rows.asSequence()
+            .filter { now - it.timeMs <= 5 * 60_000L }
+            .map { it.toSighting() }.toList()
+        val drones = dev.retrovision.core.analysis.Drones.summarize(droneWindow, Collector.location.value)
+        Collector.drones.value = drones
+        if (prefs.alertsEnabled && prefs.droneAlerts && !inQuietHours(now)) {
+            for (d in drones) {
+                val key = "drone:${d.key}"
+                val last = notifiedAt[key]
+                if (now - d.lastMs <= 2 * 60_000L && (last == null || now - last > 30 * 60_000L)) {
+                    notifiedAt[key] = now
+                    notifyDrone(d)
+                }
+            }
+        }
+        Collector.associations.value = if (prefs.captureDataFrames) {
+            dev.retrovision.core.analysis.AssociatedClients.of(
+                rows.asSequence().filter { it.radio == 0 }.map { it.toSighting() }.toList(),
+            ).take(30)
+        } else emptyList()
+        if (prefs.alertsEnabled && !inQuietHours(now)) {
+            for (th in threats.filter { it.severity >= 0.6 }) {
+                val key = "threat:${th.kind}:${th.bssid}:${th.ssid}"
+                val last = notifiedAt[key]
+                if (last == null || now - last > 10 * 60_000L) {
+                    notifiedAt[key] = now
+                    notifyThreat(th)
+                }
+            }
+        }
+
+        val atFamiliar = prefs.alertsOnlyAwayFromFamiliar && (conn?.own == true) || prefs.alertsOnlyAwayFromFamiliar && run {
+            here != null && dao.familiarNow().map { it.toModel() }.any {
+                it.state == dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED && it.contains(here.lat, here.lon)
+            }
+        }
+        if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
+            val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
+            for (a in result.alerts) {
+                // Merged entities: snooze, cooldown and last score follow every member id.
+                if (a.memberIds.any { it in snoozed }) continue
+                val last = a.memberIds.mapNotNull { notifiedAt[it] }.maxOrNull()
+                val lastScore = a.memberIds.mapNotNull { notifiedScore[it] }.maxOrNull()
+                // A clear escalation (+15 pts) always breaks through the cooldown.
+                val escalated = lastScore != null && a.score >= lastScore + 0.15
+                val cooldownOk = last == null || now - last >= cooldownMs
+                val risesOk = !prefs.alertOnlyIfScoreRises || lastScore == null || a.score + 1e-9 >= lastScore
+                if (escalated || (cooldownOk && risesOk)) {
+                    for (m in a.memberIds) { notifiedAt[m] = now; notifiedScore[m] = a.score }
+                    notifyAlert(a)
+                }
             }
         }
         // Retention
@@ -343,6 +576,8 @@ class CollectorService : Service() {
         dao.pruneSightings(cutoff)
         // Fixes are kept longer than sightings: learning routine places needs weeks, not days.
         dao.pruneFixes(minOf(cutoff, now - 30L * 24 * 3600_000L))
+        dao.pruneCompanions(now - 30L * 24 * 3600_000L)
+        dao.pruneFeedback(now - 180L * 24 * 3600_000L)
         if (now - lastLearn > 15 * 60_000L) {
             lastLearn = now
             learnFamiliar(now)
@@ -352,9 +587,132 @@ class CollectorService : Service() {
 
     private var lastLearn = 0L
 
+    /** A device seen only at your routine places gains a "day" once per local day; residents are damped. */
+    private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val dao = app.db.dao()
+        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        for (e in result.entities) {
+            if (e.placeIds.isEmpty() || e.unfamiliarPlaces > 0) continue // only devices confined to routine places
+            val b = dao.baseline(e.entityId)
+            if (b == null) {
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, 1, day, now))
+            } else if (b.lastDay != day) {
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, (b.days + 1).coerceAtMost(30), day, now))
+            }
+        }
+    }
+
+    /**
+     * Devices that travel with you day after day are most likely yours (watch, earbuds, car).
+     * After [COMPANION_DAYS] days the app ASKS; it never ignores on its own, and never proposes a
+     * tracker tag: a planted tracker also "travels with you every day".
+     */
+    private suspend fun learnCompanions(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val dao = app.db.dao()
+        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        for (e in result.entities) {
+            if (e.kind == dev.retrovision.core.analysis.EntityKind.BLE_TRACKER || e.tracker != null) continue
+            if (e.isDrone) continue
+            val travelled = e.reasons.any { it is dev.retrovision.core.analysis.Reason.MovedWithYou } && e.placeIds.size >= 2
+            if (!travelled) continue
+            val c = dao.companion(e.entityId)
+            if (c != null && (c.state >= 2 || c.lastDay == day)) continue
+            val days = (c?.days ?: 0) + 1
+            val state = if (days >= COMPANION_DAYS) 1 else 0
+            dao.putCompanion(dev.retrovision.app.data.CompanionRow(e.entityId, days, day, state, Texts.entityLabel(e), now))
+        }
+    }
+
+    /** Latest Wi-Fi association from the network callback (Android 12+ needs it to see SSID/BSSID). */
+    @Volatile private var cbWifi: android.net.wifi.WifiInfo? = null
+    private var netCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
+    private fun registerWifiCallback() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        val req = android.net.NetworkRequest.Builder().addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI).build()
+        val cb = if (Build.VERSION.SDK_INT >= 31) {
+            object : android.net.ConnectivityManager.NetworkCallback(android.net.ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
+                override fun onCapabilitiesChanged(n: android.net.Network, c: android.net.NetworkCapabilities) {
+                    cbWifi = c.transportInfo as? android.net.wifi.WifiInfo
+                }
+                override fun onLost(n: android.net.Network) { cbWifi = null }
+            }
+        } else {
+            object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onLost(n: android.net.Network) { cbWifi = null }
+            }
+        }
+        runCatching { cm.registerNetworkCallback(req, cb) }.onSuccess { netCallback = cb }
+    }
+
+    /**
+     * Reads the phone's own Wi-Fi association. For each of your networks, only the very first
+     * access point is trusted automatically; any other one alerts until you confirm it in Settings
+     * (no automatic trust by vendor: a common router brand would let an impersonator straight in).
+     * Joining your network through an unknown access point means an evil twin got YOUR phone.
+     */
+    @Suppress("DEPRECATION")
+    private fun checkWifiConnection(now: Long): dev.retrovision.app.WifiConn? {
+        val info = cbWifi ?: runCatching {
+            applicationContext.getSystemService(android.net.wifi.WifiManager::class.java)?.connectionInfo
+        }.getOrNull() ?: run { Collector.wifiConnection.value = null; return null }
+        val ssid = info.ssid?.removeSurrounding("\"")?.takeIf { it.isNotEmpty() && it != "<unknown ssid>" }
+        val bssid = info.bssid?.lowercase()?.takeIf { it != "02:00:00:00:00:00" && it != "00:00:00:00:00:00" }
+        if (ssid == null || bssid == null) { Collector.wifiConnection.value = null; return null }
+        val own = ssid in prefs.ownSsidSet()
+        var trusted = true
+        if (own) {
+            val known = prefs.trustedAps.filter { it.startsWith("$ssid|") }.map { it.substringAfter('|') }
+            trusted = when {
+                bssid in known -> true
+                known.isEmpty() -> { prefs.trustedAps = prefs.trustedAps + "$ssid|$bssid"; true }
+                else -> false
+            }
+            if (!trusted && prefs.alertsEnabled) {
+                val key = "conn:$ssid|$bssid"
+                val last = notifiedAt[key]
+                if (last == null || now - last > 6 * 3600_000L) {
+                    notifiedAt[key] = now
+                    notifyUntrustedAp(ssid, bssid)
+                }
+            }
+        }
+        return dev.retrovision.app.WifiConn(ssid, bssid, own, trusted).also { Collector.wifiConnection.value = it }
+    }
+
+    private fun notifyUntrustedAp(ssid: String, bssid: String) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val text = Texts.tr(
+            "Your phone joined “$ssid” through an access point it has never used ($bssid). A mesh node or extender of yours also looks like this the first time: if it's yours, confirm it in Settings. If not, someone may be impersonating your network.",
+            "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Anche un nodo mesh o un ripetitore tuo appare così la prima volta: se è tuo, confermalo in Impostazioni. Se no, qualcuno potrebbe impersonare la tua rete.",
+        )
+        val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Unknown access point for your network", "Access point sconosciuto per la tua rete"))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(("ap" + ssid + bssid).hashCode(), n)
+    }
+
+    /** Field test: remember when each marked target first crossed the alert threshold. */
+    private fun recordFieldTest(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
+        val targets = prefs.targets
+        if (targets.isEmpty()) return
+        val done = prefs.testFirstAlerts.map { it.substringBefore('|') }.toSet()
+        val fresh = result.alerts.filter { it.entityId in targets && it.entityId !in done }
+        if (fresh.isNotEmpty()) prefs.testFirstAlerts = prefs.testFirstAlerts + fresh.map { "${it.entityId}|$now" }
+    }
+
     private suspend fun learnFamiliar(now: Long) {
         val dao = app.db.dao()
+        val maxAcc = app.prefs.maxFixAccuracyM.toFloat()
+        // Poor fixes (indoors, in a car park) scatter and would invent "places" you never went.
         val fixes = dao.fixesSampled(now - 30L * 24 * 3600_000L).map { it.toFix() }
+            .filter { it.accuracyM <= maxAcc }
         val known = dao.familiarNow().map { it.toModel() }
         val offset = java.util.TimeZone.getDefault().getOffset(now).toLong()
         for (s in dev.retrovision.core.analysis.FamiliarLearner.suggest(fixes, known, offset)) {
@@ -367,15 +725,93 @@ class CollectorService : Service() {
         }
     }
 
-    private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {
+    /** Alerts (optionally) when a streaming probe drops out. Ignores brief re-enumerations. */
+    private suspend fun probeWatchLoop() {
+        var wasStreaming = false
+        var lostSince = 0L
+        while (scope.isActive) {
+            delay(2000)
+            if (Collector.usbPaused.get()) { lostSince = 0; continue }
+            val c = Collector.connection.value
+            val streaming = c.link == Link.CONNECTED && c.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            val now = System.currentTimeMillis()
+            if (streaming) {
+                wasStreaming = true; lostSince = 0
+            } else if (wasStreaming) {
+                if (lostSince == 0L) {
+                    lostSince = now
+                } else if (now - lostSince > 15_000L) {
+                    if (prefs.probeDisconnectAlert) notifyProbeLost()
+                    wasStreaming = false; lostSince = 0
+                }
+            }
+        }
+    }
+
+    private fun notifyDrone(d: dev.retrovision.core.analysis.Drones.Drone) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val n = NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Drone nearby", "Drone nelle vicinanze"))
+            .setContentText(Texts.drone(d))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(Texts.drone(d)))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .build()
+        nm.notify(("d" + d.key).hashCode(), n)
+    }
+
+    private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val title = Texts.threatTitle(th.kind)
+        val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(title)
+            .setContentText(Texts.threat(th))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(("t" + th.kind + th.bssid + th.ssid).hashCode(), n)
+    }
+
+    private fun notifyProbeLost() {
         val nm = getSystemService(NotificationManager::class.java)
         val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Probe disconnected", "Sonda scollegata"))
+            .setContentText(Texts.tr("The probe stopped streaming. Check the cable or the board.", "La sonda ha smesso di trasmettere. Controlla il cavo o la scheda."))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(NOTIF_PROBE_LOST, n)
+    }
+
+    /** True when [now] falls inside the user's quiet hours (local time, may wrap past midnight). */
+    private fun inQuietHours(now: Long): Boolean {
+        if (!prefs.quietHoursEnabled) return false
+        val start = prefs.quietStartHour
+        val end = prefs.quietEndHour
+        if (start == end) return false
+        val cal = java.util.Calendar.getInstance()
+        cal.timeInMillis = now
+        val h = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        return if (start < end) h in start until end else h >= start || h < end
+    }
+
+    private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val channel = if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS
+        val n = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.alertTitle(Texts.entityLabel(a)))
             .setContentText(a.reasons.joinToString(" · ") { Texts.reason(it) })
             .setStyle(NotificationCompat.BigTextStyle().bigText(a.reasons.joinToString("\n") { Texts.reason(it) }))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
+            .setSilent(prefs.alertSilent)
+            .setPriority(if (prefs.alertSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .build()
         nm.notify(a.entityId.hashCode(), n)
@@ -385,7 +821,11 @@ class CollectorService : Service() {
         const val ACTION_STOP = "dev.retrovision.app.STOP"
         private const val CH_ONGOING = "ongoing"
         private const val CH_ALERTS = "alerts"
+        private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
+        private const val NOTIF_PROBE_LOST = 2
+        private const val BASELINE_MIN_DAYS = 3
+        private const val COMPANION_DAYS = 3
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))

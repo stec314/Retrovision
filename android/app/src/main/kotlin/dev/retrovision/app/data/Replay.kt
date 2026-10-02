@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.data
 
 import dev.retrovision.core.analysis.AnalysisConfig
@@ -30,7 +32,7 @@ object Replay {
                 alertMinPlaces = prefs.alertMinPlaces,
             )
             val result = Analyzer(cfg).analyze(
-                end, es, rec.fixes, IgnoreList(apSsids = prefs.ownSsidSet()), familiar,
+                end, es, rec.fixes, IgnoreList(apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints), familiar,
             )
             Outcome(result, rec.sightings.size, rec.fixes.size, end - start)
         }

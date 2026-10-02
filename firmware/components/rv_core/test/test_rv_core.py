@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Host tests for rv_core (C) against the shared conformance vectors.
 
 Run from the repo root:
@@ -31,7 +33,7 @@ def build_lib() -> C.CDLL:
     out = Path(tempfile.mkdtemp(prefix="rv_core_")) / "librv_core.so"
     # config.c lives in the firmware app but is portable: compile it here too
     # so -Werror catches mistakes without an ESP-IDF toolchain.
-    srcs = [*CORE.glob("*.c"), HERE / "pb_roundtrip.c", FW / "esp32s3/main/config.c",
+    srcs = [*CORE.glob("*.c"), HERE / "pb_roundtrip.c", FW / "components/rv_probe/config.c",
             FW / "components/rv_proto/retrovision.pb.c",
             *(FW / "components/nanopb").glob("pb_*.c")]
     cmd = [cc, "-std=c99", "-O1", "-g", "-shared", "-fPIC",
@@ -66,7 +68,7 @@ LIB.rv_frame_decoder_feed.argtypes = [C.POINTER(FrameDecoder), C.c_uint8,
 class WifiFrame(C.Structure):
     _fields_ = [("type", C.c_int), ("addr1", C.c_uint8 * 6), ("addr2", C.c_uint8 * 6),
                 ("addr3", C.c_uint8 * 6), ("seq", C.c_uint16), ("ssid", C.c_uint8 * 32),
-                ("ssid_len", C.c_uint8), ("has_ssid", C.c_bool), ("ies", u8p),
+                ("ssid_len", C.c_uint8), ("has_ssid", C.c_bool), ("tsf", C.c_uint64), ("ies", u8p),
                 ("ies_len", C.c_uint16), ("ies_truncated", C.c_bool)]
 
 
@@ -201,6 +203,15 @@ class TestWifi(unittest.TestCase):
         self.assertEqual(wf.type, 3)
         self.assertEqual(bytes(wf.ssid[:wf.ssid_len]), b"CarHotspot")
         self.assertEqual(self.ies(wf), body)
+        self.assertEqual(wf.tsf, 0x1111111111111111)
+
+    def test_beacon_tsf_little_endian(self):
+        fixed = (123_456_789_012).to_bytes(8, "little") + b"\x64\x00" + b"\x31\x04"
+        ok, wf = self.parse(mgmt(8, fixed + ie(0, b"x")))
+        self.assertTrue(ok)
+        self.assertEqual(wf.tsf, 123_456_789_012)
+        ok, wf = self.parse(mgmt(4, ie(0, b"x")))
+        self.assertEqual(wf.tsf, 0)
 
     def test_malformed_trailing_ie(self):
         body = ie(0, b"x") + bytes([0xDD, 50, 1, 2, 3])
@@ -287,7 +298,7 @@ class TestDedup(unittest.TestCase):
 
 
 class TestConfig(unittest.TestCase):
-    """Firmware Config validation (firmware/esp32s3/main/config.c)."""
+    """Firmware Config validation (firmware/components/rv_probe/config.c)."""
 
     @classmethod
     def setUpClass(cls):

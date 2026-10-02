@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Retrovision probe <-> host wire protocol, v1.
 //
 // Single source of truth for every probe (firmware) and host (Android app).
@@ -199,6 +201,12 @@ message WifiFrame {
 
   // True when raw_ies was cut to fit the frame budget.
   bool raw_ies_truncated = 9;
+
+  // Beacon / probe-response timestamp field: the AP's TSF timer, i.e. its
+  // uptime in microseconds. Survives SSID and BSSID changes of the same AP
+  // until it reboots, so the host can tell one renamed hotspot from a new one.
+  // 0 = not present (other frame types). Added in protocol 1.1 (additive).
+  uint64 tsf_us = 10;
 }
 
 enum BleAddressType {
@@ -306,6 +314,16 @@ message Config {
 
   // Seconds between unsolicited Status frames. 0 = only on GetStatus.
   uint32 status_interval_s = 4;
+
+  // Status LED. UNSPECIFIED = probe default (on). Live-changeable via SetConfig,
+  // so the probe can run dark without reflashing.
+  LedMode led = 5;
+}
+
+enum LedMode {
+  LED_MODE_UNSPECIFIED = 0;  // probe default: status LED behaves normally
+  LED_MODE_ON = 1;
+  LED_MODE_OFF = 2;          // never light the LED (covert)
 }
 
 message ChannelDwell {

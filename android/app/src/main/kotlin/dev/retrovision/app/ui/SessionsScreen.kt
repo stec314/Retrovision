@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,6 +18,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,16 +57,23 @@ fun SessionsSection() {
         if (uri != null) {
             runCatching {
                 ctx.contentResolver.openInputStream(uri)?.use { i ->
-                    File(SessionRecorder.dir(ctx), "import-${System.currentTimeMillis()}.rvsl").outputStream().use { o -> i.copyTo(o) }
+                    dev.retrovision.app.data.SessionFiles.import(ctx, i, File(SessionRecorder.dir(ctx), "import-${System.currentTimeMillis()}.rvsl"))
                 }
             }.onFailure { error = it.message }
             tick++
         }
     }
+    // Recordings made by older versions were stored in clear: encrypt them once.
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching { dev.retrovision.app.data.SessionFiles.encryptLegacy(ctx, SessionRecorder.recording.value) }
+        }
+        tick++
+    }
     val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
         val f = exportTarget
         if (uri != null && f != null) {
-            runCatching { ctx.contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } } }
+            runCatching { ctx.contentResolver.openOutputStream(uri)?.use { o -> dev.retrovision.app.data.SessionFiles.export(ctx, f, o) } }
                 .onFailure { error = it.message }
         }
     }
@@ -96,7 +106,7 @@ fun SessionsSection() {
                             error = null
                             try {
                                 val fam = app.db.dao().familiarNow().map { it.toModel() }
-                                outcome = f.name to Replay.run(f.inputStream(), app.prefs, fam)
+                                outcome = f.name to Replay.run(dev.retrovision.app.data.SessionFiles.openRead(ctx, f), app.prefs, fam)
                             } catch (e: Exception) {
                                 error = e.message ?: e.javaClass.simpleName
                             }
@@ -155,7 +165,12 @@ fun FieldTestSection() {
                     Texts.tr("detection", "rilevamento") + " %.0f%% (%d/%d min) · ".format(pct, e.activeMinutes, span) +
                     "${e.placeIds.size} ${Texts.tr("places", "luoghi")} · " +
                     Texts.tr("score", "punteggio") + " %.0f%%".format(e.score * 100) +
-                    if (e.alert) " · ${Texts.tr("ALERT", "ALLERTA")}" else "",
+                    (if (e.alert) " · ${Texts.tr("ALERT", "ALLERTA")}" else "") +
+                    (app.prefs.testFirstAlerts.firstOrNull { it.startsWith(e.entityId + "|") }?.substringAfter('|')?.toLongOrNull()?.let { t ->
+                        "\n" + Texts.tr("first alert ", "prima allerta ") + "${(t - e.firstSeenMs).coerceAtLeast(0) / 60_000} min " +
+                            Texts.tr("after first sighting", "dopo il primo avvistamento")
+                    } ?: "") +
+                    "\n" + e.reasons.joinToString("; ") { Texts.reason(it) },
                 style = MaterialTheme.typography.bodySmall,
             )
         }

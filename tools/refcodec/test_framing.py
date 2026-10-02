@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Conformance tests for the reference codec.  Run: python3 -m unittest -v tools/refcodec/test_framing.py"""
 
 from __future__ import annotations
