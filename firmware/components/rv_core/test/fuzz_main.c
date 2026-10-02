@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Host fuzz smoke test for the parsers, built with ASan+UBSan:
 //   cc -fsanitize=address,undefined -I../include ../*.c fuzz_main.c && ./a.out
 // Not a coverage-guided fuzzer; a cheap guard against out-of-bounds bugs.

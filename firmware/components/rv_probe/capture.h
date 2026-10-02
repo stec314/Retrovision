@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Capture pipeline: radio callbacks -> raw queue -> dedup -> Observation frames.
 #pragma once
 

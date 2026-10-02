@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // 2.4 GHz Wi-Fi sniffer: promiscuous RX + channel hopping. Receive-only.
 #pragma once
 

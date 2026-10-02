@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.core.identity
 
 /** What kind of thing a transmitter probably is. Best effort, from what it broadcasts about itself. */

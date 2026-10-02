@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // 802.11 frame parsing for the Wi-Fi sniffer. Portable C99.
 #pragma once
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Host tests for rv_core (C) against the shared conformance vectors.
 
 Run from the repo root:

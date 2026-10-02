@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Host-only helper: decode an Envelope with nanopb and re-encode it.
 // Proves the generated code + size bounds accept every conformance vector.
 #include <pb_decode.h>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Pure Kotlin/JVM: wire framing, clock sync, identity, analysis, export.
 // No Android and no protobuf dependency, so it is unit-testable anywhere.
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget

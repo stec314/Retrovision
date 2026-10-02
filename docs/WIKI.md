@@ -513,6 +513,10 @@ This is the honest list. Read it before trusting a result.
 - **Resident**: a device learned to belong to your routine places.
 - **CYT**: Chasing Your Tail, the project whose method this extends.
 
+## License
+
+Retrovision is free software under the **GNU GPL, version 3 or later** (`GPL-3.0-or-later`). You may use, study, share and modify it; if you distribute a modified app or firmware, you must publish its full source under the same license. It comes with **no warranty**. Source code: [github.com/stec314/Retrovision](https://github.com/stec314/Retrovision). Third-party parts keep their own licenses (see `NOTICE` in the repository).
+
 ## Further reading
 
 - [Wire protocol](protocol.md)

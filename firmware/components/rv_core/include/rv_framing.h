@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Retrovision wire framing: COBS(envelope || CRC32_LE(envelope)) || 0x00
 // Spec: docs/protocol.md §3. Portable C99, no ESP-IDF dependency.
 #pragma once

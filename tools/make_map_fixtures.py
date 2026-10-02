@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Generate test fixtures for the Kotlin PMTiles/MVT readers using the reference Python libraries.
 pip install pmtiles mapbox-vector-tile
 """

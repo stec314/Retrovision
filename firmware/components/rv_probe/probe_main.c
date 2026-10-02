@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Retrovision probe firmware, shared by every board (ESP32-S3 over native USB, classic ESP32 over UART).
 //
 // Data flow:

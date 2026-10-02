@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Forward ESP_LOG output to the host as Log frames (and keep UART0 output).
 #include <stdarg.h>
 #include <stdio.h>

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Host link: framing + protobuf over the native USB-Serial-JTAG port (ESP32-S3)
 // or UART0 at 921600 baud through the USB-UART bridge (classic ESP32).
 #pragma once

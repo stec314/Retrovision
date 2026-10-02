@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 """Regenerate the notable-device signature subset from a Fieldwatch signature export.
 
 Usage: import_fieldwatch.py path/to/fieldwatch-signatures-v2.json

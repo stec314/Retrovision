@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 #include "rv_ble.h"
 
 rv_ble_addr_type_t rv_ble_classify_addr(int is_random, const uint8_t addr_msb[6])

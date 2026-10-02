@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 stec314 and the Retrovision contributors
 // Probe-side dedup (docs/protocol.md §7.3). Portable C99, no allocation.
 //
 // Emit-first semantics: the first sighting of a key is forwarded immediately.

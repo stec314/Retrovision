@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 stec314 and the Retrovision contributors
 # Regenerate nanopb C sources from proto/. Commit the output.
 # CI runs this and fails if the working tree changes (generated code drift).
 # Requires: pip install nanopb==$(cat firmware/components/nanopb/VERSION)

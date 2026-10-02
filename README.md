@@ -90,4 +90,8 @@ Notable-device signatures are derived from [Fieldwatch](https://github.com/OffGr
 
 This tool is meant for personal safety and security research. Passive reception of radio traffic is regulated differently in each jurisdiction. MAC addresses and SSIDs are personal data under the GDPR: keep captures local, encrypted and short-lived, and never publish them.
 
-**License:** not chosen yet. Until a `LICENSE` file is added, the code is published but not licensed for reuse.
+## License
+
+Retrovision is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License, version 3 or (at your option) any later version** ([`LICENSE`](LICENSE), SPDX `GPL-3.0-or-later`). It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+If you distribute a modified version (an APK, a firmware image), you must make its complete source available under the same license. Third-party components keep their own licenses (MIT signature data, Apache-2.0 ESP-IDF, zlib nanopb, and others): see [NOTICE](NOTICE).
