@@ -14,6 +14,14 @@ enum class MacTrust {
     STABLE,
     /** BLE random static address: stable until the device reboots or resets. */
     UNTIL_REBOOT,
+    /**
+     * Randomised Wi-Fi MAC that the device used to join a network (auth / (re)association request).
+     * Android 10+, iOS 14+ and Windows keep one random address per network and reuse it every time
+     * they connect, so it identifies the device for as long as it uses that network, often for days.
+     * Another network gets a different address. Not forever: iOS "rotating" private addresses and
+     * Android's non-persistent mode (e.g. open networks) still renew it every day or two.
+     */
+    PER_NETWORK,
     /** Randomised Wi-Fi MAC or BLE private address: rotates, so the same device shows up under new addresses. */
     ROTATING,
 }

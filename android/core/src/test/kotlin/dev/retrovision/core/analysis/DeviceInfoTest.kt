@@ -40,7 +40,8 @@ class DeviceInfoTest {
         )
         assertEquals(EntityKind.WIFI_CLIENT, r.kind)
         assertEquals(DeviceCategory.WIFI_CLIENT, r.category)
-        assertEquals(MacTrust.ROTATING, r.macTrust)
+        // Random, but it joined a network with it: that network's per-network address.
+        assertEquals(MacTrust.PER_NETWORK, r.macTrust)
         assertEquals(setOf("CasaRossi"), r.probedSsids)
         assertEquals(2, r.probeRequests)
         assertEquals(1, r.wildcardProbes)
@@ -49,6 +50,30 @@ class DeviceInfoTest {
         assertEquals("CasaRossi", j.ssid)
         assertEquals(WifiKind.ASSOC_REQ, j.kind)
         assertEquals(2, j.count)
+    }
+
+    @Test fun perNetworkAddressNeedsAJoinByThatAddress() {
+        val ap = 0x00_AAAA_BBBB_CCL
+        val scanOnly = analyze(
+            wifi(0x02_1111_2222_33L, WifiKind.PROBE_REQ, "CasaRossi"),
+            wifi(0x02_1111_2222_33L, WifiKind.PROBE_REQ, ""),
+        )
+        assertEquals(MacTrust.ROTATING, scanOnly.macTrust)
+
+        // A per-network address stitched together with a scan address is only as good as the worst.
+        val mixed = analyze(
+            wifi(0x02_1111_2222_33L, WifiKind.ASSOC_REQ, "CasaRossi", ap),
+            wifi(0x06_4444_5555_66L, WifiKind.PROBE_REQ, ""),
+        )
+        assertEquals(MacTrust.ROTATING, mixed.macTrust)
+
+        // Data frames do not count: without the DS bits their transmitter may be the AP.
+        val dataOnly = analyze(wifi(0x02_1111_2222_33L, WifiKind.DATA, "", ap))
+        assertEquals(MacTrust.ROTATING, dataOnly.macTrust)
+
+        // A factory MAC that joins stays STABLE.
+        val factory = analyze(wifi(0x00_1111_2222_33L, WifiKind.AUTH, "", ap))
+        assertEquals(MacTrust.STABLE, factory.macTrust)
     }
 
     @Test fun bleCategoriesAndTrust() {

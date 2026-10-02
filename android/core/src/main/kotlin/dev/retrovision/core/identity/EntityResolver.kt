@@ -47,7 +47,7 @@ class EntityResolver(
     fun resolve(s: Sighting, fingerprint: String? = null): Resolution {
         val key = Key(s.radio, s.address)
         val known = byAddress[key]
-        val fp = fingerprint ?: s.wifi?.takeIf { it.kind == WifiKind.PROBE_REQ }?.let { WifiFingerprint.of(it.ies) }
+        val fp = fingerprint ?: s.wifi?.takeIf { it.kind == WifiKind.PROBE_REQ }?.let { WifiFingerprint.of(it.ies, it.iesTruncated) }
 
         if (known != null) {
             known.lastSeenMs = maxOf(known.lastSeenMs, s.timeMs)
