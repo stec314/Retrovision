@@ -88,6 +88,11 @@ class Prefs(ctx: Context) {
         get() = p.getBoolean("probeDisconnectAlert", true)
         set(v) = p.edit().putBoolean("probeDisconnectAlert", v).apply()
 
+    /** Suppress following-alerts while you are at a confirmed routine place (home, work). */
+    var alertsOnlyAwayFromFamiliar: Boolean
+        get() = p.getBoolean("alertsAwayOnly", false)
+        set(v) = p.edit().putBoolean("alertsAwayOnly", v).apply()
+
     /** Entities marked as field-test targets (a device you carry on purpose). */
     var targets: Set<String>
         get() = p.getStringSet("targets", emptySet()) ?: emptySet()

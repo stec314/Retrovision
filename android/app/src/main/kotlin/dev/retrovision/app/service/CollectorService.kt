@@ -422,7 +422,13 @@ class CollectorService : Service() {
             }
         }
 
-        if (prefs.alertsEnabled && !inQuietHours(now)) {
+        val atFamiliar = prefs.alertsOnlyAwayFromFamiliar && run {
+            val here = Collector.location.value
+            here != null && dao.familiarNow().map { it.toModel() }.any {
+                it.state == dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED && it.contains(here.lat, here.lon)
+            }
+        }
+        if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
             for (a in result.alerts) {
                 val last = notifiedAt[a.entityId]

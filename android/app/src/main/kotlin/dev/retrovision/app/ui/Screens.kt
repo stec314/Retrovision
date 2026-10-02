@@ -248,6 +248,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         ) { Text("${e.label}: $label" + if (!ready) Texts.tr("  (set up in Settings)", "  (configura in Impostazioni)") else "") }
                     }
                 }
+                var findIt by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
+                if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r)) { findIt = false }
                 val isTarget = r.entityId in app.prefs.targets
                 OutlinedButton(onClick = {
                     app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
@@ -519,6 +522,11 @@ private fun NotificationsSection() {
             Slider(value = qStart.toFloat(), onValueChange = { qStart = it.toInt() }, onValueChangeFinished = { prefs.quietStartHour = qStart }, valueRange = 0f..23f, steps = 22)
             Text(Texts.tr("End", "Fine") + " $qEnd:00", style = MaterialTheme.typography.bodySmall)
             Slider(value = qEnd.toFloat(), onValueChange = { qEnd = it.toInt() }, onValueChangeFinished = { prefs.quietEndHour = qEnd }, valueRange = 0f..23f, steps = 22)
+        }
+        var away by remember { mutableStateOf(prefs.alertsOnlyAwayFromFamiliar) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Only when away from routine places", "Solo quando sei fuori dai luoghi di routine"), modifier = Modifier.weight(1f))
+            Switch(checked = away, onCheckedChange = { away = it; prefs.alertsOnlyAwayFromFamiliar = it })
         }
         var disc by remember { mutableStateOf(prefs.probeDisconnectAlert) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
