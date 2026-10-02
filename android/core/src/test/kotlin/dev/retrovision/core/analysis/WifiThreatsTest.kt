@@ -14,7 +14,7 @@ class WifiThreatsTest {
         Sighting(t, Radio.WIFI, MacAddress(addr), -50, merged, wifi = WifiDetail(kind, 6, ssid.toByteArray(), bssid?.let { MacAddress(it) }, 0, ByteArray(0)))
 
     @Test fun deauthFloodDetected() {
-        val frames = (0 until 30).map { w(WifiKind.DEAUTH, 0x111111111111L, bssid = 0xAAAAAAAAAAAAL, t = it * 50L) }
+        val frames = (0 until 120).map { w(WifiKind.DEAUTH, 0x121111111111L, bssid = 0xAAAAAAAAAAAAL, t = it * 50L) }
         val t = WifiThreats.detect(frames, emptySet())
         assertEquals(1, t.size)
         assertEquals(WifiThreats.Kind.DEAUTH_FLOOD, t[0].kind)
@@ -22,8 +22,14 @@ class WifiThreatsTest {
         assertTrue(t[0].severity > 0.2)
     }
 
-    @Test fun fewDeauthsAreNotAFlood() {
-        val frames = (0 until 5).map { w(WifiKind.DEAUTH, 0x1L, bssid = 0xAAL, t = it.toLong()) }
+    @Test fun normalScatteredDeauthsAreNotAFlood() {
+        // 30 deauths spread across 15 different networks = normal background, not an attack.
+        val frames = (0 until 30).map { w(WifiKind.DEAUTH, 0x120000000000L + it, bssid = 0xAA0000000000L + (it % 15), t = it.toLong()) }
+        assertTrue(WifiThreats.detect(frames, emptySet()).isEmpty())
+    }
+
+    @Test fun fewDeauthsOnOneNetworkAreNotAFlood() {
+        val frames = (0 until 12).map { w(WifiKind.DEAUTH, 0x121111111111L, bssid = 0xAAL, t = it.toLong()) }
         assertTrue(WifiThreats.detect(frames, emptySet()).isEmpty())
     }
 

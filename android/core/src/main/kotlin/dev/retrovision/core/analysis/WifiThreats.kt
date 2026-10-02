@@ -37,9 +37,13 @@ object WifiThreats {
     )
 
     class Config(
-        /** Minimum deauth+disassoc frames in the window to call it a flood. */
-        val deauthMin: Int = 12,
-        val deauthSaturation: Int = 80,
+        /**
+         * A flood is judged by CONCENTRATION on one network, not the raw total: normal deauth/
+         * disassoc traffic is sparse and spread across many BSSIDs, while an attack hammers one.
+         * Minimum deauth+disassoc frames targeting a SINGLE BSSID in the window to call it an attack.
+         */
+        val deauthMinPerBssid: Int = 40,
+        val deauthSaturation: Int = 400,
         /** AP answering probe requests for at least this many distinct SSIDs = KARMA. */
         val karmaMinSsids: Int = 5,
         val karmaSaturation: Int = 15,
@@ -52,20 +56,22 @@ object WifiThreats {
     fun detect(wifi: List<Sighting>, ownSsids: Set<String>, cfg: Config = Config()): List<Threat> {
         val out = ArrayList<Threat>()
 
-        // ---- DEAUTH / DISASSOC flood, grouped by the targeted network (addr3 / bssid) ----
+        // ---- DEAUTH / DISASSOC flood: judged by concentration on one targeted network ----
         val deauths = wifi.filter { it.wifi?.kind == WifiKind.DEAUTH || it.wifi?.kind == WifiKind.DISASSOC }
-        if (deauths.size >= cfg.deauthMin) {
+        if (deauths.isNotEmpty()) {
             val byBssid = deauths.groupBy { it.wifi?.bssid }
-            val (bssid, frames) = byBssid.maxByOrNull { it.value.sumOf { s -> maxOf(1, s.mergedCount) } }!!
-            val n = deauths.sumOf { maxOf(1, it.mergedCount) }
-            out += Threat(
-                Kind.DEAUTH_FLOOD,
-                severity = ((n - cfg.deauthMin).toDouble() / (cfg.deauthSaturation - cfg.deauthMin)).coerceIn(0.0, 1.0),
-                count = n,
-                bssid = bssid,
-                firstMs = deauths.minOf { it.timeMs },
-                lastMs = deauths.maxOf { it.timeMs },
-            )
+            val top = byBssid.maxByOrNull { it.value.sumOf { s -> maxOf(1, s.mergedCount) } }!!
+            val n = top.value.sumOf { maxOf(1, it.mergedCount) }
+            if (n >= cfg.deauthMinPerBssid) {
+                out += Threat(
+                    Kind.DEAUTH_FLOOD,
+                    severity = ((n - cfg.deauthMinPerBssid).toDouble() / (cfg.deauthSaturation - cfg.deauthMinPerBssid)).coerceIn(0.0, 1.0).coerceAtLeast(0.35),
+                    count = n,
+                    bssid = top.key,
+                    firstMs = top.value.minOf { it.timeMs },
+                    lastMs = top.value.maxOf { it.timeMs },
+                )
+            }
         }
 
         // ---- KARMA / MANA: a BSSID answering probe requests for many SSIDs ----
