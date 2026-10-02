@@ -61,6 +61,7 @@ import kotlinx.coroutines.launch
 class CollectorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val app get() = application as RetrovisionApp
+    private val prefs get() = app.prefs
     private val resolver = EntityResolver()
     private val queue = Channel<SightingRow>(capacity = 16_384)
     private var locationManager: LocationManager? = null
