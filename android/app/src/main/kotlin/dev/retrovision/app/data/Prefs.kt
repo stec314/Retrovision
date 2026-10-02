@@ -83,6 +83,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("quietEnd", 7)
         set(v) = p.edit().putInt("quietEnd", v).apply()
 
+    /** Notify if the probe was streaming and then disconnects. */
+    var probeDisconnectAlert: Boolean
+        get() = p.getBoolean("probeDisconnectAlert", true)
+        set(v) = p.edit().putBoolean("probeDisconnectAlert", v).apply()
+
     /** Entities marked as field-test targets (a device you carry on purpose). */
     var targets: Set<String>
         get() = p.getStringSet("targets", emptySet()) ?: emptySet()

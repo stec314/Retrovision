@@ -104,16 +104,38 @@ fun StatusScreen(modifier: Modifier) {
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (running) Texts.tr("Stop collecting", "Ferma la raccolta") else Texts.tr("Start collecting", "Avvia la raccolta")) }
 
+        val radar by Collector.liveRadar.collectAsState()
+        if (running && radar.blips.isNotEmpty()) {
+            Text(Texts.tr("Radar", "Radar"), style = MaterialTheme.typography.titleMedium)
+            RadarView()
+        }
+
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
                 Text(linkText(conn.link, conn.device, conn.error))
                 conn.session?.let { s ->
-                    s.info?.let { Text("${it.probeType} · fw ${it.firmware} · proto ${it.protocol}") }
+                    s.info?.let {
+                        Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
+                        Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    val h = probeHealth(s)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(h.dot, color = h.color)
+                        Text(h.text, color = h.color, style = MaterialTheme.typography.bodyMedium)
+                    }
                     Text(phaseText(s.phase) + (if (s.clockUncertaintyUs >= 0) " · ±${s.clockUncertaintyUs} µs" else ""))
                     if (s.rejectReason.isNotEmpty()) Text(s.rejectReason, color = MaterialTheme.colorScheme.error)
-                    Text("Wi-Fi ${s.wifiObs} · BLE ${s.bleObs} · ${Texts.tr("lost", "persi")} ${s.lostFrames + s.probeDropped} · CRC ${s.badFrames}")
-                    if (s.channel > 0) Text("ch ${s.channel} · ${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C")
+                    val seen = s.wifiObs + s.bleObs
+                    Text("Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""), style = MaterialTheme.typography.bodySmall)
+                    val lost = s.lostFrames + s.probeDropped
+                    val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
+                    Text(
+                        Texts.tr("lost", "persi") + " $lost (%.2f%%)".format(lossPct) + " · CRC ${s.badFrames}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
                     if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
             }
@@ -481,11 +503,45 @@ private fun NotificationsSection() {
             Text(Texts.tr("End", "Fine") + " $qEnd:00", style = MaterialTheme.typography.bodySmall)
             Slider(value = qEnd.toFloat(), onValueChange = { qEnd = it.toInt() }, onValueChangeFinished = { prefs.quietEndHour = qEnd }, valueRange = 0f..23f, steps = 22)
         }
+        var disc by remember { mutableStateOf(prefs.probeDisconnectAlert) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Warn me if the probe disconnects", "Avvisami se la sonda si scollega"), modifier = Modifier.weight(1f))
+            Switch(checked = disc, onCheckedChange = { disc = it; prefs.probeDisconnectAlert = it })
+        }
         TextButton(onClick = {
             val i = android.content.Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                 .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, ctx.packageName)
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             runCatching { ctx.startActivity(i) }
         }) { Text(Texts.tr("Sound & vibration (system settings)", "Suono e vibrazione (impostazioni di sistema)")) }
+    }
+}
+
+
+private fun probeModel(probeType: String): String = when (probeType) {
+    "dev.retrovision.esp32s3" -> "ESP32-S3 (XIAO)"
+    "dev.retrovision.esp32" -> Texts.tr("Classic ESP32 (NodeMCU/DevKitC)", "ESP32 classica (NodeMCU/DevKitC)")
+    "dev.retrovision.esp32c5" -> "ESP32-C5 (dual-band, Wi-Fi 6)"
+    else -> probeType.removePrefix("dev.retrovision.")
+}
+
+private class Health(val dot: String, val text: String, val color: androidx.compose.ui.graphics.Color)
+
+@Composable
+private fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
+    val ok = androidx.compose.ui.graphics.Color(0xFF7CF29A)
+    val warn = androidx.compose.ui.graphics.Color(0xFFFFC857)
+    val bad = MaterialTheme.colorScheme.error
+    val lost = s.lostFrames + s.probeDropped
+    val seen = s.wifiObs + s.bleObs
+    val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
+    return when {
+        s.phase == dev.retrovision.app.probe.Phase.REJECTED -> Health("●", Texts.tr("Rejected", "Rifiutata"), bad)
+        s.chipTempC >= 80f -> Health("●", Texts.tr("Hot: ${"%.0f".format(s.chipTempC)} °C — give it air", "Calda: ${"%.0f".format(s.chipTempC)} °C — dalle aria"), bad)
+        s.freeHeap in 1..20480 -> Health("●", Texts.tr("Low memory", "Memoria bassa"), warn)
+        lossPct > 5 -> Health("●", Texts.tr("Dropping frames (%.1f%%)".format(lossPct), "Perde frame (%.1f%%)".format(lossPct)), warn)
+        s.chipTempC >= 70f -> Health("●", Texts.tr("Warm: ${"%.0f".format(s.chipTempC)} °C", "Tiepida: ${"%.0f".format(s.chipTempC)} °C"), warn)
+        s.phase == dev.retrovision.app.probe.Phase.STREAMING -> Health("●", Texts.tr("Healthy", "In salute"), ok)
+        else -> Health("●", Texts.tr("Connecting…", "Connessione…"), warn)
     }
 }

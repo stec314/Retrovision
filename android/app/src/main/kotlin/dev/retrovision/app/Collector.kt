@@ -3,6 +3,7 @@ package dev.retrovision.app
 import dev.retrovision.app.probe.ProbeSession
 import dev.retrovision.app.probe.SessionState
 import dev.retrovision.core.analysis.AnalysisResult
+import dev.retrovision.core.identity.DeviceCategory
 import dev.retrovision.core.model.GeoFix
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.util.concurrent.atomic.AtomicBoolean
@@ -26,6 +27,19 @@ data class FlashUi(
     val success: Boolean = false,
 )
 
+/** One device on the live radar. [rssi] is smoothed; [bearingDeg] is set only when movement gives a usable estimate. */
+data class RadarBlip(
+    val entityId: String,
+    val label: String,
+    val rssi: Double,
+    val category: DeviceCategory,
+    val alert: Boolean,
+    val bearingDeg: Double?,
+    val bearingConf: Double,
+)
+
+data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Double = 0.0, val ts: Long = 0L)
+
 /** Process-wide state shared between the service and the UI. */
 object Collector {
     val connection = MutableStateFlow(ConnectionUi())
@@ -45,4 +59,7 @@ object Collector {
 
     /** Mirrors Prefs.probeLedOn; ProbeSession reads it when building the probe config. */
     val probeLedOn = MutableStateFlow(true)
+
+    /** Live radar frame (proximity + indicative bearing), refreshed a few times a second. */
+    val liveRadar = MutableStateFlow(RadarFrame())
 }

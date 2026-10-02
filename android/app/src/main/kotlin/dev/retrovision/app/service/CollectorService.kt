@@ -20,6 +20,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import dev.retrovision.app.Collector
+import dev.retrovision.app.RadarBlip
+import dev.retrovision.app.RadarFrame
 import dev.retrovision.app.ConnectionUi
 import dev.retrovision.app.Link
 import dev.retrovision.app.R
@@ -49,6 +51,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import dev.retrovision.core.analysis.BearingEstimator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -91,6 +94,8 @@ class CollectorService : Service() {
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
         scope.launch { analysisLoop() }
+        scope.launch { radarLoop() }
+        scope.launch { probeWatchLoop() }
         return START_NOT_STICKY
     }
 
@@ -201,10 +206,73 @@ class CollectorService : Service() {
 
     // ---- probe link ------------------------------------------------------------
 
+    private class RSample(val lat: Double, val lon: Double, val rssi: Int, val ms: Long)
+    private val radarLock = Any()
+    private val radarBuf = HashMap<String, ArrayDeque<RSample>>()
+
     private fun onSighting(s: Sighting) {
         SessionRecorder.write(s)
         val res = synchronized(resolver) { resolver.resolve(s) }
+        if (s.rssi != 0) {
+            val fix = Collector.location.value
+            if (fix != null) {
+                synchronized(radarLock) {
+                    val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
+                    dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs))
+                    while (dq.size > 60) dq.removeFirst()
+                }
+            }
+        }
         queue.trySend(s.toRow(res.entityId)) // full queue: drop rather than block the USB thread
+    }
+
+    /** Builds the live radar frame: smoothed RSSI as distance, movement-derived bearing when usable. */
+    private suspend fun radarLoop() {
+        val smooth = HashMap<String, Double>()
+        while (scope.isActive) {
+            delay(1500)
+            val now = System.currentTimeMillis()
+            val reports = Collector.analysis.value?.entities.orEmpty().associateBy { it.entityId }
+            val blips = ArrayList<RadarBlip>()
+            var movedM = 0.0
+            synchronized(radarLock) {
+                val it = radarBuf.iterator()
+                while (it.hasNext()) {
+                    val (id, dq) = it.next()
+                    while (dq.isNotEmpty() && now - dq.first().ms > 120_000L) dq.removeFirst()
+                    if (dq.isEmpty()) { it.remove(); smooth.remove(id); continue }
+                    val recent = dq.filter { now - it.ms <= 20_000L }
+                    if (recent.isEmpty()) continue
+                    val sm = BearingEstimator.ewma(smooth[id], recent.last().rssi).also { smooth[id] = it }
+
+                    // bearing from the last ~90 s of movement
+                    val win = dq.filter { now - it.ms <= 90_000L }
+                    val lat0 = win.map { it.lat }.average()
+                    val lon0 = win.map { it.lon }.average()
+                    val cosL = Math.cos(Math.toRadians(lat0))
+                    val samples = win.map {
+                        BearingEstimator.Sample((it.lon - lon0) * cosL * 111_320.0, (it.lat - lat0) * 111_320.0, it.rssi, it.ms)
+                    }
+                    val est = BearingEstimator.estimate(samples)
+                    val spreadE = samples.maxOfOrNull { it.east }?.minus(samples.minOfOrNull { it.east } ?: 0.0) ?: 0.0
+                    val spreadN = samples.maxOfOrNull { it.north }?.minus(samples.minOfOrNull { it.north } ?: 0.0) ?: 0.0
+                    movedM = maxOf(movedM, Math.hypot(spreadE, spreadN))
+
+                    val rep = reports[id]
+                    blips += RadarBlip(
+                        entityId = id,
+                        label = rep?.let { Texts.entityLabel(it) } ?: id,
+                        rssi = sm,
+                        category = rep?.category ?: dev.retrovision.core.identity.DeviceCategory.BLE_OTHER,
+                        alert = rep?.alert == true,
+                        bearingDeg = est?.takeIf { it.confidence >= 0.4 }?.bearingDeg,
+                        bearingConf = est?.confidence ?: 0.0,
+                    )
+                }
+            }
+            blips.sortByDescending { it.rssi }
+            Collector.liveRadar.value = RadarFrame(blips.take(40), movedM, now)
+        }
     }
 
     private suspend fun connectionLoop() {
@@ -382,6 +450,42 @@ class CollectorService : Service() {
         }
     }
 
+    /** Alerts (optionally) when a streaming probe drops out. Ignores brief re-enumerations. */
+    private suspend fun probeWatchLoop() {
+        var wasStreaming = false
+        var lostSince = 0L
+        while (scope.isActive) {
+            delay(2000)
+            if (Collector.usbPaused.get()) { lostSince = 0; continue }
+            val c = Collector.connection.value
+            val streaming = c.link == Link.CONNECTED && c.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            val now = System.currentTimeMillis()
+            if (streaming) {
+                wasStreaming = true; lostSince = 0
+            } else if (wasStreaming) {
+                if (lostSince == 0L) {
+                    lostSince = now
+                } else if (now - lostSince > 15_000L) {
+                    if (prefs.probeDisconnectAlert) notifyProbeLost()
+                    wasStreaming = false; lostSince = 0
+                }
+            }
+        }
+    }
+
+    private fun notifyProbeLost() {
+        val nm = getSystemService(NotificationManager::class.java)
+        val n = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(Texts.tr("Probe disconnected", "Sonda scollegata"))
+            .setContentText(Texts.tr("The probe stopped streaming. Check the cable or the board.", "La sonda ha smesso di trasmettere. Controlla il cavo o la scheda."))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        nm.notify(NOTIF_PROBE_LOST, n)
+    }
+
     /** True when [now] falls inside the user's quiet hours (local time, may wrap past midnight). */
     private fun inQuietHours(now: Long): Boolean {
         if (!prefs.quietHoursEnabled) return false
@@ -417,6 +521,7 @@ class CollectorService : Service() {
         private const val CH_ALERTS = "alerts"
         private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
+        private const val NOTIF_PROBE_LOST = 2
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))
