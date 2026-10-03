@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -103,7 +106,10 @@ fun MyDevicesScanDialog(onClose: () -> Unit) {
                 entityId = b.entityId,
                 memberIds = rep?.memberIds ?: setOf(b.entityId),
                 label = b.label,
-                category = CategoryUi.icon(b.category) + " " + CategoryUi.label(b.category),
+                // Devices not in the detailed report have no category yet: say at least which radio.
+                category = if (rep == null) {
+                    if (b.entityId.startsWith("wifi:")) "📶 " + Texts.tr("Wi-Fi device", "Dispositivo Wi-Fi") else "ᛒ " + Texts.tr("Bluetooth device", "Dispositivo Bluetooth")
+                } else CategoryUi.icon(b.category) + " " + CategoryUi.label(b.category),
                 rssi = b.rssi.toInt(),
                 paired = addrs.firstNotNullOfOrNull { paired[it.lowercase()] },
                 rotating = rep != null && rep.macTrust != MacTrust.STABLE,
@@ -132,10 +138,45 @@ fun MyDevicesScanDialog(onClose: () -> Unit) {
     val ignoredIds = ignores.map { it.entityId }.toSet()
     val ownNow = app.prefs.ownSsidSet()
 
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    fun save() {
+        val devs = picked.toMap()
+        val netsSel = pickedNets.values.toList()
+        scope.launch {
+            val now = System.currentTimeMillis()
+            val dao = app.db.dao()
+            devs.forEach { (id, name) ->
+                val c = snapshot.firstOrNull { it.entityId == id }
+                // Every merged address of the device, so a later re-merge still matches.
+                (c?.memberIds ?: setOf(id)).forEach { m -> dao.addIgnore(IgnoreRow(m, name.ifBlank { c?.label ?: id }, now)) }
+            }
+            if (netsSel.isNotEmpty()) {
+                val names = (app.prefs.ownSsidSet() + netsSel.map { it.ssid }).toSortedSet()
+                app.prefs.ownSsids = names.joinToString(", ")
+                app.prefs.trustedAps = app.prefs.trustedAps + netsSel.flatMap { n -> n.bssids.map { "${n.ssid}|$it" } }
+            }
+            Collector.analyzeNow.value = System.nanoTime()
+            saved = Texts.tr(
+                "Saved: ${devs.size} device(s), ${netsSel.size} network(s).",
+                "Salvati: ${devs.size} dispositivi, ${netsSel.size} reti.",
+            )
+            picked.clear(); pickedNets.clear(); frozen = false
+        }
+    }
+    val count = picked.size + pickedNets.size
+
+    // Edge to edge, insets handled here: the action bar must stay above the navigation bar and the keyboard.
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(Texts.tr("Add my devices", "Aggiungi i miei dispositivi"), style = MaterialTheme.typography.headlineSmall)
+          Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+            // Top bar: close and save are always reachable, whatever the list length.
+            Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                androidx.compose.material3.IconButton(onClick = onClose) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Close, Texts.tr("Close", "Chiudi"))
+                }
+                Text(Texts.tr("Add my devices", "Aggiungi i miei dispositivi"), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                TextButton(enabled = count > 0, onClick = { save() }) { Text(Texts.tr("Save", "Salva") + if (count > 0) " ($count)" else "") }
+            }
+            Column(Modifier.weight(1f).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     Texts.tr(
                         "Switch on your own phone, watch, earbuds, car or tags and keep them close: the strongest signals come first. Tick yours. They stop counting as suspicious.",
@@ -242,38 +283,19 @@ fun MyDevicesScanDialog(onClose: () -> Unit) {
                     }
                 }
 
+            }
+            // Bottom bar: the same actions, where the thumb is.
+            androidx.compose.material3.HorizontalDivider()
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 saved?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        enabled = picked.isNotEmpty() || pickedNets.isNotEmpty(),
-                        onClick = {
-                            val devs = picked.toMap()
-                            val netsSel = pickedNets.values.toList()
-                            scope.launch {
-                                val now = System.currentTimeMillis()
-                                val dao = app.db.dao()
-                                devs.forEach { (id, name) ->
-                                    val c = snapshot.firstOrNull { it.entityId == id }
-                                    // Every merged address of the device, so a later re-merge still matches.
-                                    (c?.memberIds ?: setOf(id)).forEach { m -> dao.addIgnore(IgnoreRow(m, name.ifBlank { c?.label ?: id }, now)) }
-                                }
-                                if (netsSel.isNotEmpty()) {
-                                    val names = (app.prefs.ownSsidSet() + netsSel.map { it.ssid }).toSortedSet()
-                                    app.prefs.ownSsids = names.joinToString(", ")
-                                    app.prefs.trustedAps = app.prefs.trustedAps + netsSel.flatMap { n -> n.bssids.map { "${n.ssid}|$it" } }
-                                }
-                                Collector.analyzeNow.value = System.nanoTime()
-                                saved = Texts.tr(
-                                    "Saved: ${devs.size} device(s), ${netsSel.size} network(s).",
-                                    "Salvati: ${devs.size} dispositivi, ${netsSel.size} reti.",
-                                )
-                                picked.clear(); pickedNets.clear(); frozen = false
-                            }
-                        },
-                    ) { Text(Texts.tr("Save as mine", "Salva come miei")) }
+                    Button(enabled = count > 0, onClick = { save() }, modifier = Modifier.weight(1f)) {
+                        Text(Texts.tr("Save as mine", "Salva come miei") + if (count > 0) " ($count)" else "")
+                    }
                     OutlinedButton(onClick = onClose) { Text(Texts.tr("Done", "Fatto")) }
                 }
             }
+          }
         }
     }
 }
