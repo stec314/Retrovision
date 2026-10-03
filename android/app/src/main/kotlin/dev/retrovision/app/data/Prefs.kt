@@ -107,6 +107,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("devicesShown", 300)
         set(v) = p.edit().putInt("devicesShown", v).apply()
 
+    /** Devices list as one-line rows instead of cards. */
+    var devicesCompact: Boolean
+        get() = p.getBoolean("devicesCompact", false)
+        set(v) = p.edit().putBoolean("devicesCompact", v).apply()
+
     /** Map: show where alerting devices were heard (only places on your own track). */
     var mapAlertDevices: Boolean
         get() = p.getBoolean("mapAlertDevices", true)

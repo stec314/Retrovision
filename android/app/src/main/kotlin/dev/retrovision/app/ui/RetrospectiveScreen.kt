@@ -2,6 +2,12 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
+import androidx.compose.material3.TextButton
+
+import androidx.compose.foundation.rememberScrollState
+
+import androidx.compose.foundation.horizontalScroll
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +40,10 @@ import kotlinx.coroutines.launch
 fun RetrospectiveCard() {
     val scope = rememberCoroutineScope()
     var spanH by remember { mutableStateOf(24) }
+    // A custom period (from, to) chosen on the calendar; null = the last [spanH] hours.
+    var custom by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var picking by remember { mutableStateOf(false) }
+    val dayFmt = remember { java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM) }
     var running by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Retrospective.Result?>(null) }
     var selected by remember { mutableStateOf<EntityReport?>(null) }
@@ -48,17 +58,24 @@ fun RetrospectiveCard() {
                 ),
                 style = MaterialTheme.typography.bodySmall,
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(24 to "24 h", 72 to "3 g", 168 to "7 g").forEach { (h, label) ->
-                    FilterChip(selected = spanH == h, onClick = { spanH = h }, label = { Text(label) }, enabled = !running)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(6 to "6 h", 24 to "24 h", 72 to Texts.tr("3 days", "3 giorni"), 168 to Texts.tr("7 days", "7 giorni")).forEach { (h, label) ->
+                    FilterChip(selected = custom == null && spanH == h, onClick = { spanH = h; custom = null }, label = { Text(label) }, enabled = !running)
                 }
+                FilterChip(
+                    selected = custom != null, onClick = { picking = true }, enabled = !running,
+                    label = { Text(custom?.let { (a, b) -> dayFmt.format(java.util.Date(a)) + " – " + dayFmt.format(java.util.Date(b - 1)) } ?: Texts.tr("Choose dates…", "Scegli le date…")) },
+                )
             }
             Button(
                 enabled = !running,
                 onClick = {
                     running = true
                     scope.launch {
-                        result = runCatching { Retrospective.run(spanH * 3_600_000L) }.getOrNull()
+                        result = runCatching {
+                            val c = custom
+                            if (c != null) Retrospective.run(c.first, c.second) else Retrospective.run(spanH * 3_600_000L)
+                        }.getOrNull()
                         running = false
                     }
                 },
@@ -114,4 +131,33 @@ fun RetrospectiveCard() {
         }
     }
     selected?.let { DeviceDialog(it) { selected = null } }
+
+    if (picking) {
+        val today = remember { System.currentTimeMillis() }
+        val st = androidx.compose.material3.rememberDateRangePickerState(
+            selectableDates = object : androidx.compose.material3.SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= today
+            },
+        )
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { picking = false },
+            confirmButton = {
+                TextButton(
+                    enabled = st.selectedStartDateMillis != null,
+                    onClick = {
+                        // The picker returns UTC midnights: turn them into local whole days, end exclusive.
+                        val zone = java.time.ZoneId.systemDefault()
+                        fun day(utc: Long) = java.time.Instant.ofEpochMilli(utc).atZone(java.time.ZoneOffset.UTC).toLocalDate()
+                        val a = day(st.selectedStartDateMillis!!)
+                        val b = day(st.selectedEndDateMillis ?: st.selectedStartDateMillis!!)
+                        custom = a.atStartOfDay(zone).toInstant().toEpochMilli() to b.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+                        picking = false
+                    },
+                ) { Text(Texts.tr("Use these days", "Usa questi giorni")) }
+            },
+            dismissButton = { TextButton(onClick = { picking = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
+        ) {
+            androidx.compose.material3.DateRangePicker(state = st, modifier = Modifier.weight(1f))
+        }
+    }
 }

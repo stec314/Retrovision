@@ -3,6 +3,14 @@
 package dev.retrovision.app.ui
 
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -286,26 +294,109 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         if (r.kind == EntityKind.WIFI_AP && r.ssids.isNotEmpty()) add("SSID “${r.ssids.first()}”" to Query.WifiSsid(r.ssids.first()))
     }
 
-    // Full screen: the evidence needs room, and a stressed tap must not hit "it's mine" by mistake.
+    var findIt by remember { mutableStateOf(false) }
+    var lookupMenu by remember { mutableStateOf<String?>(null) }
+    val isTarget = remember { mutableStateOf(r.entityId in app.prefs.targets) }
+    val flagged = r.alert || r.score >= 0.5
+    fun lookup(e: dev.retrovision.app.enrich.Enricher, label: String, q: Query) {
+        busy = true
+        scope.launch {
+            output = try {
+                withContext(Dispatchers.IO) { enrichers.lookup(e, q) }.let { listOf("${it.source}${if (it.fromCache) " (cache)" else ""} — $label") + it.lines }
+            } catch (ex: EnrichException) {
+                listOf(ex.message ?: "error")
+            } catch (ex: Exception) {
+                listOf("${e.label}: ${ex.message ?: ex.javaClass.simpleName}")
+            }
+            busy = false
+        }
+    }
+    fun verdict(label: Int) = scope.launch {
+        for (m in r.memberIds) {
+            app.db.dao().addFeedback(
+                dev.retrovision.app.data.FeedbackRow(
+                    entityId = m, label = label, score = r.score,
+                    reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
+                ),
+            )
+        }
+        Collector.analyzeNow.value = System.nanoTime()
+        onClose()
+    }
+
+    // Full screen: actions first (always visible, with icons), then the evidence; extra detail folded.
     FullScreenDialog(onDismiss = onClose) {
         run {
             Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    androidx.compose.material3.IconButton(onClick = onClose) {
-                        androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, Texts.tr("Back", "Indietro"))
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 4.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    BackButton(onClose)
+                    Column(Modifier.weight(1f)) {
+                        Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        Text(
+                            CategoryUi.label(r.category) + " · " + Texts.tr("last ", "ultimo ") + fmt.format(Date(r.lastSeenMs)),
+                            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                        )
                     }
-                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 2)
+                    LevelPill(lv)
                 }
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    // Header: the answer, what it is, the key numbers.
-                    LevelPill(lv)
-                    Text(
-                        CategoryUi.label(r.category) + " · " + Texts.tr("last heard ", "ultimo ascolto ") + fmt.format(Date(r.lastSeenMs)),
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    // ── Actions: one tap each ──
+                    val tiles = buildList<ActionTileSpec> {
+                        add(ActionTileSpec({ MapGlyphIcon(MapGlyph.LOCATE, "") }, Texts.tr("Find it", "Trovalo")) { findIt = true })
+                        enrichers.all().forEach { e ->
+                            val mine = queries.filter { (_, q) -> e.supports(q) }
+                            if (mine.isEmpty()) return@forEach
+                            val ready = mine.any { (_, q) -> enrichers.available(q).any { it.id == e.id } }
+                            add(
+                                ActionTileSpec(
+                                    { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Search, null) },
+                                    e.label + if (!ready) Texts.tr(" (set up)", " (configura)") else "",
+                                    enabled = ready && !busy,
+                                ) { if (mine.size == 1) lookup(e, mine[0].first, mine[0].second) else lookupMenu = e.id },
+                            )
+                        }
+                        if (flagged) add(
+                            ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Place, null) }, Texts.tr("In Places", "In Luoghi")) {
+                                onClose(); MapNav.device.value = r.entityId
+                            },
+                        )
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Warning, null) }, Texts.tr("Suspicious", "Sospetto"), tint = MaterialTheme.colorScheme.error) { verdict(2) })
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
+                        add(
+                            ActionTileSpec(
+                                { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Star, null) },
+                                if (isTarget.value) Texts.tr("Test target ✓", "Bersaglio ✓") else Texts.tr("Test target", "Bersaglio prova"),
+                            ) {
+                                app.prefs.targets = if (isTarget.value) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
+                                isTarget.value = !isTarget.value
+                            },
+                        )
+                    }
+                    ActionGrid(tiles)
+                    lookupMenu?.let { id ->
+                        val e = enrichers.all().first { it.id == id }
+                        Panel(title = e.label) {
+                            queries.filter { (_, q) -> e.supports(q) }.forEach { (label, q) ->
+                                Text(
+                                    label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.fillMaxWidth().clickable { lookupMenu = null; lookup(e, label, q) }.padding(vertical = 8.dp),
+                                )
+                            }
+                        }
+                    }
+                    if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (output.isNotEmpty()) {
+                        Panel(title = Texts.tr("Lookup result", "Risultato ricerca"), trailing = {
+                            Text(Texts.tr("Clear", "Pulisci"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, modifier = Modifier.clickable { output = emptyList() })
+                        }) {
+                            output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+                        }
+                    }
+
                     Panel {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Stat("${r.placeIds.size}", Texts.tr("places", "luoghi"), Modifier.weight(1f))
@@ -315,12 +406,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         }
                     }
 
-                    // A device that may follow you: the map comes first, it is the evidence people understand.
-                    if (r.alert || r.score >= 0.5) {
-                        DeviceMapPanel(r, lv) { onClose(); MapNav.device.value = r.entityId }
-                    }
+                    // A device that may follow you: the map is the evidence people understand.
+                    if (flagged) DeviceMapPanel(r, lv) { onClose(); MapNav.device.value = r.entityId }
 
-                    // Each block opens on tap; the reasons start open.
                     Expandable(
                         Texts.tr("Why", "Perché"),
                         summary = r.reasons.firstOrNull()?.let { Texts.reason(it) },
@@ -333,17 +421,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     }
                     if (r.visits.isNotEmpty()) {
                         Expandable(
-                            Texts.tr("When and where", "Quando e dove"),
+                            Texts.tr("Times heard", "Orari di ascolto"),
                             summary = Texts.tr("${r.visits.size} stretches · first ", "${r.visits.size} periodi · primo ") + fmt.format(Date(r.firstSeenMs)),
-                        ) {
-                            // Only flagged devices go on the map, and only at your own positions.
-                            if ((r.alert || r.score >= 0.5) && r.visits.any { it.lat != null }) {
-                                OutlinedButton(onClick = { onClose(); MapNav.device.value = r.entityId }) {
-                                    Text(Texts.tr("Show all its places on the map", "Mostra tutti i suoi luoghi sulla mappa"))
-                                }
-                            }
-                            VisitsList(r)
-                        }
+                        ) { VisitsList(r) }
                     }
                     Expandable(
                         Texts.tr("Identity and addresses", "Identità e indirizzi"),
@@ -355,55 +435,21 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                             summary = Texts.tr("${r.probedSsids.size} asked by name · ${r.joinAttempts.size} joins", "${r.probedSsids.size} chieste per nome · ${r.joinAttempts.size} connessioni"),
                         ) { NetworksPart(r) }
                     }
-                    Expandable(Texts.tr("Tools and online lookups", "Strumenti e ricerche online"), summary = Texts.tr("Find it · WiGLE · BeaconDB", "Trovalo · WiGLE · BeaconDB")) {
-                        var findIt by remember { mutableStateOf(false) }
-                        OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
-                        if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
+                    Expandable(Texts.tr("About these actions", "Cosa fanno queste azioni")) {
                         Text(
-                            Texts.tr("Lookups send only the identifier you tap, to that service.", "Le ricerche inviano solo l'identificativo che tocchi, a quel servizio."),
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Texts.tr(
+                                "Find it: hotter/colder meter to locate it. Lookups (WiGLE, BeaconDB) send only that identifier to that service. Suspicious / False alarm: your verdict, kept on the phone; false alarm silences its alerts for 24 h. It's mine: hides it until you remove it in Settings. Test target: follow its detection in Settings → Field test.",
+                                "Trovalo: misuratore caldo/freddo per localizzarlo. Ricerche (WiGLE, BeaconDB): inviano solo quell'identificativo a quel servizio. Sospetto / Falso allarme: il tuo giudizio, resta sul telefono; falso allarme silenzia le sue allerte per 24 h. È mio: lo nasconde finché non lo togli in Impostazioni. Bersaglio prova: ne segui il rilevamento in Impostazioni → Test sul campo.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
                         )
-                        queries.forEach { (label, q) ->
-                            enrichers.all().filter { it.supports(q) }.forEach { e ->
-                                val ready = enrichers.available(q).any { it.id == e.id }
-                                OutlinedButton(
-                                    enabled = ready && !busy,
-                                    onClick = {
-                                        busy = true
-                                        scope.launch {
-                                            output = try {
-                                                withContext(Dispatchers.IO) { enrichers.lookup(e, q) }.let {
-                                                    listOf("${it.source}${if (it.fromCache) " (cache)" else ""} — $label") + it.lines
-                                                }
-                                            } catch (ex: EnrichException) {
-                                                listOf(ex.message ?: "error")
-                                            } catch (ex: Exception) {
-                                                listOf("${e.label}: ${ex.message ?: ex.javaClass.simpleName}")
-                                            }
-                                            busy = false
-                                        }
-                                    },
-                                ) { Text("${e.label}: $label" + if (!ready) Texts.tr("  (set up in Settings)", "  (configura in Impostazioni)") else "") }
-                            }
-                        }
-                        output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
-                        val isTarget = r.entityId in app.prefs.targets
-                        TextButton(onClick = {
-                            app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
-                            onClose()
-                        }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
                     }
-
-                    // Your verdict.
-                    Panel(title = Texts.tr("Your verdict", "Il tuo giudizio")) {
-                        FeedbackRowUi(r, onClose)
-                        TextButton(onClick = { confirmMine = true }) { Text(Texts.tr("It's mine — stop showing it", "È mio — non mostrarlo più")) }
-                    }
-                    androidx.compose.foundation.layout.Spacer(Modifier.padding(16.dp))
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(12.dp))
                 }
             }
         }
     }
+    if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
 
     if (confirmMine) {
         AlertDialog(
@@ -1357,7 +1403,6 @@ private fun RadarSection(running: Boolean) {
     val radar by Collector.liveRadar.collectAsState()
     if (running && radar.blips.isNotEmpty()) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(Texts.tr("Radar", "Radar"), style = MaterialTheme.typography.titleMedium)
             RadarView()
         }
     }
@@ -1418,6 +1463,46 @@ private fun SensorDetails(running: Boolean) {
                     else "%.5f, %.5f (±%.0f m)".format(f.lat, f.lon, f.accuracyM),
                 )
                 Text(Texts.tr("Stored sightings: ≈", "Avvistamenti salvati: ≈") + count)
+            }
+        }
+    }
+}
+
+
+internal class ActionTileSpec(
+    val icon: @Composable () -> Unit,
+    val label: String,
+    val enabled: Boolean = true,
+    val tint: androidx.compose.ui.graphics.Color? = null,
+    val onClick: () -> Unit,
+)
+
+/** Actions as a grid of big icon tiles (4 per row): reachable with a thumb, readable at a glance. */
+@Composable
+internal fun ActionGrid(tiles: List<ActionTileSpec>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        tiles.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                row.forEach { t ->
+                    val c = when {
+                        !t.enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        t.tint != null -> t.tint
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+                    Column(
+                        Modifier.weight(1f)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainer)
+                            .clickable(enabled = t.enabled) { t.onClick() }
+                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides c) { t.icon() }
+                        Text(t.label, style = MaterialTheme.typography.labelMedium, color = c, maxLines = 2, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    }
+                }
+                repeat(4 - row.size) { androidx.compose.foundation.layout.Spacer(Modifier.weight(1f)) }
             }
         }
     }

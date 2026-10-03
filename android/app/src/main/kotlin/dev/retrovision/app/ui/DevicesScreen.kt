@@ -156,7 +156,9 @@ fun DevicesScreen(modifier: Modifier) {
     var searchAll by rememberSaveable { mutableStateOf(false) }
     var shownMax by rememberSaveable { mutableStateOf(RetrovisionApp.instance.prefs.devicesShown) }
     var listMenu by remember { mutableStateOf(false) }
-    var dbSearch by remember { mutableStateOf<String?>(null) }
+    // What the list shows: the live analysis window, or the whole stored archive. And how: cards or rows.
+    var archive by rememberSaveable { mutableStateOf(false) }
+    var compact by rememberSaveable { mutableStateOf(RetrovisionApp.instance.prefs.devicesCompact) }
     val index by produceState<EntitySearch.Index<EntityReport>?>(null, all) {
         value = withContext(Dispatchers.Default) {
             EntitySearch.reports(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
@@ -239,99 +241,111 @@ fun DevicesScreen(modifier: Modifier) {
                 }
             },
         )
-        // Last resort: everything still stored, beyond the analysis window. Slow, so only on request.
-        if (query.trim().length >= 2) Text(
-            "🗄 " + Texts.tr(
-                "Search all saved data (${RetrovisionApp.instance.prefs.retentionDays} days)",
-                "Cerca in tutti i dati salvati (${RetrovisionApp.instance.prefs.retentionDays} giorni)",
-            ),
-            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clip(RoundedCornerShape(50)).clickable { dbSearch = query.trim() }.padding(start = 14.dp, top = 6.dp, end = 10.dp, bottom = 2.dp),
-        )
+        // Source and view: live window or full archive; cards or compact rows.
+        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = !archive, onClick = { archive = false }, label = { Text(Texts.tr("Live window", "Finestra live")) })
+            FilterChip(
+                selected = archive, onClick = { archive = true },
+                label = { Text(Texts.tr("Archive · ${RetrovisionApp.instance.prefs.retentionDays} d", "Archivio · ${RetrovisionApp.instance.prefs.retentionDays} g")) },
+            )
+            androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+            Text(
+                if (compact) Texts.tr("Cards", "Schede") else Texts.tr("Compact", "Compatta"),
+                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clip(RoundedCornerShape(50)).clickable {
+                    compact = !compact; RetrovisionApp.instance.prefs.devicesCompact = compact
+                }.padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
         if (searchAll && others.isNotEmpty()) Text(
             Texts.tr("Searching also the other ${others.size} devices", "Cerco anche negli altri ${others.size} dispositivi"),
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, start = 14.dp),
         )
-        androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 6.dp))
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            DeviceFilter.entries.forEach { f ->
-                val n = view.counts[f] ?: 0
-                if (n == 0 && f != DeviceFilter.ALL && f != filter) return@forEach
-                FilterChip(
-                    selected = filter == f,
-                    onClick = { filter = f },
-                    label = { Text((if (f.emoji.isNotEmpty()) f.emoji + " " else "") + f.label + " $n") },
-                )
+        if (archive) {
+            androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 6.dp))
+            ArchivePane(query, compact, Modifier.fillMaxSize())
+        } else {
+            androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 6.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                DeviceFilter.entries.forEach { f ->
+                    val n = view.counts[f] ?: 0
+                    if (n == 0 && f != DeviceFilter.ALL && f != filter) return@forEach
+                    FilterChip(
+                        selected = filter == f,
+                        onClick = { filter = f },
+                        label = { Text((if (f.emoji.isNotEmpty()) f.emoji + " " else "") + f.label + " $n") },
+                    )
+                }
             }
-        }
-        if (all.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
-        else if (!view.ready) LinearProgressIndicator(Modifier.fillMaxWidth())
-        else if (list.isEmpty() && query.isNotBlank()) {
-            Text(Texts.tr("No device matches “$query” in the analysed window.", "Nessun dispositivo corrisponde a “$query” nella finestra analizzata."))
-        }
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (filter == DeviceFilter.SEARCHING) {
-                item(key = "networks") {
-                    val nets = view.networks
-                    if (nets.isNotEmpty()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Text(
-                                Texts.tr("Networks being searched for (devices asking)", "Reti cercate (dispositivi che le chiedono)"),
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                            Text(
-                                Texts.tr(
-                                    "Tap one to see who asks for it. A network many devices know is a public one; one only a single device knows says more about that device.",
-                                    "Toccane una per vedere chi la cerca. Una rete nota a molti dispositivi è pubblica; una che conosce un solo dispositivo dice di più su di esso.",
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                nets.take(60).forEach { (ssid, n) ->
-                                    FilterChip(
-                                        selected = EntitySearch.norm(query) == EntitySearch.norm(ssid),
-                                        onClick = { query = if (EntitySearch.norm(query) == EntitySearch.norm(ssid)) "" else ssid },
-                                        label = { Text("“$ssid” · $n") },
-                                    )
+            if (all.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
+            else if (!view.ready) LinearProgressIndicator(Modifier.fillMaxWidth())
+            else if (list.isEmpty() && query.isNotBlank()) {
+                Text(Texts.tr("No device matches “$query” in the analysed window.", "Nessun dispositivo corrisponde a “$query” nella finestra analizzata."))
+            }
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (filter == DeviceFilter.SEARCHING) {
+                    item(key = "networks") {
+                        val nets = view.networks
+                        if (nets.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    Texts.tr("Networks being searched for (devices asking)", "Reti cercate (dispositivi che le chiedono)"),
+                                    style = MaterialTheme.typography.labelLarge,
+                                )
+                                Text(
+                                    Texts.tr(
+                                        "Tap one to see who asks for it. A network many devices know is a public one; one only a single device knows says more about that device.",
+                                        "Toccane una per vedere chi la cerca. Una rete nota a molti dispositivi è pubblica; una che conosce un solo dispositivo dice di più su di esso.",
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    nets.take(60).forEach { (ssid, n) ->
+                                        FilterChip(
+                                            selected = EntitySearch.norm(query) == EntitySearch.norm(ssid),
+                                            onClick = { query = if (EntitySearch.norm(query) == EntitySearch.norm(ssid)) "" else ssid },
+                                            label = { Text("“$ssid” · $n") },
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
-            items(list.take(shownMax), key = { it.entityId }) { r ->
-                EntityCard(r, query) { selected = r }
-            }
-            if (view.stubs.isNotEmpty()) {
-                item(key = "stubs-h") { Overline(Texts.tr("Other devices (${view.stubs.size})", "Altri dispositivi (${view.stubs.size})"), Modifier.padding(top = 8.dp)) }
-                items(view.stubs, key = { "s" + it.entityId }) { st ->
-                    StubRow(st, loading = opening == st.entityId) {
-                        val f = Collector.analyzeOne ?: return@StubRow
-                        opening = st.entityId
-                        scope.launch {
-                            val r = runCatching { f(st.entityId) }.getOrNull()
-                            opening = null
-                            if (r != null) selected = r
+                items(list.take(shownMax), key = { it.entityId }) { r ->
+                    if (compact) CompactEntityRow(r) { selected = r } else EntityCard(r, query) { selected = r }
+                }
+                if (view.stubs.isNotEmpty()) {
+                    item(key = "stubs-h") { Overline(Texts.tr("Other devices (${view.stubs.size})", "Altri dispositivi (${view.stubs.size})"), Modifier.padding(top = 8.dp)) }
+                    items(view.stubs, key = { "s" + it.entityId }) { st ->
+                        StubRow(st, loading = opening == st.entityId) {
+                            val f = Collector.analyzeOne ?: return@StubRow
+                            opening = st.entityId
+                            scope.launch {
+                                val r = runCatching { f(st.entityId) }.getOrNull()
+                                opening = null
+                                if (r != null) selected = r
+                            }
                         }
                     }
+                } else if (searchAll && query.isNotBlank() && view.ready && stubIndex == null) {
+                    item(key = "stubs-wait") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
                 }
-            } else if (searchAll && query.isNotBlank() && view.ready && stubIndex == null) {
-                item(key = "stubs-wait") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-            }
-            if (list.size > shownMax) item(key = "more") {
-                Text(
-                    Texts.tr("Showing $shownMax of ${list.size}. Search, filter or change ⋮ to see more.", "Mostrati $shownMax su ${list.size}. Cerca, filtra o cambia ⋮ per vederne di più."),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                if (list.size > shownMax) item(key = "more") {
+                    Text(
+                        Texts.tr("Showing $shownMax of ${list.size}. Search, filter or change ⋮ to see more.", "Mostrati $shownMax su ${list.size}. Cerca, filtra o cambia ⋮ per vederne di più."),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }
     selected?.let { DeviceDialog(it) { selected = null } }
-    dbSearch?.let { q -> DbSearchDialog(q) { dbSearch = null } }
+
 }
 
 private class DevicesView(
@@ -644,5 +658,20 @@ fun SearchField(value: String, onChange: (String) -> Unit, placeholder: String, 
             androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
             trailing()
         }
+    }
+}
+
+/** One line per device: icon, name, level. For scanning long lists quickly. */
+@Composable
+private fun CompactEntityRow(r: EntityReport, onClick: () -> Unit) {
+    val lv = dev.retrovision.core.analysis.Levels.of(r)
+    Row(
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(CategoryUi.icon(r.category), modifier = Modifier.padding(start = 4.dp))
+        Text(Texts.entityLabel(r), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text("${r.placeIds.size} " + Texts.tr("pl.", "luoghi"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.foundation.layout.Box(Modifier.size(10.dp).clip(CircleShape).background(levelColor(lv)))
     }
 }

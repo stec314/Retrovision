@@ -150,6 +150,18 @@ interface AppDao {
     @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from")
     suspend fun sightingCountSince(from: Long): Long
 
+    @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from AND timeMs < :to")
+    suspend fun sightingCountBetween(from: Long, to: Long): Long
+
+    @Query("SELECT * FROM sightings WHERE timeMs >= :from AND timeMs < :to ORDER BY timeMs")
+    suspend fun sightingsBetween(from: Long, to: Long): List<SightingRow>
+
+    @Query("SELECT * FROM sightings WHERE timeMs >= :from AND timeMs < :to AND (id % :stride) = 0 ORDER BY timeMs")
+    suspend fun sightingsBetweenSampled(from: Long, to: Long, stride: Int): List<SightingRow>
+
+    @Query("SELECT * FROM fixes WHERE timeMs >= :from AND timeMs < :to ORDER BY timeMs")
+    suspend fun fixesBetween(from: Long, to: Long): List<FixRow>
+
     /**
      * The analysis window, thinned: one row per (device, frame kind, advert type, SSID) per
      * [bucketMs]. A device that advertises every second says the same thing 60 times a minute;

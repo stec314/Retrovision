@@ -41,35 +41,36 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
-private const val MAX_HITS = 300
+private const val MAX_HITS = 1000
 private const val MAX_TIMES = 50_000
 
 /** A stretch of time in which a device was heard without a gap of more than 10 minutes. */
 private class Stretch(val fromMs: Long, val toMs: Long, val n: Int, val maxRssi: Int, val lat: Double?, val lon: Double?)
 
 /**
- * Searches everything still stored (up to the retention period), not only the analysis window.
- * A full scan of an encrypted table: it takes seconds to minutes, so it runs only when asked.
+ * The full archive: every device still stored (up to the retention period), not only the analysis
+ * window, filtered by [query] (address, network names, Bluetooth names). A full scan of an encrypted
+ * table, so it waits for a pause in typing and shows progress.
  */
 @Composable
-fun DbSearchDialog(query: String, onClose: () -> Unit) {
+fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) {
     val app = RetrovisionApp.instance
     var hits by remember { mutableStateOf<List<DbHit>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var tookMs by remember { mutableStateOf(0L) }
     var open by remember { mutableStateOf<DbHit?>(null) }
-    var report by remember { mutableStateOf<dev.retrovision.core.analysis.EntityReport?>(null) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT) }
 
     LaunchedEffect(query) {
+        kotlinx.coroutines.delay(400)
+        hits = null; error = null
         val q = query.trim()
-        if (q.length < 2) { hits = emptyList(); return@LaunchedEffect }
         val t0 = System.currentTimeMillis()
         runCatching {
             withContext(Dispatchers.IO) {
                 val cap = q.replaceFirstChar { it.uppercaseChar() }
                 app.db.dao().searchAll(
-                    like = "%" + q.lowercase().replace("%", "").replace("_", "\\_") + "%",
+                    like = if (q.isEmpty()) "%" else "%" + q.lowercase().replace("%", "").replace("_", "\\_") + "%",
                     a = q.toByteArray(), b = q.lowercase().toByteArray(), c = cap.toByteArray(),
                     limit = MAX_HITS,
                 )
@@ -78,57 +79,67 @@ fun DbSearchDialog(query: String, onClose: () -> Unit) {
         tookMs = System.currentTimeMillis() - t0
     }
 
-    FullScreenDialog(onDismiss = onClose) {
-        run {
-            Column(Modifier.fillMaxSize()) {
-                Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { if (open != null) open = null else onClose() }) {
-                        Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, Texts.tr("Back", "Indietro"))
-                    }
-                    Column(Modifier.weight(1f)) {
-                        Text(Texts.tr("All saved data", "Tutti i dati salvati"), style = MaterialTheme.typography.titleLarge)
-                        Text("“$query”", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-                    }
-                }
-                val h = open
-                if (h != null) HitDetail(h, onOpenReport = { report = it })
-                else Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val list = hits
-                    if (list == null) {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Text(
-                            Texts.tr(
-                                "Searching every stored sighting (addresses, network names, Bluetooth names). On a large database this takes a while.",
-                                "Cerco in tutti gli avvistamenti salvati (indirizzi, nomi di rete, nomi Bluetooth). Con un database grande ci vuole un po'.",
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        val list = hits
+        if (list == null) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            Text(
+                Texts.tr(
+                    "Reading the whole archive (${app.prefs.retentionDays} days of sightings). On a large database this takes a while.",
+                    "Leggo tutto l'archivio (${app.prefs.retentionDays} giorni di avvistamenti). Con un database grande ci vuole un po'.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            Text(
+                (if (list.size >= MAX_HITS) Texts.tr("Newest $MAX_HITS devices", "I $MAX_HITS dispositivi più recenti") else Texts.tr("${list.size} devices", "${list.size} dispositivi")) +
+                    " · ${"%.1f".format(tookMs / 1000.0)} s" + if (list.size >= MAX_HITS) Texts.tr(" · search to narrow down", " · cerca per restringere") else "",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 8.dp)) {
+                items(list, key = { it.entityId }) { hit ->
+                    if (compact) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { open = hit }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(if (hit.radio == 0) "📶" else "ᛒ", modifier = Modifier.padding(start = 4.dp))
+                            Text(hitLabel(hit), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            Text("${hit.days} " + Texts.tr("d", "g"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     } else {
-                        error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                        Text(
-                            (if (list.size >= MAX_HITS) Texts.tr("First $MAX_HITS devices", "Primi $MAX_HITS dispositivi") else Texts.tr("${list.size} devices", "${list.size} dispositivi")) +
-                                " · ${tookMs / 1000.0} s · " + Texts.tr("newest first", "più recenti prima"),
-                            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(list, key = { it.entityId }) { hit ->
-                                Panel(onClick = { open = hit }) {
-                                    Text(hitLabel(hit), style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                                    Text(
-                                        (if (hit.radio == 0) "Wi-Fi" else "Bluetooth") + " · ${hit.days} " + Texts.tr("day(s)", "giorni") +
-                                            " · ${hit.n} " + Texts.tr("sightings", "rilevazioni") + " · max ${hit.maxRssi} dBm",
-                                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Text(
-                                        fmt.format(Date(hit.firstMs)) + " → " + fmt.format(Date(hit.lastMs)),
-                                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
+                        Panel(onClick = { open = hit }) {
+                            Text(hitLabel(hit), style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                            Text(
+                                (if (hit.radio == 0) "Wi-Fi" else "Bluetooth") + " · ${hit.days} " + Texts.tr("day(s)", "giorni") +
+                                    " · ${hit.n} " + Texts.tr("sightings", "rilevazioni") + " · max ${hit.maxRssi} dBm",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                fmt.format(Date(hit.firstMs)) + " → " + fmt.format(Date(hit.lastMs)),
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             }
+        }
+    }
+    open?.let { h -> ArchiveDetailDialog(h) { open = null } }
+}
+
+/** One archived device: every stretch it was heard, with where you were. */
+@Composable
+private fun ArchiveDetailDialog(h: DbHit, onClose: () -> Unit) {
+    var report by remember { mutableStateOf<dev.retrovision.core.analysis.EntityReport?>(null) }
+    FullScreenDialog(onDismiss = onClose) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 12.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                BackButton(onClose)
+                Text(Texts.tr("Archive", "Archivio"), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            }
+            HitDetail(h, onOpenReport = { report = it })
         }
     }
     report?.let { DeviceDialog(it) { report = null } }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -77,9 +78,9 @@ fun AlertsScreen(onClose: () -> Unit) {
     var drone by remember { mutableStateOf<Drones.Drone?>(null) }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize().padding(top = 32.dp)) {
+        Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onClose) { Text("←") }
+                BackButton(onClose)
                 Text(Texts.tr("Alerts", "Allerte"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             }
             LazyVerticalGrid(
@@ -163,8 +164,9 @@ private fun Tile(
             .clip(RoundedCornerShape(12.dp))
             .background(color.copy(alpha = 0.13f))
             .clickable { onClick() }
-            .padding(10.dp)
-            .heightIn(min = 120.dp),
+            .padding(12.dp)
+            // Same size for every tile, whatever the text: a regular grid reads at a glance.
+            .height(176.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -172,7 +174,7 @@ private fun Tile(
             Text(value, color = color, fontWeight = FontWeight.SemiBold)
         }
         Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Text(ago, style = MaterialTheme.typography.labelSmall, color = color)
         verdict?.let { Text(verdictLabel(it), style = MaterialTheme.typography.labelSmall) }
     }

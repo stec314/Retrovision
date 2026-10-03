@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.asPaddingValues
@@ -188,5 +189,13 @@ fun FullScreenDialog(onDismiss: () -> Unit, background: Color? = null, content: 
         Surface(Modifier.fillMaxSize(), color = background ?: MaterialTheme.colorScheme.background) {
             androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().padding(safe).imePadding()) { content() }
         }
+    }
+}
+
+/** The one back arrow: a full-size icon button (48 dp touch target), never a text glyph. */
+@Composable
+fun BackButton(onClick: () -> Unit) {
+    androidx.compose.material3.IconButton(onClick = onClick) {
+        Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = dev.retrovision.app.ui.Texts.tr("Back", "Indietro"), modifier = Modifier.size(26.dp))
     }
 }

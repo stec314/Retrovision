@@ -257,7 +257,7 @@ private fun styleJson(ctx: android.content.Context, basemap: OfflineMap?): Strin
         path.endsWith(".mbtiles", true) -> "mbtiles://$path"
         else -> "pmtiles://file://$path"
     }
-    if (url != null && basemap.info.type == TileType.MVT) {
+    if (url != null && basemap?.info?.type == TileType.MVT) {
         sources.put("protomaps", org.json.JSONObject().put("type", "vector").put("url", url).put("attribution", "© OpenStreetMap"))
         val l = org.json.JSONArray(ctx.assets.open("map/layers-dark.json").bufferedReader().use { it.readText() })
         for (i in 0 until l.length()) layers.put(l.get(i))
@@ -1179,7 +1179,7 @@ private fun MapButton(glyph: MapGlyph, description: String, active: Boolean = fa
 enum class MapGlyph { MENU, INFO, CLOSE, PLUS, MINUS, FULLSCREEN, FIT, PLAY, STOP, LOCATE }
 
 @Composable
-private fun MapGlyphIcon(g: MapGlyph, description: String) {
+internal fun MapGlyphIcon(g: MapGlyph, description: String) {
     val core = when (g) {
         MapGlyph.MENU -> androidx.compose.material.icons.Icons.Filled.Menu
         MapGlyph.INFO -> androidx.compose.material.icons.Icons.Filled.Info

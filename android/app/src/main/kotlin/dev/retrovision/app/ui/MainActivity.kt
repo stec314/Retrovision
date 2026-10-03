@@ -12,6 +12,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.background
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -46,7 +49,13 @@ class MainActivity : ComponentActivity() {
         handle(intent)
         setContent {
             RetrovisionTheme {
-                AppRoot()
+                // Edge to edge, but nothing drawn under the status bar, the navigation buttons or the
+                // keyboard: the whole app sits inside the safe area (screens and overlays alike).
+                androidx.compose.foundation.layout.Box(
+                    androidx.compose.ui.Modifier.fillMaxSize()
+                        .background(androidx.compose.material3.MaterialTheme.colorScheme.background)
+                        .safeDrawingPadding(),
+                ) { AppRoot() }
             }
         }
     }

@@ -76,9 +76,9 @@ fun DiagnosticsScreen(onClose: () -> Unit) {
     }
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize().padding(top = 32.dp)) {
+        Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onClose) { Text("←") }
+                BackButton(onClose)
                 Text(Texts.tr("Diagnostics", "Diagnostica"), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             }
             LazyColumn(

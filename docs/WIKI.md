@@ -541,11 +541,13 @@ If one of these is a device of yours (it is with you everywhere, so it looks exa
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
-## Searching all saved data
+## Devices: live window or full archive
 
-The Devices search covers the analysis window (and, with *All*, the devices trimmed from the detailed list). When you need more, type at least two characters and tap **Search all saved data**: it scans every stored sighting, up to the retention period, for the address, network names (beacons and the networks phones ask for) and Bluetooth names. Matching is on raw bytes, in three case forms (as typed, lower case, first letter capital). Results are devices, newest first (at most 300), with days, sightings and first/last time. A device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If the device is in the current window, *Open full details* opens the usual detail.
+The Devices tab shows either the **live window** (the analysis, with scores and filters) or the **archive**: every device still stored, up to the retention period, newest first (at most 1000; type to search address, network names and Bluetooth names). Matching is on raw bytes, in three case forms (as typed, lower case, first letter capital). An archived device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If it is in the current window, *Open full details* opens the usual detail. The archive is a full scan of an encrypted table: seconds on a small database, longer on millions of rows. *Compact / Cards* switches between one-line rows and cards, in both modes.
 
-It is a full scan of an encrypted table: seconds on a small database, longer on millions of rows. Nothing is indexed in advance and nothing leaves the phone.
+**Device detail.** Actions come first, as a grid of icon tiles: *Find it*, the online lookups (WiGLE, BeaconDB; one identifier per tap), *In Places* (for devices that may follow you), *Suspicious*, *False alarm*, *It's mine* (with confirmation) and *Test target*. Then the key numbers, the map (for devices that may follow you), *Why* (open), and folded: times heard, identity and addresses, networks, and what each action does.
+
+**Review saved data** (Status) analyses any period: the last 6 h, 24 h, 3 or 7 days, or any days you pick on the calendar.
 
 ## Settings reference
 
