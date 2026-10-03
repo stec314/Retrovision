@@ -1439,7 +1439,7 @@ private fun SensorDetails(running: Boolean) {
                     Text(phaseText(s.phase) + (if (s.clockUncertaintyUs >= 0) " · ±${s.clockUncertaintyUs} µs" else ""))
                     if (s.rejectReason.isNotEmpty()) Text(s.rejectReason, color = MaterialTheme.colorScheme.error)
                     val seen = s.wifiObs + s.bleObs
-                    Text("Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""), style = MaterialTheme.typography.bodySmall)
+                    Text("Wi-Fi ${s.wifiObs}" + (if (s.wifi5Obs > 0) " (5 GHz ${s.wifi5Obs})" else "") + " · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" + (if (s.channel > 14) " (5 GHz)" else "") else ""), style = MaterialTheme.typography.bodySmall)
                     val lost = s.lostFrames + s.probeDropped
                     val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
                     Text(

@@ -11,6 +11,8 @@
 
 #if CONFIG_IDF_TARGET_ESP32
 #define RV_PROBE_TYPE "dev.retrovision.esp32"
+#elif CONFIG_IDF_TARGET_ESP32C5
+#define RV_PROBE_TYPE "dev.retrovision.esp32c5"
 #else
 #define RV_PROBE_TYPE "dev.retrovision.esp32s3"
 #endif

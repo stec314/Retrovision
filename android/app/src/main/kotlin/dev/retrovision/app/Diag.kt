@@ -130,7 +130,7 @@ object Diag {
         appendLine()
         appendLine("[probe] link ${c.link} · phase ${s?.phase} · fw ${s?.info?.firmware} · proto ${s?.info?.protocol}")
         if (s != null) {
-            appendLine("  wifi ${s.wifiObs} · ble ${s.bleObs} · seq gaps ${s.lostFrames} · probe queue drops ${s.probeDropped} · crc ${s.badFrames} · no clock ${s.droppedNoClock}")
+            appendLine("  wifi ${s.wifiObs} (5 GHz ${s.wifi5Obs}) · ble ${s.bleObs} · seq gaps ${s.lostFrames} · probe queue drops ${s.probeDropped} · crc ${s.badFrames} · no clock ${s.droppedNoClock}")
             appendLine("  probe heap ${s.freeHeap / 1024} KiB · ${"%.0f".format(s.chipTempC)} °C · clock ±${s.clockUncertaintyUs} µs")
             if (s.lastLog.isNotEmpty()) appendLine("  last probe log: ${s.lastLog}")
         }

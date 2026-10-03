@@ -234,7 +234,7 @@ private fun BoardStrip(conn: dev.retrovision.app.ConnectionUi) {
             Column(Modifier.weight(1f)) {
                 Text(s.info?.let { probeModel(it.probeType) } ?: "—", color = Neon.cyan, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 Text(
-                    "Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""),
+                    "Wi-Fi ${s.wifiObs}" + (if (s.wifi5Obs > 0) " (5 GHz ${s.wifi5Obs})" else "") + " · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""),
                     color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                 )
             }
