@@ -16,6 +16,7 @@ import dev.retrovision.core.wire.Framing
 import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
 import dev.retrovision.proto.v1.ChannelDwell
+import dev.retrovision.proto.v1.Capability
 import dev.retrovision.proto.v1.Command
 import dev.retrovision.proto.v1.Config
 import dev.retrovision.proto.v1.Envelope
@@ -228,7 +229,7 @@ class ProbeSession(
     }
 
     private fun onHello(h: Hello) {
-        dualBand = h.capabilitiesList.contains(dev.retrovision.proto.v1.Capability.CAPABILITY_WIFI_5GHZ)
+        dualBand = h.capabilitiesList.contains(Capability.CAPABILITY_WIFI_5GHZ)
         if (h.protocolMajor != PROTOCOL_MAJOR) {
             send(
                 Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
