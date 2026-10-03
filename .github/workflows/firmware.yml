@@ -54,9 +54,12 @@ jobs:
           # Classic ESP32 (NodeMCU-32S, DevKitC): bootloader at 0x1000
           - target: esp32
             offset: "0x1000"
-          # Waveshare ESP32-C5 (dual-band Wi-Fi 6, RISC-V): native USB, merged at 0x0
+          # Waveshare ESP32-C5 (dual-band Wi-Fi 6, RISC-V): native USB, merged at 0x0 (web flasher).
+          # app_offset: a second image starting at the bootloader (0x2000), for the EXPERIMENTAL
+          # in-app flasher, which checks the 0xE9 header at byte 0.
           - target: esp32c5
             offset: "0x0"
+            app_offset: "0x2000"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -73,6 +76,7 @@ jobs:
             (cd build && python -m esptool --chip ${{ matrix.target }} merge_bin
             --target-offset ${{ matrix.offset }}
             -o retrovision-${{ matrix.target }}-merged.bin @flash_args) &&
+            ${{ matrix.app_offset && format('(cd build && python -m esptool --chip {0} merge_bin --target-offset {1} -o retrovision-{0}-app.bin @flash_args) &&', matrix.target, matrix.app_offset) || '' }}
             idf.py size | tee -a build.log
       # Surface compiler errors as annotations (readable without log access).
       - name: Report build errors
@@ -89,6 +93,7 @@ jobs:
           name: retrovision-${{ matrix.target }}
           path: |
             firmware/${{ matrix.target }}/build/retrovision-${{ matrix.target }}-merged.bin
+            firmware/${{ matrix.target }}/build/retrovision-${{ matrix.target }}-app.bin
             firmware/${{ matrix.target }}/build/retrovision_${{ matrix.target }}.bin
             firmware/${{ matrix.target }}/build/retrovision_${{ matrix.target }}.elf
             firmware/${{ matrix.target }}/build/bootloader/bootloader.bin

@@ -17,6 +17,9 @@ object EspProtocol {
     const val CMD_FLASH_DEFL_END = 0x12
     const val CMD_SPI_FLASH_MD5 = 0x13
 
+    /** Returns a security-info struct; on newer chips (C5/C6…) it carries the chip id used to detect them. */
+    const val CMD_GET_SECURITY_INFO = 0x14
+
     const val DIR_REQUEST = 0x00
     const val DIR_RESPONSE = 0x01
     const val CHECKSUM_SEED = 0xEF

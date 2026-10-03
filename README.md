@@ -44,9 +44,11 @@ What it is **not**: it does not identify people, does not export per-device trac
 |---|---|---|---|
 | ESP32-S3 (e.g. Seeed XIAO ESP32-S3) | native USB | ✅ | ✅ |
 | ESP32 classic (DevKitC, NodeMCU-32S…) | CP210x / CH340 at 921,600 baud | ✅ | ✅ |
-| ESP32-C5 (dual band) | native USB | ❌ | ✅ |
+| ESP32-C5 (dual band) | native USB | ⚠️ experimental, untested | ✅ (recommended) |
 
 Browser flasher: ESP Web Tools on the project's GitHub Pages (`web/`). Images for every board are also attached to each release.
+
+**ESP32-C5 in-app flashing is experimental.** The code path exists (chip detected by its id via `GET_SECURITY_INFO`, image written from the bootloader at `0x2000`) and is covered by simulator tests, but it has **never been run on a real C5**. The app keeps it behind an explicit switch, and without it a C5 is detected and left untouched. For a C5, the browser flasher remains the safe route, and it is also the recovery path if an in-app attempt fails.
 
 ## Privacy and security
 

@@ -135,6 +135,57 @@ class EspFlasherTest {
         assertEquals(0xFF.toByte(), sim.flash[0])
     }
 
+    @Test fun c5DetectedByChipIdWhenNoMagicMatches() {
+        val sim = RomSimulator(chipMagic = 0, chipId = 23)
+        val f = flasher(sim)
+        f.sync()
+        assertEquals(Chip.ESP32_C5, f.detectChip())
+        assertTrue(EspProtocol.CMD_GET_SECURITY_INFO in sim.commands)
+    }
+
+    @Test fun c5ImageWrittenAtBootloaderOffset() {
+        val sim = RomSimulator(chipMagic = 0, chipId = 23)
+        val f = flasher(sim)
+        f.sync()
+        val img = image(40_000)
+        f.writeImage(img, 0x2000, Chip.ESP32_C5, 8 shl 20)
+        assertArrayEquals(img, sim.flash.copyOfRange(0x2000, 0x2000 + img.size))
+        assertEquals(0xFF.toByte(), sim.flash[0x1FFF])
+    }
+
+    @Test fun magicChipsNeverAskForSecurityInfo() {
+        val sim = RomSimulator(chipId = 23) // S3 magic wins even if a chip id were present
+        val f = flasher(sim)
+        f.sync()
+        assertEquals(Chip.ESP32_S3, f.detectChip())
+        assertFalse(EspProtocol.CMD_GET_SECURITY_INFO in sim.commands)
+    }
+
+    @Test fun chipIdZeroIsNotAClassicEsp32() {
+        val sim = RomSimulator(chipMagic = 0, chipId = 0)
+        val f = flasher(sim)
+        f.sync()
+        try {
+            f.detectChip()
+            fail()
+        } catch (e: FlashException) {
+            assertTrue(e.message!!.contains("Unknown chip"))
+        }
+    }
+
+    @Test fun unknownChipStillThrows() {
+        val sim = RomSimulator(chipMagic = 0x12345678)
+        val f = flasher(sim)
+        f.sync()
+        try {
+            f.writeImage(image(4096), 0x2000, Chip.ESP32_C5, 8 shl 20)
+            fail()
+        } catch (e: FlashException) {
+            assertTrue(e.message!!.contains("Unknown chip"))
+        }
+        assertFalse(sim.erased)
+    }
+
     @Test fun flashSizeFromHeader() {
         assertEquals(8 shl 20, EspFlasher.flashSizeFromHeader(image(16)))
         assertEquals(null, EspFlasher.flashSizeFromHeader(ByteArray(16)))

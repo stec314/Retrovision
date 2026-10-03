@@ -13,6 +13,8 @@ class FirmwareImage(
     val offset: Int,
     val version: String,
     val data: ByteArray,
+    /** Built and bundled, but never verified on real hardware (ESP32-C5): the UI must say so. */
+    val experimental: Boolean = false,
 )
 
 object FirmwareAssets {
@@ -30,6 +32,7 @@ object FirmwareAssets {
                 offset = o.optInt("offset", 0),
                 version = version,
                 data = ctx.assets.open("firmware/" + o.getString("file")).use { it.readBytes() },
+                experimental = o.optBoolean("experimental", false),
             )
         }
     } catch (_: Exception) {

@@ -29,11 +29,20 @@ import kotlinx.coroutines.withContext
 object FlashRunner {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Flashes whichever of [images] matches the chip found on the board. */
-    fun start(ctx: Context, images: List<FirmwareImage>) {
+    /** Shown with every failure of an experimental image: the browser flasher is the known-good path. */
+    const val EXPERIMENTAL_FALLBACK =
+        "Flash ESP32-C5 dall'app SPERIMENTALE, mai provato su una C5 reale. Se fallisce usa il flasher web " +
+            "(ESP Web Tools) dal computer: la scheda resta recuperabile in download mode (tieni BOOT, premi RESET)."
+
+    /**
+     * Flashes whichever of [images] matches the chip found on the board. An image marked
+     * experimental is written only with [allowExperimental]; otherwise the run stops after chip
+     * detection, before anything is erased.
+     */
+    fun start(ctx: Context, images: List<FirmwareImage>, allowExperimental: Boolean = false) {
         if (Collector.flash.value.running || images.isEmpty()) return
         Collector.flash.value = FlashUi(running = true, stage = "Preparazione")
-        scope.launch { run(ctx.applicationContext, images) }
+        scope.launch { run(ctx.applicationContext, images, allowExperimental) }
     }
 
     private fun log(msg: String) {
@@ -45,7 +54,8 @@ object FlashRunner {
         Collector.flash.value = Collector.flash.value.copy(stage = stage, done = done, total = total)
     }
 
-    private suspend fun run(ctx: Context, images: List<FirmwareImage>) {
+    private suspend fun run(ctx: Context, images: List<FirmwareImage>, allowExperimental: Boolean) {
+        var experimental = false
         val usb = UsbAccess(ctx)
         try {
             // 1. If a probe is streaming, ask it to reboot into the ROM bootloader first.
@@ -104,6 +114,16 @@ object FlashRunner {
                 val image = images.firstOrNull { it.chip == chip }
                     ?: throw FlashException("Questa app non contiene firmware per ${chip.label}")
                 log("Scheda: ${chip.label} → firmware ${image.id} @0x%x".format(image.offset))
+                if (image.experimental) {
+                    if (!allowExperimental) {
+                        throw FlashException(
+                            "${chip.label}: il flash dall'app è SPERIMENTALE e non è stato abilitato. Nulla è stato cancellato. " +
+                                "Attiva l'opzione sperimentale oppure usa il flasher web dal computer.",
+                        )
+                    }
+                    experimental = true
+                    log("ATTENZIONE: immagine sperimentale, non verificata su hardware")
+                }
                 val flashSize = EspFlasher.flashSizeFromHeader(image.data, headerAt = 0)
                     ?: throw FlashException("Immagine firmware non valida (header)")
                 val flasher2 = flasher
@@ -116,10 +136,14 @@ object FlashRunner {
             }
             Collector.flash.value = Collector.flash.value.copy(running = false, success = true, stage = "Completato")
         } catch (e: FlashException) {
-            Collector.flash.value = Collector.flash.value.copy(running = false, error = e.message ?: "Errore", stage = "Errore")
-        } catch (e: Exception) {
+            val msg = e.message ?: "Errore"
             Collector.flash.value = Collector.flash.value.copy(
-                running = false, error = "${e.javaClass.simpleName}: ${e.message}", stage = "Errore",
+                running = false, error = if (experimental) "$msg\n\n$EXPERIMENTAL_FALLBACK" else msg, stage = "Errore",
+            )
+        } catch (e: Exception) {
+            val msg = "${e.javaClass.simpleName}: ${e.message}"
+            Collector.flash.value = Collector.flash.value.copy(
+                running = false, error = if (experimental) "$msg\n\n$EXPERIMENTAL_FALLBACK" else msg, stage = "Errore",
             )
         } finally {
             Collector.usbPaused.set(false)

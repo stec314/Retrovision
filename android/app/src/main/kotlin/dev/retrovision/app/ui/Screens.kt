@@ -327,6 +327,8 @@ fun ProbeScreen(modifier: Modifier) {
     val flash by Collector.flash.collectAsState()
     val images = remember { FirmwareAssets.load(ctx) }
     var confirmAll by remember { mutableStateOf(false) }
+    var allowExperimental by remember { mutableStateOf(false) }
+    val hasExperimental = images.any { it.experimental }
 
     val view = LocalView.current
     DisposableEffect(flash.running) {
@@ -378,15 +380,40 @@ fun ProbeScreen(modifier: Modifier) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(Texts.tr("Firmware ", "Firmware ") + images.first().version, style = MaterialTheme.typography.titleMedium)
                     images.forEach { img ->
-                        Text("• ${img.chip.label} · ${img.data.size / 1024} KiB", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "• ${img.chip.label} · ${img.data.size / 1024} KiB" +
+                                if (img.experimental) Texts.tr(" · EXPERIMENTAL", " · SPERIMENTALE") else "",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (img.experimental) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
+                        )
                     }
                     Text(
                         Texts.tr(
-                            "The board is detected automatically: XIAO ESP32-S3, or classic ESP32 (NodeMCU-32S, DevKitC).",
-                            "La scheda viene riconosciuta da sola: XIAO ESP32-S3 oppure ESP32 classica (NodeMCU-32S, DevKitC).",
+                            "The board is detected automatically: XIAO ESP32-S3, classic ESP32 (NodeMCU-32S, DevKitC)" +
+                                (if (hasExperimental) ", or ESP32-C5 (experimental)." else "."),
+                            "La scheda viene riconosciuta da sola: XIAO ESP32-S3, ESP32 classica (NodeMCU-32S, DevKitC)" +
+                                (if (hasExperimental) " oppure ESP32-C5 (sperimentale)." else "."),
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (hasExperimental) {
+                        Text(
+                            Texts.tr(
+                                "ESP32-C5: in-app flashing is EXPERIMENTAL and has never been tested on a real C5. " +
+                                    "The browser flasher (ESP Web Tools, from a computer) remains the safe way. " +
+                                    "Without this switch a C5 is detected and left untouched.",
+                                "ESP32-C5: il flash dall'app è SPERIMENTALE e non è mai stato provato su una C5 reale. " +
+                                    "Il flasher web (ESP Web Tools, dal computer) resta la via sicura. " +
+                                    "Senza questo interruttore una C5 viene riconosciuta e lasciata intatta.",
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(Texts.tr("Allow experimental ESP32-C5 flashing", "Consenti flash sperimentale ESP32-C5"), Modifier.weight(1f))
+                            Switch(checked = allowExperimental, enabled = !flash.running, onCheckedChange = { allowExperimental = it })
+                        }
+                    }
                     Button(enabled = !flash.running, onClick = { confirmAll = true }) { Text(Texts.tr("Flash the connected board", "Flasha la scheda collegata")) }
                 }
             }
@@ -414,8 +441,18 @@ fun ProbeScreen(modifier: Modifier) {
         AlertDialog(
             onDismissRequest = { confirmAll = false },
             title = { Text(Texts.tr("Flash the probe?", "Flashare la sonda?")) },
-            text = { Text(Texts.tr("This overwrites the firmware on the connected board.", "Sovrascrive il firmware della scheda collegata.")) },
-            confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, images); confirmAll = false }) { Text(Texts.tr("Flash", "Flasha")) } },
+            text = {
+                Text(
+                    Texts.tr("This overwrites the firmware on the connected board.", "Sovrascrive il firmware della scheda collegata.") +
+                        if (allowExperimental) {
+                            Texts.tr(
+                                "\n\nExperimental ESP32-C5 flashing is ON: untested on hardware. If it fails, use the browser flasher.",
+                                "\n\nFlash sperimentale ESP32-C5 ATTIVO: non testato su hardware. Se fallisce, usa il flasher web.",
+                            )
+                        } else "",
+                )
+            },
+            confirmButton = { TextButton(onClick = { FlashRunner.start(ctx, images, allowExperimental); confirmAll = false }) { Text(Texts.tr("Flash", "Flasha")) } },
             dismissButton = { TextButton(onClick = { confirmAll = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
     }
