@@ -23,7 +23,14 @@ data class ConnectionUi(
 
 /** Phone's current Wi-Fi association. [own] = one of your networks; [trusted] = known access point for it. */
 /** How much of the analysis window was loaded: raw rows in the window, rows analysed, thinning bucket. */
-data class AnalysisLoad(val rawRows: Long = 0, val analysedRows: Int = 0, val bucketMs: Long = 0, val truncated: Boolean = false)
+data class AnalysisLoad(
+    val rawRows: Long = 0,
+    val analysedRows: Int = 0,
+    val bucketMs: Long = 0,
+    val truncated: Boolean = false,
+    /** Oldest sighting in the analysed window (0 = none): how far back the analysis can see. */
+    val oldestMs: Long = 0,
+)
 
 data class WifiConn(val ssid: String, val bssid: String, val own: Boolean, val trusted: Boolean)
 

@@ -46,6 +46,8 @@ import dev.retrovision.app.RetrovisionApp
 import dev.retrovision.app.data.FeedbackRow
 import dev.retrovision.core.analysis.Drones
 import dev.retrovision.core.analysis.EntityReport
+import dev.retrovision.core.analysis.Level
+import dev.retrovision.core.analysis.Levels
 import dev.retrovision.core.analysis.WifiThreats
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -98,7 +100,7 @@ fun AlertsScreen(onClose: () -> Unit) {
                     header(Texts.tr("Radio attacks", "Attacchi radio"))
                     items(threats, key = { "t" + it.key }) { t ->
                         Tile(
-                            "⚠", Texts.threatTitle(t.kind), Texts.threat(t), "%.0f%%".format(t.severity * 100), t.lastMs,
+                            Texts.levelIcon(Levels.of(t)), Texts.threatTitle(t.kind), Texts.threat(t), Texts.level(Levels.of(t)), t.lastMs,
                             ATTACK, verdicts[t.key],
                         ) { threat = t }
                     }
@@ -109,7 +111,7 @@ fun AlertsScreen(onClose: () -> Unit) {
                         Tile(
                             CategoryUi.icon(r.category), Texts.entityLabel(r),
                             r.reasons.take(2).joinToString(" · ") { Texts.reason(it) },
-                            "%.0f%%".format(r.score * 100), r.lastSeenMs, FOLLOW,
+                            Texts.level(Levels.of(r)), r.lastSeenMs, if (Levels.of(r) == Level.STRONG) ATTACK else FOLLOW,
                             r.memberIds.firstNotNullOfOrNull { verdicts[it] },
                         ) { entity = r }
                     }

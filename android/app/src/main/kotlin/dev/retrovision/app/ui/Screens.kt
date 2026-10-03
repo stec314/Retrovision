@@ -40,6 +40,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -102,6 +103,8 @@ fun StatusScreen(modifier: Modifier) {
             ),
             style = MaterialTheme.typography.bodySmall,
         )
+        val verdict = rememberVerdict()
+        VerdictCard(verdict)
         Button(
             onClick = {
                 if (running) CollectorService.stop(ctx) else {
@@ -138,12 +141,33 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
+        val threats by Collector.threats.collectAsState()
+        if (threats.isNotEmpty()) {
+            Card(
+                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
+                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("⚠ " + Texts.tr("Wi-Fi attacks nearby", "Attacchi Wi-Fi nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    threats.take(5).forEach {
+                        Text("• " + Texts.threat(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                    Text(Texts.tr("Tap for the evidence ›", "Tocca per le prove ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+
+        WhatToDoCard(verdict)
         val radar by Collector.liveRadar.collectAsState()
         if (running && radar.blips.isNotEmpty()) {
             Text(Texts.tr("Radar", "Radar"), style = MaterialTheme.typography.titleMedium)
             RadarView()
         }
 
+        // Probe, phone and GPS: one line each by default; the full technical detail on tap.
+        var showSensors by rememberSaveable { mutableStateOf(false) }
+        SensorsSummary(expanded = showSensors) { showSensors = !showSensors }
+        if (showSensors) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
@@ -187,45 +211,7 @@ fun StatusScreen(modifier: Modifier) {
                 Text(Texts.tr("Stored sightings: ≈", "Avvistamenti salvati: ≈") + count)
             }
         }
-        val alerts = analysis?.alerts.orEmpty()
-        Card(Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true }) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(Texts.tr("Alerts", "Allerte"), style = MaterialTheme.typography.titleMedium)
-                if (alerts.isEmpty()) Text(Texts.tr("Nothing suspicious in the analysed window.", "Niente di sospetto nella finestra analizzata."))
-                alerts.take(5).forEach { Text("• ${Texts.entityLabel(it)}  ${"%.0f".format(it.score * 100)}%") }
-                Text(Texts.tr("Tap for details and your verdict ›", "Tocca per dettagli e giudizio ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                val load by Collector.analysisLoad.collectAsState()
-                if (load.analysedRows > 0) {
-                    Text(
-                        Texts.tr(
-                            "Analysed ${load.analysedRows} of ${load.rawRows} rows (one per device every ${load.bucketMs / 1000} s)" +
-                                if (load.truncated) ". Window cut to the most recent part: shorten Look-back to analyse all of it." else ".",
-                            "Analizzate ${load.analysedRows} righe su ${load.rawRows} (una per dispositivo ogni ${load.bucketMs / 1000} s)" +
-                                if (load.truncated) ". Finestra tagliata alla parte più recente: accorcia la finestra di analisi per coprirla tutta." else ".",
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (load.truncated) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
-                    )
-                }
-            }
         }
-
-        val threats by Collector.threats.collectAsState()
-        if (threats.isNotEmpty()) {
-            Card(
-                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
-                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("⚠ " + Texts.tr("Wi-Fi attacks nearby", "Attacchi Wi-Fi nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-                    threats.take(5).forEach {
-                        Text("• " + Texts.threat(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
-                    }
-                    Text(Texts.tr("Tap for the evidence ›", "Tocca per le prove ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-                }
-            }
-        }
-
         RouteCheckCard(analysis)
         CompanionsCard()
 
@@ -304,7 +290,15 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         title = { Text(Texts.entityLabel(r)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("%.0f%%".format(r.score * 100) + " · ${r.placeIds.size} ${Texts.tr("places", "luoghi")}")
+                val lv = dev.retrovision.core.analysis.Levels.of(r)
+                Text("${Texts.levelIcon(lv)} ${Texts.level(lv)} · ${r.placeIds.size} ${Texts.tr("places", "luoghi")}", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    Texts.tr(
+                        "Score %.2f: a sum of clues, not a probability. The alert threshold is %.2f.".format(r.score, app.prefs.alertScore),
+                        "Punteggio %.2f: una somma di indizi, non una probabilità. La soglia di allerta è %.2f.".format(r.score, app.prefs.alertScore),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
                 Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
                 r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
@@ -692,6 +686,18 @@ private fun NotificationsSection() {
             Text(Texts.tr("Repeat only if the score went up", "Ripeti solo se il punteggio è salito"), modifier = Modifier.weight(1f))
             Switch(checked = rises, onCheckedChange = { rises = it; prefs.alertOnlyIfScoreRises = it })
         }
+        var discreet by remember { mutableStateOf(prefs.discreetAlerts) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(Texts.tr("Discreet notifications", "Notifiche discrete"), modifier = Modifier.weight(1f))
+            Switch(checked = discreet, onCheckedChange = { discreet = it; prefs.discreetAlerts = it })
+        }
+        Text(
+            Texts.tr(
+                "Notifications only say “Something to check”, even with the phone unlocked. On the lock screen they always do.",
+                "Le notifiche dicono solo “Qualcosa da controllare”, anche a telefono sbloccato. Sulla schermata di blocco è sempre così.",
+            ),
+            style = MaterialTheme.typography.bodySmall,
+        )
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(Texts.tr("Silent (no sound or vibration)", "Silenzioso (niente suono o vibrazione)"), modifier = Modifier.weight(1f))
             Switch(checked = silent, onCheckedChange = { silent = it; prefs.alertSilent = it })
@@ -809,7 +815,9 @@ private fun PhoneCard(probeStreaming: Boolean, running: Boolean) {
 private fun RouteCheckCard(analysis: dev.retrovision.core.analysis.AnalysisResult?) {
     val a = analysis ?: return
     if (a.turns < 2) return
+    // Devices already judged fixed (stays put / one area) are not "staying with you": left out.
     val stayed = a.entities.mapNotNull { e ->
+        if (e.reasons.any { it is dev.retrovision.core.analysis.Reason.StaysPut || it is dev.retrovision.core.analysis.Reason.OneAreaOnly }) return@mapNotNull null
         e.reasons.filterIsInstance<dev.retrovision.core.analysis.Reason.StayedThroughTurns>().firstOrNull()?.let { e to it.turns }
     }.sortedByDescending { it.second }
     Card(Modifier.fillMaxWidth()) {
@@ -999,5 +1007,47 @@ private fun FeedbackStatsSection() {
                 top.joinToString { "${it.key} (${it.value})" },
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+
+/** One line per receiver; the full technical cards open on tap. */
+@Composable
+private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
+    val conn by Collector.connection.collectAsState()
+    val bleOn by Collector.phoneBleActive.collectAsState()
+    val fix by Collector.location.collectAsState()
+    val running by Collector.running.collectAsState()
+    Card(Modifier.fillMaxWidth().clickable { onToggle() }) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(Texts.tr("Sensors", "Sensori"), style = MaterialTheme.typography.titleMedium)
+                Text(if (expanded) Texts.tr("Hide details ▴", "Nascondi dettagli ▴") else Texts.tr("Details ▾", "Dettagli ▾"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
+            }
+            val s = conn.session
+            if (s != null) {
+                val h = probeHealth(s)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(h.dot, color = h.color)
+                    Text(Texts.tr("Probe: ", "Sonda: ") + h.text, style = MaterialTheme.typography.bodyMedium)
+                }
+            } else {
+                Text(Texts.tr("Probe: ", "Sonda: ") + linkText(conn.link, "", conn.error), style = MaterialTheme.typography.bodyMedium)
+            }
+            Text(
+                Texts.tr("Phone Bluetooth: ", "Bluetooth del telefono: ") + if (bleOn) Texts.tr("listening", "in ascolto") else Texts.tr("off", "spento"),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            val maxAcc = app.prefs.maxFixAccuracyM
+            Text(
+                "GPS: " + when {
+                    !running -> Texts.tr("off", "spento")
+                    fix == null -> Texts.tr("no fix yet", "nessuna posizione")
+                    fix!!.accuracyM > maxAcc -> Texts.tr("imprecise (±${fix!!.accuracyM.toInt()} m), places paused", "impreciso (±${fix!!.accuracyM.toInt()} m), luoghi in pausa")
+                    else -> Texts.tr("good (±${fix!!.accuracyM.toInt()} m)", "buono (±${fix!!.accuracyM.toInt()} m)")
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
 }

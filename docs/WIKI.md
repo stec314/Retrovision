@@ -451,7 +451,34 @@ Use: see what is really talking on a network near you, for example devices conne
 
 ## Alerts and notifications
 
-**The alert grid.** Tap the *Alerts* card (or the red attacks card) on *Status* to open every current alert as a tile: radio attacks, devices that may be following you, drones. Each tile shows the score or severity, how long ago, and your verdict if you gave one. Tap a tile for the evidence:
+**The verdict.** The first card on *Status* gives one answer:
+
+| | Verdict | When |
+|---|---|---|
+| ✅ | **Nothing found** | Nothing alerts, and the app sees everything it can: probe streaming, GPS within your accuracy limit, at least 20 min collected, analysis up to date |
+| ◐ | **Nothing found, limited view** | Nothing alerts, but part of the picture is missing; the card lists what |
+| ⏳ | **Can't tell yet** | Nothing is listening, no analysis yet, or less than 10 min collected. The app does not say "nothing found" when it could not have seen it |
+| 👀 | **Worth a look** | At least one alert |
+| ⚠️ | **Strong signs** | An alert backed by behaviour (below), or a high-severity radio attack |
+
+Under it: the alerts in words, what the app can't see right now, and the basis in one line ("Probe ✓ · GPS ±4 m · 47 min analysed").
+
+**Levels, not percentages.** The score is a sum of clues capped at 1, not a probability, so "100 %" is never shown outside the evidence. Levels:
+- **Strong signs:** an alert **and** behaviour only something moving with you produces: steady signal over a long move, arrived and left with you at ≥ 2 stops, stayed through ≥ 3 turns, or a tracker away from its owner.
+- **Worth a look:** an alert from presence alone (many places, long time). Shared routes, public transport and neighbourhoods produce this too.
+- **Some signs / Low:** below the alert threshold.
+
+The exact score is in the device's detail, labelled as such.
+
+**What you can do.** With a finding, *Status* shows calm, practical steps: don't confront anyone; go somewhere busy; tell someone you trust; check it by changing route or moving > 600 m (fixed and passing devices drop out, a follower stays); call 112 if you feel in danger.
+
+**Notifications.**
+- All following alerts go into **one** notification, updated in place, titled with the levels ("Strong signs: 1 · Worth a look: 2"). It opens the alert grid.
+- **On the lock screen** every Retrovision alert reads only "Retrovision · Something to check". The device names and reasons appear only once the phone is unlocked.
+- **Discreet notifications** (Settings) use that neutral text everywhere, even unlocked.
+- The notification channels are called "Alerts", so system settings don't reveal what the app looks for.
+
+**The alert grid.** Tap the verdict (or the red attacks card) on *Status* to open every current alert as a tile: radio attacks, devices that may be following you, drones. Each tile shows the level, how long ago, and your verdict if you gave one. Tap a tile for the evidence:
 - **Attacks:** what the attack is, the numbers that triggered it (frames, channel, median signal, template share, radios), the network names and transmitter addresses involved, and how it can be wrong.
 - **Following:** the full device detail (reasons, linked addresses, lookups).
 - **Drones:** the Remote ID data and addresses.

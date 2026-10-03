@@ -20,9 +20,24 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 
 class MainActivity : ComponentActivity() {
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handle(intent)
+    }
+
+    /** The alert notification opens straight on the alerts and their evidence. */
+    private fun handle(intent: android.content.Intent?) {
+        if (intent?.getBooleanExtra(EXTRA_OPEN_ALERTS, false) == true) AlertsNav.open.value = true
+    }
+
+    companion object {
+        const val EXTRA_OPEN_ALERTS = "open_alerts"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handle(intent)
         setContent {
             RetrovisionTheme {
                 AppRoot()

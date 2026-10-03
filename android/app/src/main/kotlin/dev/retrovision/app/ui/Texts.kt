@@ -16,7 +16,8 @@ object Texts {
 
     fun notifRunning() = tr("Listening for the probe", "In ascolto della sonda")
     fun channelOngoing() = tr("Collection running", "Raccolta in corso")
-    fun channelAlerts() = tr("Possible following", "Possibile pedinamento")
+    // Channel names show in system settings and to anyone handling the phone: kept neutral.
+    fun channelAlerts() = tr("Alerts", "Avvisi")
     fun threat(t: dev.retrovision.core.analysis.WifiThreats.Threat): String = when (t.kind) {
         dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD ->
             tr("${t.count} deauth/disassoc frames — someone is forcing devices off a network.",
@@ -126,10 +127,75 @@ object Texts {
         dev.retrovision.core.identity.NotableKind.DRONE -> tr("drone", "drone")
     }
 
-    fun channelAlertsSilent() = tr("Possible following (silent)", "Possibile pedinamento (silenzioso)")
+    fun channelAlertsSilent() = tr("Alerts (silent)", "Avvisi (silenziosi)")
     fun stop() = tr("Stop", "Ferma")
     fun cannotOpenPort() = tr("Cannot open the serial port", "Impossibile aprire la porta seriale")
     fun alertTitle(label: String) = tr("Seen with you again: $label", "Ti segue? $label")
+
+    /** Shown on the lock screen and in discreet mode: says nothing about what was found. */
+    fun publicAlert() = tr("Something to check", "Qualcosa da controllare")
+
+    fun level(l: dev.retrovision.core.analysis.Level) = when (l) {
+        dev.retrovision.core.analysis.Level.STRONG -> tr("Strong signs", "Segnali forti")
+        dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> tr("Worth a look", "Da guardare")
+        dev.retrovision.core.analysis.Level.SOME -> tr("Some signs", "Qualche segnale")
+        dev.retrovision.core.analysis.Level.LOW -> tr("Low", "Basso")
+    }
+
+    fun levelIcon(l: dev.retrovision.core.analysis.Level) = when (l) {
+        dev.retrovision.core.analysis.Level.STRONG -> "⚠️"
+        dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> "👀"
+        dev.retrovision.core.analysis.Level.SOME -> "·"
+        dev.retrovision.core.analysis.Level.LOW -> ""
+    }
+
+    fun verdictTitle(s: dev.retrovision.core.analysis.Verdict.State) = when (s) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> tr("Not collecting", "Raccolta ferma")
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> tr("Can't tell yet", "Non posso dirlo ancora")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> tr("Nothing found", "Nessun problema")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> tr("Nothing found, limited view", "Nessun problema, vista parziale")
+        dev.retrovision.core.analysis.Verdict.State.WORTH_A_LOOK -> tr("Worth a look", "Da guardare")
+        dev.retrovision.core.analysis.Verdict.State.STRONG -> tr("Strong signs", "Segnali forti")
+    }
+
+    fun verdictIcon(s: dev.retrovision.core.analysis.Verdict.State) = when (s) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> "⏸"
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> "⏳"
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> "✅"
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> "◐"
+        dev.retrovision.core.analysis.Verdict.State.WORTH_A_LOOK -> "👀"
+        dev.retrovision.core.analysis.Verdict.State.STRONG -> "⚠️"
+    }
+
+    fun verdictLine(r: dev.retrovision.core.analysis.Verdict.Result) = when (r.state) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> tr("Start collecting to check your surroundings.", "Avvia la raccolta per controllare cosa hai intorno.")
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> tr("Not enough data yet to say anything. See what's missing below.", "Non ci sono ancora dati sufficienti per dire qualcosa. Sotto vedi cosa manca.")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> tr("Nothing has been moving with you in the analysed time.", "Niente si è mosso con te nel periodo analizzato.")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> tr("Nothing found in what the app can see, but part of the picture is missing.", "Niente in ciò che l'app vede, ma manca una parte del quadro.")
+        else -> {
+            val n = r.strong + r.worth
+            tr("$n finding(s): tap to see the evidence.", "$n risultati: tocca per vedere le prove.")
+        }
+    }
+
+    fun gap(g: dev.retrovision.core.analysis.Verdict.Gap) = when (g) {
+        dev.retrovision.core.analysis.Verdict.Gap.NO_RECEIVER -> tr("Nothing is listening: plug in the probe or turn on the phone's Bluetooth receiver", "Nessun ricevitore attivo: collega la sonda o attiva il Bluetooth del telefono")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_PROBE -> tr("Probe not connected: Wi-Fi is not heard, Bluetooth only from the phone", "Sonda non collegata: il Wi-Fi non si sente, il Bluetooth solo dal telefono")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_GPS -> tr("No GPS: places and routes are paused", "Niente GPS: luoghi e percorsi sono in pausa")
+        dev.retrovision.core.analysis.Verdict.Gap.POOR_GPS -> tr("GPS too imprecise: places are paused", "GPS troppo impreciso: luoghi in pausa")
+        dev.retrovision.core.analysis.Verdict.Gap.TOO_SHORT -> tr("Collecting for a short time: following takes 10–20 min to show", "Raccolta da poco: un pedinamento si vede dopo 10–20 min")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_ANALYSIS -> tr("Analysis not up to date yet", "Analisi non ancora aggiornata")
+        dev.retrovision.core.analysis.Verdict.Gap.TRUNCATED -> tr("Too many devices: only the most recent part of the window is analysed", "Troppi dispositivi: si analizza solo la parte più recente della finestra")
+    }
+
+    /** Calm, practical steps when something may be following. No alarmism, nothing confrontational. */
+    fun whatToDo(): List<String> = listOf(
+        tr("Don't confront anyone and don't let on that you noticed.", "Non affrontare nessuno e non far capire di averlo notato."),
+        tr("Head somewhere busy and public.", "Vai in un posto frequentato e pubblico."),
+        tr("Tell someone you trust where you are.", "Di' a una persona di fiducia dove sei."),
+        tr("Check it: change route with a few turns, or move more than 600 m. Something fixed or passing by drops out; something following you stays.", "Verifica: cambia percorso con qualche svolta, o spostati di più di 600 m. Ciò che è fisso o di passaggio sparisce; ciò che ti segue resta."),
+        tr("If you feel in danger, call the emergency number (112 in Europe).", "Se ti senti in pericolo, chiama il numero di emergenza (112)."),
+    )
 
     fun entityLabel(r: EntityReport): String {
         val addr = r.addresses.first()

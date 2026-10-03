@@ -290,14 +290,20 @@ fun EntityCard(r: EntityReport, query: String = "", onClick: (() -> Unit)? = nul
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    // A level in words, never a percentage: the score is not a probability.
+                    val lv = dev.retrovision.core.analysis.Levels.of(r)
                     Text(
-                        "%.0f%%".format(r.score * 100),
-                        color = if (r.alert) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        (Texts.levelIcon(lv) + " " + Texts.level(lv)).trim(),
+                        color = when (lv) {
+                            dev.retrovision.core.analysis.Level.STRONG -> MaterialTheme.colorScheme.error
+                            dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         fontWeight = FontWeight.SemiBold,
+                        style = MaterialTheme.typography.labelLarge,
                     )
                 }
                 Text(CategoryUi.label(r.category), style = MaterialTheme.typography.labelSmall, color = catColor)
-                LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (r.macTrust != MacTrust.STABLE) Badge("⚠ " + trustLabel(r.macTrust), WARN)
                     if (r.addresses.size > 1) Badge("🔗 " + Texts.tr("${r.addresses.size} addresses linked", "${r.addresses.size} indirizzi collegati"), LINK)

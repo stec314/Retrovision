@@ -144,6 +144,11 @@ class Prefs(ctx: Context) {
         set(v) = p.edit().putBoolean("alertRises", v).apply()
 
     /** Post alerts silently (no sound/vibration/heads-up). */
+    /** Notifications say only "Something to check", even when the phone is unlocked. */
+    var discreetAlerts: Boolean
+        get() = p.getBoolean("discreetAlerts", false)
+        set(v) = p.edit().putBoolean("discreetAlerts", v).apply()
+
     var alertSilent: Boolean
         get() = p.getBoolean("alertSilent", false)
         set(v) = p.edit().putBoolean("alertSilent", v).apply()

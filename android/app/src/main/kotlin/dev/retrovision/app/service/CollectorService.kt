@@ -614,6 +614,7 @@ class CollectorService : Service() {
         Collector.analysisLoad.value = AnalysisLoad(
             window.sumOf { maxOf(1, it.sighting.mergedCount).toLong() }, window.size, WINDOW_BUCKET_MS,
             window.size >= MAX_ANALYSIS_ROWS,
+            window.firstOrNull()?.sighting?.timeMs ?: 0L,
         )
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
@@ -686,6 +687,7 @@ class CollectorService : Service() {
         }
         if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
+            val fresh = ArrayList<dev.retrovision.core.analysis.EntityReport>()
             for (a in result.alerts) {
                 // Merged entities: snooze, cooldown and last score follow every member id.
                 if (a.memberIds.any { it in snoozed }) continue
@@ -697,9 +699,11 @@ class CollectorService : Service() {
                 val risesOk = !prefs.alertOnlyIfScoreRises || lastScore == null || a.score + 1e-9 >= lastScore
                 if (escalated || (cooldownOk && risesOk)) {
                     for (m in a.memberIds) { notifiedAt[m] = now; notifiedScore[m] = a.score }
-                    notifyAlert(a)
+                    fresh += a
                 }
             }
+            // One summary notification per analysis, not one per device (field: five in a few minutes).
+            if (fresh.isNotEmpty()) notifySummary(result.alerts, fresh)
         }
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
@@ -817,7 +821,7 @@ class CollectorService : Service() {
             "Your phone joined “$ssid” through an access point it has never used ($bssid). A mesh node or extender of yours also looks like this the first time: if it's yours, confirm it in Settings. If not, someone may be impersonating your network.",
             "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Anche un nodo mesh o un ripetitore tuo appare così la prima volta: se è tuo, confermalo in Impostazioni. Se no, qualcuno potrebbe impersonare la tua rete.",
         )
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Unknown access point for your network", "Access point sconosciuto per la tua rete"))
             .setContentText(text)
@@ -825,7 +829,7 @@ class CollectorService : Service() {
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(("ap" + ssid + bssid).hashCode(), n)
     }
 
@@ -881,41 +885,41 @@ class CollectorService : Service() {
 
     private fun notifyDrone(d: dev.retrovision.core.analysis.Drones.Drone) {
         val nm = getSystemService(NotificationManager::class.java)
-        val n = NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Drone nearby", "Drone nelle vicinanze"))
             .setContentText(Texts.drone(d))
             .setStyle(NotificationCompat.BigTextStyle().bigText(Texts.drone(d)))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
-            .build()
+        ).build()
         nm.notify(("d" + d.key).hashCode(), n)
     }
 
     private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {
         val nm = getSystemService(NotificationManager::class.java)
         val title = Texts.threatTitle(th.kind)
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(Texts.threat(th))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(("t" + th.kind + th.bssid + th.ssid).hashCode(), n)
     }
 
     private fun notifyProbeLost() {
         val nm = getSystemService(NotificationManager::class.java)
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Probe disconnected", "Sonda scollegata"))
             .setContentText(Texts.tr("The probe stopped streaming. Check the cable or the board.", "La sonda ha smesso di trasmettere. Controlla il cavo o la scheda."))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(NOTIF_PROBE_LOST, n)
     }
 
@@ -931,22 +935,64 @@ class CollectorService : Service() {
         return if (start < end) h in start until end else h >= start || h < end
     }
 
-    private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {
+    /**
+     * All current following alerts in one notification, updated in place. [fresh] are the ones that
+     * passed their cooldown now (they decide that it rings). Words, not percentages.
+     */
+    private fun notifySummary(
+        all: List<dev.retrovision.core.analysis.EntityReport>,
+        fresh: List<dev.retrovision.core.analysis.EntityReport>,
+    ) {
         val nm = getSystemService(NotificationManager::class.java)
         val channel = if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS
-        val n = NotificationCompat.Builder(this, channel)
+        val levels = all.map { dev.retrovision.core.analysis.Levels.of(it) }
+        val strong = levels.count { it == dev.retrovision.core.analysis.Level.STRONG }
+        val worth = levels.size - strong
+        val title = listOfNotNull(
+            if (strong > 0) Texts.level(dev.retrovision.core.analysis.Level.STRONG) + ": $strong" else null,
+            if (worth > 0) Texts.level(dev.retrovision.core.analysis.Level.WORTH_A_LOOK) + ": $worth" else null,
+        ).joinToString(" · ")
+        val inbox = NotificationCompat.InboxStyle()
+        all.sortedByDescending { dev.retrovision.core.analysis.Levels.of(it).ordinal }.take(6).forEach { a ->
+            val l = dev.retrovision.core.analysis.Levels.of(a)
+            inbox.addLine("${Texts.levelIcon(l)} ${Texts.entityLabel(a)}")
+        }
+        val text = Texts.tr("New: ", "Nuovi: ") + fresh.joinToString(", ") { Texts.entityLabel(it) }
+        val b = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle(Texts.alertTitle(Texts.entityLabel(a)))
-            .setContentText(a.reasons.joinToString(" · ") { Texts.reason(it) })
-            .setStyle(NotificationCompat.BigTextStyle().bigText(a.reasons.joinToString("\n") { Texts.reason(it) }))
-            .setContentIntent(contentIntent())
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(inbox.setSummaryText(Texts.tr("Tap for the evidence", "Tocca per le prove")))
+            .setContentIntent(alertsIntent())
             .setAutoCancel(true)
             .setSilent(prefs.alertSilent)
             .setPriority(if (prefs.alertSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .build()
-        nm.notify(a.entityId.hashCode(), n)
+        nm.notify(NOTIF_SUMMARY, hideOnLockScreen(b).build())
     }
+
+    /**
+     * Lock screen and discreet mode show only "Something to check": what the app is and what it
+     * found must not be readable by whoever picks up the phone.
+     */
+    private fun hideOnLockScreen(b: NotificationCompat.Builder): NotificationCompat.Builder {
+        val public = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("Retrovision")
+            .setContentText(Texts.publicAlert())
+            .build()
+        b.setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(public)
+        if (prefs.discreetAlerts) {
+            b.setContentTitle("Retrovision").setContentText(Texts.publicAlert()).setStyle(null)
+        }
+        return b
+    }
+
+    private fun alertsIntent() = PendingIntent.getActivity(
+        this, 2, Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_ALERTS, true)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     companion object {
         const val ACTION_STOP = "dev.retrovision.app.STOP"
@@ -955,6 +1001,7 @@ class CollectorService : Service() {
         private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_PROBE_LOST = 2
+        private const val NOTIF_SUMMARY = 3
         private const val BASELINE_MIN_DAYS = 3
         private const val COMPANION_DAYS = 3
         /** Hard ceiling on rows held in memory by one analysis pass (~50-80 MB worst case). */
