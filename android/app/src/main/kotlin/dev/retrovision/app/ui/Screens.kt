@@ -32,10 +32,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -78,7 +80,14 @@ fun StatusScreen(modifier: Modifier) {
     val conn by Collector.connection.collectAsState()
     val fix by Collector.location.collectAsState()
     val analysis by Collector.analysis.collectAsState()
-    val count by remember { app.db.dao().sightingCount() }.collectAsState(initial = 0L)
+    // Polled, not observed: a COUNT(*) re-run after every insert batch scanned millions of rows twice a second.
+    var count by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            count = runCatching { app.db.dao().sightingEstimate() }.getOrDefault(count)
+            kotlinx.coroutines.delay(15_000)
+        }
+    }
 
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.ACCESS_FINE_LOCATION] == true) CollectorService.start(ctx)
@@ -110,6 +119,24 @@ fun StatusScreen(modifier: Modifier) {
             },
             modifier = Modifier.fillMaxWidth(),
         ) { Text(if (running) Texts.tr("Stop collecting", "Ferma la raccolta") else Texts.tr("Start collecting", "Avvia la raccolta")) }
+
+        var crash by remember { mutableStateOf(dev.retrovision.app.CrashLog.read(ctx)) }
+        crash?.let { text ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(Texts.tr("The app crashed last time", "L'app si è chiusa per un errore l'ultima volta"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+                    Text(text.lines().take(14).joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Retrovision crash", text))
+                        }) { Text(Texts.tr("Copy", "Copia")) }
+                        OutlinedButton(onClick = { DiagNav.open.value = true }) { Text(Texts.tr("Details", "Dettagli")) }
+                        TextButton(onClick = { dev.retrovision.app.CrashLog.clear(ctx); crash = null }) { Text(Texts.tr("Dismiss", "Chiudi")) }
+                    }
+                }
+            }
+        }
 
         val radar by Collector.liveRadar.collectAsState()
         if (running && radar.blips.isNotEmpty()) {
@@ -157,7 +184,7 @@ fun StatusScreen(modifier: Modifier) {
                     if (f == null) Texts.tr("No fix yet", "Nessun fix")
                     else "%.5f, %.5f (±%.0f m)".format(f.lat, f.lon, f.accuracyM),
                 )
-                Text(Texts.tr("Stored sightings: ", "Avvistamenti salvati: ") + count)
+                Text(Texts.tr("Stored sightings: ≈", "Avvistamenti salvati: ≈") + count)
             }
         }
         val alerts = analysis?.alerts.orEmpty()
@@ -166,6 +193,19 @@ fun StatusScreen(modifier: Modifier) {
                 Text(Texts.tr("Alerts", "Allerte"), style = MaterialTheme.typography.titleMedium)
                 if (alerts.isEmpty()) Text(Texts.tr("Nothing suspicious in the analysed window.", "Niente di sospetto nella finestra analizzata."))
                 alerts.take(5).forEach { Text("• ${Texts.entityLabel(it)}  ${"%.0f".format(it.score * 100)}%") }
+                val load by Collector.analysisLoad.collectAsState()
+                if (load.analysedRows > 0) {
+                    Text(
+                        Texts.tr(
+                            "Analysed ${load.analysedRows} of ${load.rawRows} rows (one per device every ${load.bucketMs / 1000} s)" +
+                                if (load.truncated) ". Window cut to the most recent part: shorten Look-back to analyse all of it." else ".",
+                            "Analizzate ${load.analysedRows} righe su ${load.rawRows} (una per dispositivo ogni ${load.bucketMs / 1000} s)" +
+                                if (load.truncated) ". Finestra tagliata alla parte più recente: accorcia la finestra di analisi per coprirla tutta." else ".",
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (load.truncated) MaterialTheme.colorScheme.error else androidx.compose.ui.graphics.Color.Unspecified,
+                    )
+                }
             }
         }
 
@@ -481,6 +521,9 @@ fun SettingsScreen(modifier: Modifier) {
         Text(Texts.tr("Settings", "Impostazioni"), style = MaterialTheme.typography.headlineSmall)
         OutlinedButton(onClick = { WikiNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
             Text(Texts.tr("📖 Guide: how it works, heuristics, limits", "📖 Guida: come funziona, euristiche, limiti"))
+        }
+        OutlinedButton(onClick = { DiagNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(Texts.tr("Diagnostics (errors, performance, report)", "Diagnostica (errori, prestazioni, report)"))
         }
 
         Text(Texts.tr("Alert when score ≥ ", "Allerta con punteggio ≥ ") + "%.0f%%".format(alertScore * 100))

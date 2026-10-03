@@ -22,6 +22,9 @@ data class ConnectionUi(
 )
 
 /** Phone's current Wi-Fi association. [own] = one of your networks; [trusted] = known access point for it. */
+/** How much of the analysis window was loaded: raw rows in the window, rows analysed, thinning bucket. */
+data class AnalysisLoad(val rawRows: Long = 0, val analysedRows: Int = 0, val bucketMs: Long = 0, val truncated: Boolean = false)
+
 data class WifiConn(val ssid: String, val bssid: String, val own: Boolean, val trusted: Boolean)
 
 data class FlashUi(
@@ -51,6 +54,7 @@ data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Doub
 object Collector {
     val connection = MutableStateFlow(ConnectionUi())
     val analysis = MutableStateFlow<AnalysisResult?>(null)
+    val analysisLoad = MutableStateFlow(AnalysisLoad())
     val location = MutableStateFlow<GeoFix?>(null)
     val flash = MutableStateFlow(FlashUi())
     val running = MutableStateFlow(false)

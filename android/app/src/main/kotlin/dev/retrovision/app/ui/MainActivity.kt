@@ -39,6 +39,11 @@ private fun AppRoot() {
         WikiScreen(onClose = { WikiNav.open.value = false })
         return
     }
+    val diagOpen by DiagNav.open.collectAsState()
+    if (diagOpen) {
+        DiagnosticsScreen(onClose = { DiagNav.open.value = false })
+        return
+    }
     val tabs = listOf(
         "📡" to Texts.tr("Status", "Stato"),
         "🔎" to Texts.tr("Devices", "Dispositivi"),

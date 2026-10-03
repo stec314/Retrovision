@@ -131,6 +131,25 @@ interface AppDao {
     @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from")
     suspend fun sightingCountSince(from: Long): Long
 
+    /**
+     * The analysis window, thinned: one row per (device, frame kind, advert type, SSID) per
+     * [bucketMs]. A device that advertises every second says the same thing 60 times a minute;
+     * loading every copy of a 2-12 h window is what ran the app out of memory. The newest row of
+     * each bucket is kept (SQLite takes bare columns from the MAX() row), and `merged` is summed so
+     * frame counts stay right. Probe requests for different SSIDs stay separate rows.
+     * Newest first, so a [limit] cut drops the oldest part of the window, never the present.
+     */
+    @Query(
+        "SELECT MAX(id) AS id, timeMs, radio, address, entityId, rssi, SUM(merged) AS merged, wifiKind, channel, " +
+            "ssid, bssid, seq, ies, bleAddrKind, advType, advData, txPower, source, tsf FROM sightings " +
+            "WHERE timeMs >= :from GROUP BY entityId, radio, wifiKind, advType, ssid, timeMs / :bucketMs ORDER BY timeMs DESC LIMIT :limit",
+    )
+    suspend fun sightingsThinned(from: Long, bucketMs: Long, limit: Int): List<SightingRow>
+
+    /** Cheap row estimate (two index lookups instead of counting millions of encrypted rows). */
+    @Query("SELECT IFNULL(MAX(id) - MIN(id) + 1, 0) FROM sightings")
+    suspend fun sightingEstimate(): Long
+
     /** Memory-safe sampling for retrospective review: every :stride-th row by id. */
     @Query("SELECT * FROM sightings WHERE timeMs >= :from AND (id % :stride) = 0 ORDER BY timeMs")
     suspend fun sightingsSinceSampled(from: Long, stride: Int): List<SightingRow>
@@ -143,9 +162,6 @@ interface AppDao {
 
     @Query("DELETE FROM fixes WHERE timeMs < :before")
     suspend fun pruneFixes(before: Long): Int
-
-    @Query("SELECT COUNT(*) FROM sightings")
-    fun sightingCount(): Flow<Long>
 
     @Query("SELECT * FROM ignores ORDER BY createdMs DESC")
     fun ignores(): Flow<List<IgnoreRow>>

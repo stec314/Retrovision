@@ -333,6 +333,8 @@ Suggested values: 30–50 m in cities (default 50), 75–100 m if you are mostly
 
 **Live analysis** answers "is something following me *now*?". It looks back over the **analysis window** (Settings, 30–720 minutes, default 120) and runs every 60 s. The four windows only cover the last 20 minutes, so a short window reacts fast and stays focused on the current trip.
 
+**Thinning.** Live analysis doesn't load every frame of the window: a phone that advertises every second says the same thing 60 times a minute. The app keeps one row per device, frame kind, advert type and SSID per bucket. The bucket is 5 s for up to 100,000 frames in the window, then 15 s, 60 s and 180 s as the window gets busier. Frame counts are summed, so they stay right. At most 120,000 rows are analysed; if the window holds more, the oldest part is left out and the *Alerts* card says so in red. Then shorten the analysis window. Attack and drone detection always use every frame from the last 5 minutes.
+
 **Why not a huge window?** Persistence would build up from ordinary life (the same café twice a week), and alerts would fire on stale history. Live mode is for "now".
 
 **Retrospective analysis** (*Analyze saved data*) answers "has anything been around me across the last days?". This catches someone who shows up at different moments rather than continuously. It reviews a span you pick (e.g. 24 h, 3 days, 7 days) with a tuned configuration:
@@ -497,6 +499,19 @@ This is the honest list. Read it before trusting a result.
 12. **Notable-device tags** are name/ID patterns: easy to evade, and prone to false matches.
 13. **Thresholds are not yet validated on real data.** Use the verdict buttons and field tests; expect values to change.
 
+## Diagnostics
+
+*Settings → Diagnostics* shows what the app is doing and what went wrong, live:
+- **Memory**: the app's heap use against its limit. Amber above 80 %.
+- **USB / Decoder**: connections, reader errors, and the backlog between the USB reader and the decoder. Dropped chunks mean the phone fell far behind.
+- **Probe**: sequence gaps (frames the probe could not hand to the phone in time), probe queue drops, CRC errors, chip temperature.
+- **Database**: the last insert batch and the slowest one, plus sightings dropped because the write queue was full.
+- **Analysis**: how long each run takes and how much of the window was loaded.
+- **UI freezes**: times the screen was blocked for 2 s or more (5 s is when Android shows "app not responding").
+- **Events**: connections, phase changes, probe reboots, slow operations, errors, system low-memory warnings.
+
+If the app crashes, the error and the last events are saved and shown on *Status* at the next start. **Copy report** and **Share** build a plain-text report: versions, phone model, the counters, the events, the last crash and, optionally, the app's own warnings from the system log. It contains no device addresses or network names, and it leaves the phone only if you share it.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | What to do |
@@ -504,7 +519,8 @@ This is the honest list. Read it before trusting a result.
 | "Waiting for the probe to introduce itself" for more than ~15 s | Orphaned session, no firmware, or the wrong firmware | The app auto-reboots the probe within ~3–12 s. If it persists, flash the firmware from *Probe* |
 | Probe "rejected" | Firmware and app protocol versions differ | Flash the firmware bundled with this app |
 | Wi-Fi/BLE counters stuck at 0 but status updates | Clock not synced yet, or an orphaned session | Wait a few seconds. The watchdog recovers it |
-| Many "dropped" frames | Busy area, data frames on | Turn off data frames |
+| Many "dropped" / "lost" frames | The phone wasn't reading the USB fast enough (the probe's writes time out), or a busy area with data frames on | Update the app (the USB reader was made faster and no longer waits on processing). Turn off data frames. A probe above ~70 °C also struggles |
+| The app closes by itself | Usually memory | On the next start, *Status* shows the last error. Open *Diagnostics*, copy the report and attach it to the issue. Shorten the analysis window meanwhile |
 | No places / no alerts indoors | GPS filtered out (poor accuracy) | Expected. Go outside, or relax the GPS setting a little |
 | Deauth alert at home | A misbehaving AP or a real attack | Look at the target BSSID: is it yours? Repeated alerts on one BSSID are worth investigating |
 | Evil-twin alert for your own mesh | Your network has several APs | Expected. List all your SSIDs and accept that a mesh will trigger it, or remove the SSID |
