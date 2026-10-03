@@ -167,6 +167,10 @@ class AnalyzerTest {
         assertEquals(20, res.entities.size)
         assertEquals(201, res.totalEntities)
         assertTrue(res.entities.any { it.entityId == "follower" && it.alert })
+        // The trimmed ones stay findable.
+        assertEquals(181, res.others.size)
+        assertEquals(1, EntitySearch.stubs(res.others) { listOf(it.entityId) }.search("passer199").size +
+            EntitySearch.reports(res.entities) { listOf(it.entityId) }.search("passer199").size)
     }
 
     @Test fun reasonWeightsExplainTheScore() {

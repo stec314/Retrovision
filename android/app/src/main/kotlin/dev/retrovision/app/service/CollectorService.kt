@@ -105,6 +105,7 @@ class CollectorService : Service() {
             return START_NOT_STICKY
         }
         Collector.running.value = true
+        Collector.analyzeOne = { id -> analyzeSingle(id) }
         Diag.i("service", "collection started")
         Collector.probeLedOn.value = app.prefs.probeLedOn
         Collector.captureDataFrames.value = app.prefs.captureDataFrames
@@ -125,6 +126,7 @@ class CollectorService : Service() {
         Diag.i("service", "collection stopped")
         Collector.running.value = false
         Collector.session = null
+        Collector.analyzeOne = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
         runCatching { locationManager?.removeUpdates(locationListener) }
         phoneBle?.stop()
@@ -590,6 +592,28 @@ class CollectorService : Service() {
             }
         }
     }
+
+    /** One device's full report from the live window (same settings as the periodic analysis). */
+    private suspend fun analyzeSingle(id: String): dev.retrovision.core.analysis.EntityReport? =
+        kotlinx.coroutines.withContext(Dispatchers.Default) {
+            val dao = app.db.dao()
+            val now = System.currentTimeMillis()
+            val cfg = AnalysisConfig(
+                lookbackMs = prefs.lookbackMin * 60_000L,
+                alertScore = prefs.alertScore.toDouble(),
+                alertMinPlaces = prefs.alertMinPlaces,
+                maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
+            )
+            val from = now - cfg.lookbackMs
+            val mine = liveWindow.snapshot(from).filter { it.entityId == id }
+            if (mine.isEmpty()) return@withContext null
+            Analyzer(cfg).analyze(
+                now, mine, dao.fixesSince(from).map { it.toFix() },
+                IgnoreList(apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
+                familiar = dao.familiarNow().map { it.toModel() },
+                residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
+            ).entities.firstOrNull()
+        }
 
     private suspend fun analyzeOnce() {
         val prefs = app.prefs

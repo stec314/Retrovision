@@ -2,6 +2,12 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.border
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -145,12 +151,20 @@ fun DevicesScreen(modifier: Modifier) {
     var query by rememberSaveable { mutableStateOf("") }
     // A city centre yields tens of thousands of devices: indexing, searching, filtering and counting
     // all run off the UI thread (field report: typing in the search box froze the app).
-    val index by produceState<EntitySearch.Index?>(null, all) {
+    val others = analysis?.others.orEmpty()
+    var searchAll by rememberSaveable { mutableStateOf(false) }
+    val index by produceState<EntitySearch.Index<EntityReport>?>(null, all) {
         value = withContext(Dispatchers.Default) {
-            EntitySearch.Index(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
+            EntitySearch.reports(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
         }
     }
-    val view by produceState(DevicesView(), index, query, filter) {
+    // The trimmed devices are indexed only when asked for (search "all devices").
+    val stubIndex by produceState<EntitySearch.Index<dev.retrovision.core.analysis.EntityStub>?>(null, others, searchAll) {
+        value = if (!searchAll || others.isEmpty()) null else withContext(Dispatchers.Default) {
+            EntitySearch.stubs(others) { listOf(stubLabel(it), CategoryUi.label(it.category)) }
+        }
+    }
+    val view by produceState(DevicesView(), index, stubIndex, query, filter) {
         val idx = index ?: return@produceState
         delay(150) // typing: wait for a pause; a new key press cancels this
         value = withContext(Dispatchers.Default) {
@@ -159,41 +173,39 @@ fun DevicesScreen(modifier: Modifier) {
                 list = matched.filter(filter.match),
                 counts = DeviceFilter.entries.associateWith { f -> matched.count(f.match) },
                 networks = if (filter == DeviceFilter.SEARCHING) EntitySearch.searchedNetworks(all) else emptyList(),
+                stubs = if (query.isNotBlank()) stubIndex?.search(query).orEmpty().take(300) else emptyList(),
                 ready = true,
             )
         }
     }
     val list = view.list
+    val scope = rememberCoroutineScope()
+    var opening by remember { mutableStateOf<String?>(null) }
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size}/${analysis?.totalEntities ?: all.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            OutlinedButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Analyse now", "Analizza ora")) }
+        Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Texts.tr("Devices", "Dispositivi"), style = MaterialTheme.typography.headlineSmall)
+                val total = analysis?.totalEntities ?: all.size
+                Text(
+                    if (total > all.size) Texts.tr("${all.size} most relevant of $total", "${all.size} più rilevanti su $total")
+                    else Texts.tr("$total in the window", "$total nella finestra"),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Refresh", "Aggiorna")) }
         }
-        val total = analysis?.totalEntities ?: 0
-        if (total > all.size) {
-            Text(
-                Texts.tr(
-                    "Keeping the ${all.size} most relevant of $total devices (alerts, network searches, trackers, drones, notable, then by score). The rest scored lower.",
-                    "Tengo i ${all.size} più rilevanti su $total dispositivi (allerte, ricerche di rete, tracker, droni, notevoli, poi per punteggio). Gli altri hanno punteggio più basso.",
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
+        SearchField(query, { query = it }, Texts.tr("Name, network, MAC, vendor", "Nome, rete, MAC, produttore"))
+        if (others.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    Texts.tr("Also search the other ${others.size}", "Cerca anche negli altri ${others.size}"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                )
+                androidx.compose.material3.Switch(checked = searchAll, onCheckedChange = { searchAll = it })
+            }
         }
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            singleLine = true,
-            placeholder = { Text(Texts.tr("Search: name, network, MAC, vendor", "Cerca: nome, rete, MAC, produttore")) },
-            leadingIcon = { Text("🔎") },
-            trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("✕") } },
-            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-        )
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 6.dp))
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -246,6 +258,22 @@ fun DevicesScreen(modifier: Modifier) {
             items(list.take(300), key = { it.entityId }) { r ->
                 EntityCard(r, query) { selected = r }
             }
+            if (view.stubs.isNotEmpty()) {
+                item(key = "stubs-h") { Overline(Texts.tr("Other devices (${view.stubs.size})", "Altri dispositivi (${view.stubs.size})"), Modifier.padding(top = 8.dp)) }
+                items(view.stubs, key = { "s" + it.entityId }) { st ->
+                    StubRow(st, loading = opening == st.entityId) {
+                        val f = Collector.analyzeOne ?: return@StubRow
+                        opening = st.entityId
+                        scope.launch {
+                            val r = runCatching { f(st.entityId) }.getOrNull()
+                            opening = null
+                            if (r != null) selected = r
+                        }
+                    }
+                }
+            } else if (searchAll && query.isNotBlank() && view.ready && stubIndex == null) {
+                item(key = "stubs-wait") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            }
             if (list.size > 300) item(key = "more") {
                 Text(
                     Texts.tr("Showing 300 of ${list.size}. Search or filter to narrow down.", "Mostrati 300 su ${list.size}. Cerca o filtra per restringere."),
@@ -258,6 +286,7 @@ fun DevicesScreen(modifier: Modifier) {
 }
 
 private class DevicesView(
+    val stubs: List<dev.retrovision.core.analysis.EntityStub> = emptyList(),
     val list: List<EntityReport> = emptyList(),
     val counts: Map<DeviceFilter, Int> = emptyMap(),
     val networks: List<Pair<String, Int>> = emptyList(),
@@ -502,3 +531,65 @@ fun VisitsList(r: EntityReport) {
 }
 
 private fun fmtDist(m: Double) = if (m < 1000) "${m.toInt()} m" else "%.1f km".format(m / 1000)
+
+/** One line about a trimmed device; tap builds its full report. */
+@Composable
+private fun StubRow(st: dev.retrovision.core.analysis.EntityStub, loading: Boolean, onOpen: () -> Unit) {
+    Panel(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.weight(1f)) {
+                Text(stubLabel(st), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                Text(
+                    CategoryUi.label(st.category) + " · ${st.places} " + Texts.tr("places", "luoghi") + " · ${st.sightings} " + Texts.tr("frames", "frame"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (loading) androidx.compose.material3.CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+            else Text(Texts.tr("Analyse", "Analizza"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+internal fun stubLabel(st: dev.retrovision.core.analysis.EntityStub): String {
+    val addr = st.addresses.firstOrNull()?.toString().orEmpty()
+    val vendor = (st.bleCompanyId?.let { dev.retrovision.app.enrich.Vendors.forCompany(it) } ?: st.addresses.firstOrNull()?.let { dev.retrovision.app.enrich.Vendors.forMac(it) })
+    val name = st.bleName?.let { "“$it”" } ?: st.ssids.firstOrNull()
+    return listOfNotNull(name, addr, vendor).joinToString(" · ")
+}
+
+/** Compact rounded search field: icon, text, clear. */
+@Composable
+fun SearchField(value: String, onChange: (String) -> Unit, placeholder: String) {
+    val shape = RoundedCornerShape(50)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        androidx.compose.material3.Icon(
+            androidx.compose.material.icons.Icons.Filled.Search, contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp),
+        )
+        Box(Modifier.weight(1f).padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
+            if (value.isEmpty()) Text(placeholder, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            androidx.compose.foundation.text.BasicTextField(
+                value = value, onValueChange = onChange, singleLine = true,
+                textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (value.isNotEmpty()) {
+            androidx.compose.material3.Icon(
+                androidx.compose.material.icons.Icons.Filled.Close, contentDescription = Texts.tr("Clear", "Cancella"),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp).clickable { onChange("") },
+            )
+        }
+    }
+}

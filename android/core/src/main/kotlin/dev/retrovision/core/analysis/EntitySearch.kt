@@ -38,33 +38,42 @@ object EntitySearch {
         addAll(extra)
     }
 
-    /** Prepared search text for a list of devices. Build it off the UI thread. */
-    class Index(val entities: List<EntityReport>, extra: (EntityReport) -> List<String> = { emptyList() }) {
-        private val text = Array(entities.size) { norm(fields(entities[it], extra(entities[it])).joinToString("\n")) }
-        private val hex = Array(entities.size) { i ->
-            val r = entities[i]
-            (r.addresses.map { it.toString() } + r.joinAttempts.map { it.bssid.toString() }).joinToString("|") { compactHex(it) }
-        }
+    /** Prepared search text for a list of items (reports or stubs). Build it off the UI thread. */
+    class Index<T>(val items: List<T>, textOf: (T) -> String, hexOf: (T) -> String) {
+        private val text = Array(items.size) { norm(textOf(items[it])) }
+        private val hex = Array(items.size) { hexOf(items[it]) }
 
-        fun search(query: String): List<EntityReport> {
+        fun search(query: String): List<T> {
             val ws = words(query)
-            if (ws.isEmpty()) return entities
+            if (ws.isEmpty()) return items
             val hexWords = ws.map { w -> compactHex(w).takeIf { it.length >= 4 && it.length == w.count { c -> c.isLetterOrDigit() } } }
-            val out = ArrayList<EntityReport>()
-            for (i in entities.indices) {
+            val out = ArrayList<T>()
+            for (i in items.indices) {
                 var ok = true
                 for (k in ws.indices) {
                     val hw = hexWords[k]
                     if (!text[i].contains(ws[k]) && (hw == null || !hex[i].contains(hw))) { ok = false; break }
                 }
-                if (ok) out += entities[i]
+                if (ok) out += items[i]
             }
             return out
         }
     }
 
+    fun reports(entities: List<EntityReport>, extra: (EntityReport) -> List<String> = { emptyList() }) = Index(
+        entities,
+        { r -> fields(r, extra(r)).joinToString("\n") },
+        { r -> (r.addresses.map { it.toString() } + r.joinAttempts.map { it.bssid.toString() }).joinToString("|") { compactHex(it) } },
+    )
+
+    fun stubs(stubs: List<EntityStub>, extra: (EntityStub) -> List<String> = { emptyList() }) = Index(
+        stubs,
+        { s -> (s.ssids + s.probedSsids + listOfNotNull(s.bleName) + s.addresses.map { it.toString() } + extra(s)).joinToString("\n") },
+        { s -> s.addresses.joinToString("|") { compactHex(it.toString()) } },
+    )
+
     fun matches(r: EntityReport, query: String, extra: List<String> = emptyList()): Boolean =
-        Index(listOf(r)) { extra }.search(query).isNotEmpty()
+        reports(listOf(r)) { extra }.search(query).isNotEmpty()
 
     /**
      * Networks being searched for by name in [entities], with how many devices ask for each:

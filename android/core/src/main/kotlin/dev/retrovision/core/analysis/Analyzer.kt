@@ -218,6 +218,35 @@ class EntityReport(
     )
 }
 
+/**
+ * What remains of a device trimmed from the result: enough to find it by search and to describe
+ * it in a line (about a tenth of a full report). Its full report is computed on demand.
+ */
+class EntityStub(
+    val entityId: String,
+    val kind: EntityKind,
+    val category: dev.retrovision.core.identity.DeviceCategory,
+    val score: Double,
+    val addresses: List<MacAddress>,
+    val ssids: List<String>,
+    val probedSsids: List<String>,
+    val bleName: String?,
+    val bleCompanyId: Int?,
+    val macTrust: dev.retrovision.core.identity.MacTrust,
+    val places: Int,
+    val sightings: Int,
+    val firstSeenMs: Long,
+    val lastSeenMs: Long,
+    val maxRssi: Int,
+) {
+    companion object {
+        fun of(r: EntityReport) = EntityStub(
+            r.entityId, r.kind, r.category, r.score, r.addresses.take(4), r.ssids.take(5), r.probedSsids.take(12),
+            r.bleName, r.bleCompanyId, r.macTrust, r.placeIds.size, r.sightings, r.firstSeenMs, r.lastSeenMs, r.maxRssi,
+        )
+    }
+}
+
 /** Why a score was held down even though the clues added up to more. */
 enum class ScoreCap(val max: Double) {
     /** Fewer than 2 effective places: a neighbour, not a follower. */
@@ -312,6 +341,8 @@ class AnalysisResult(
     val totalEntities: Int = entities.size,
     /** Ids of every entity heard only at your routine places (for learning residents), untrimmed. */
     val routineOnlyIds: List<String> = emptyList(),
+    /** Entities trimmed from [entities], kept as searchable stubs. */
+    val others: List<EntityStub> = emptyList(),
 ) {
     /** Computed once: the UI reads this on every redraw, over tens of thousands of entities. */
     val alerts: List<EntityReport> by lazy { entities.filter { it.alert } }
@@ -400,15 +431,19 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         // Learning "residents" needs every device seen only at routine places, kept or not.
         val routineOnly = reports.filter { it.placeIds.isNotEmpty() && it.unfamiliarPlaces == 0 }.map { it.entityId }
         val total = reports.size
+        var others: List<EntityStub> = emptyList()
         val kept = if (reports.size <= config.maxReports) reports else {
             fun interesting(r: EntityReport) = r.probedSsids.isNotEmpty() || r.joinAttempts.isNotEmpty() ||
                 r.tracker != null || r.isDrone || r.notable.isNotEmpty()
             val (alerts, rest) = reports.partition { it.alert }
             val (shown, other) = rest.partition { interesting(it) }
-            (alerts + shown + other).take(maxOf(config.maxReports, alerts.size))
-                .sortedWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
+            val ordered = alerts + shown + other
+            val n = maxOf(config.maxReports, alerts.size)
+            // The rest stay searchable as small stubs; a full report is built on demand.
+            others = ordered.drop(n).map { EntityStub.of(it) }
+            ordered.take(n).sortedWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         }
-        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly)
+        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly, others)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {

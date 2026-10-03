@@ -75,6 +75,12 @@ object Collector {
     /** Set by the UI to request an immediate analysis run. */
     val analyzeNow = MutableStateFlow(0L)
 
+    /**
+     * Full report for one device trimmed from the result (search "all devices"), computed on
+     * demand from the live window. Null while collection is off.
+     */
+    @Volatile var analyzeOne: (suspend (String) -> dev.retrovision.core.analysis.EntityReport?)? = null
+
     /** Mirrors Prefs.probeLedOn; ProbeSession reads it when building the probe config. */
     val probeLedOn = MutableStateFlow(true)
 

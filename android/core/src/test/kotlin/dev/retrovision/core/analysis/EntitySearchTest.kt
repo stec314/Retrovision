@@ -45,7 +45,7 @@ class EntitySearchTest {
     @Test fun indexSearchesFiftyThousandDevicesQuickly() {
         val many = (0 until 50_000).map { i -> dev("e$i", 0x020000000000L + i, probed = setOf("Net${i % 997}"), name = "Dev $i") }
         val t0 = System.nanoTime()
-        val idx = EntitySearch.Index(many) { listOf("Vendor ${it.entityId}") }
+        val idx = EntitySearch.reports(many) { listOf("Vendor ${it.entityId}") }
         val built = (System.nanoTime() - t0) / 1_000_000
         val t1 = System.nanoTime()
         val hits = idx.search("net42 dev")
