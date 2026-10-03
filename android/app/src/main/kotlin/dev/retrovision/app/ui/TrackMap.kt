@@ -69,6 +69,13 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -94,6 +101,7 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.time.LocalDate
 import java.util.Date
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
@@ -204,6 +212,9 @@ private class Proj(
     fun screen(lat: Double, lon: Double) =
         Offset(w / 2 + ((WebMercator.x(lon) - cx) * s).toFloat() + pan.x, h / 2 + ((WebMercator.y(lat) - cy) * s).toFloat() + pan.y)
     fun screenX(wx: Double) = w / 2 + ((wx - cx) * s).toFloat() + pan.x
+    /** From precomputed world coordinates: no logarithms per point per frame. */
+    fun sx(wx: Double) = (w / 2 + (wx - cx) * s + pan.x).toFloat()
+    fun sy(wy: Double) = (h / 2 + (wy - cy) * s + pan.y).toFloat()
     fun screenY(wy: Double) = h / 2 + ((wy - cy) * s).toFloat() + pan.y
     fun worldX(px: Float) = (px - w / 2 - pan.x) / s + cx
     fun worldY(py: Float) = (py - h / 2 - pan.y) / s + cy
@@ -339,6 +350,18 @@ fun TrackMap(
         val p = proj() ?: return@LaunchedEffect
         state.pan = p.panToCenter(h.lat, h.lon)
     }
+    // World (Mercator) coordinates computed once per data change, not on every frame of a pinch.
+    val trackW = remember(sorted) {
+        val stride = max(1, sorted.size / 4000)
+        val idx = sorted.indices.filter { it % stride == 0 || it == sorted.lastIndex }
+        Triple(DoubleArray(idx.size) { WebMercator.x(sorted[idx[it]].lon) }, DoubleArray(idx.size) { WebMercator.y(sorted[idx[it]].lat) }, LongArray(idx.size) { sorted[idx[it]].timeMs })
+    }
+    val devW = remember(devices) {
+        devices.associate { d ->
+            val pts = d.visits.filter { it.lat != null && it.lon != null }.sortedBy { it.startMs }
+            d.entityId to (DoubleArray(pts.size) { WebMercator.x(pts[it].lon!!) } to DoubleArray(pts.size) { WebMercator.y(pts[it].lat!!) })
+        }
+    }
     val shownDevices = remember(devices, state.deviceFocus, state.showDevices, state.hiddenDevices) {
         if (!state.showDevices) emptyList()
         else devices.filter { if (state.deviceFocus != null) it.entityId == state.deviceFocus else it.entityId !in state.hiddenDevices }
@@ -456,21 +479,19 @@ fun TrackMap(
 
             if (state.showTrack) {
                 // Past (up to the scrubber) bright, the rest dim. Gaps > 10 min break the line.
-                val stride = max(1, sorted.size / 2500)
+                // Points closer than 2 px to the previous one are skipped: invisible, and costly.
+                val (xs, ys, ts) = trackW
                 val bright = Path(); val dim = Path()
-                var prev: GeoFix? = null
-                sorted.forEachIndexed { idx, f ->
-                    if (idx % stride != 0 && idx != sorted.lastIndex) return@forEachIndexed
-                    val o = pr.screen(f.lat, f.lon)
-                    val target = if (scrubT == null || f.timeMs <= scrubT) bright else dim
-                    val p0 = prev
-                    if (p0 == null || f.timeMs - p0.timeMs > 10 * 60_000L) {
-                        target.moveTo(o.x, o.y)
-                    } else {
-                        val a = pr.screen(p0.lat, p0.lon)
-                        target.moveTo(a.x, a.y); target.lineTo(o.x, o.y)
-                    }
-                    prev = f
+                var px = 0f; var py = 0f; var pt = Long.MIN_VALUE
+                for (i in xs.indices) {
+                    val x = pr.sx(xs[i]); val y = pr.sy(ys[i])
+                    val t = ts[i]
+                    val target = if (scrubT == null || t <= scrubT) bright else dim
+                    if (pt == Long.MIN_VALUE || t - pt > 10 * 60_000L) {
+                        target.moveTo(x, y); px = x; py = y; pt = t
+                    } else if (abs(x - px) + abs(y - py) >= 2f || i == xs.lastIndex) {
+                        target.moveTo(px, py); target.lineTo(x, y); px = x; py = y; pt = t
+                    } else pt = t
                 }
                 val round = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                 drawPath(dim, MapColors.track.copy(alpha = 0.25f), style = round)
@@ -492,21 +513,23 @@ fun TrackMap(
             // for the device in focus, to keep the map legible.
             val dr = 6.dp.toPx()
             val edge = 1.5.dp.toPx()
+            val cell = dr * 1.2f
             shownDevices.forEach { d ->
-                val pts = d.visits.filter { it.lat != null && it.lon != null }
-                if (state.deviceFocus == d.entityId && pts.size >= 2) {
+                val (xs, ys) = devW[d.entityId] ?: return@forEach
+                if (state.deviceFocus == d.entityId && xs.size >= 2) {
                     val path = Path()
-                    pts.sortedBy { it.startMs }.forEachIndexed { i, v ->
-                        val o = pr.screen(v.lat!!, v.lon!!)
-                        if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
-                    }
+                    for (i in xs.indices) { val x = pr.sx(xs[i]); val y = pr.sy(ys[i]); if (i == 0) path.moveTo(x, y) else path.lineTo(x, y) }
                     drawPath(path, d.color.copy(alpha = 0.6f), style = Stroke(2.dp.toPx(), pathEffect = dashed))
                 }
+                // One diamond per screen cell: thousands of overlapping markers look the same and cost a lot.
+                val used = HashSet<Long>()
                 val dia = Path()
-                pts.forEach { v ->
-                    val o = pr.screen(v.lat!!, v.lon!!)
-                    if (o.x < -dr || o.y < -dr || o.x > size.width + dr || o.y > size.height + dr) return@forEach
-                    dia.moveTo(o.x, o.y - dr); dia.lineTo(o.x + dr, o.y); dia.lineTo(o.x, o.y + dr); dia.lineTo(o.x - dr, o.y); dia.close()
+                for (i in xs.indices) {
+                    val x = pr.sx(xs[i]); val y = pr.sy(ys[i])
+                    if (x < -dr || y < -dr || x > size.width + dr || y > size.height + dr) continue
+                    val key = ((x / cell).toLong() shl 32) or ((y / cell).toLong() and 0xffffffffL)
+                    if (!used.add(key)) continue
+                    dia.moveTo(x, y - dr); dia.lineTo(x + dr, y); dia.lineTo(x, y + dr); dia.lineTo(x - dr, y); dia.close()
                 }
                 drawPath(dia, MapColors.background, style = Stroke(edge * 2))
                 drawPath(dia, d.color)
@@ -580,12 +603,12 @@ fun TrackMap(
         }
 
         // ── Top bar: menu (left), zoom and full screen (right) ──
-        val topPad = if (state.fullscreen) Modifier.statusBarsPadding() else Modifier
+        val topPad: Modifier = Modifier // insets are applied by FullScreenDialog
         Box(Modifier.align(Alignment.TopStart).then(topPad).padding(8.dp).padding(end = 52.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MapButton("☰") { menu = true }
-                    MapButton("ⓘ") { state.showInfo = !state.showInfo }
+                    MapButton(MapGlyph.MENU, Texts.tr("Map options", "Opzioni mappa")) { menu = true }
+                    MapButton(MapGlyph.INFO, Texts.tr("Map info", "Info mappa"), active = state.showInfo) { state.showInfo = !state.showInfo }
                     Text(
                         windowLabel(state.windowH) + (basemap?.first?.file?.nameWithoutExtension?.let { " · $it" } ?: ""),
                         color = MapColors.label, style = MaterialTheme.typography.labelSmall, maxLines = 1,
@@ -640,7 +663,7 @@ fun TrackMap(
                     )
                 }
                 DropdownMenuItem(
-                    text = { Text("⬇ " + Texts.tr("Download the map of this area…", "Scarica la mappa di quest'area…")) },
+                    text = { Text(Texts.tr("Download the map of this area…", "Scarica la mappa di quest'area…")) },
                     enabled = !download.running,
                     onClick = {
                         menu = false
@@ -653,7 +676,7 @@ fun TrackMap(
                 )
                 HorizontalDivider()
                 DropdownMenuItem(
-                    text = { Text(if (state.fullscreen) "⤡ " + Texts.tr("Exit full screen", "Esci da schermo intero") else "⛶ " + Texts.tr("Full screen", "Schermo intero")) },
+                    text = { Text(if (state.fullscreen) Texts.tr("Exit full screen", "Esci da schermo intero") else Texts.tr("Full screen", "Schermo intero")) },
                     onClick = { state.fullscreen = !state.fullscreen; menu = false },
                 )
             }
@@ -662,27 +685,26 @@ fun TrackMap(
             Modifier.align(Alignment.TopEnd).then(topPad).padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            MapButton(if (state.fullscreen) "✕" else "⛶") { state.fullscreen = !state.fullscreen }
-            MapButton("+") { state.zoom = (state.zoom * 1.6f).coerceAtMost(2000f); state.pan = state.pan * 1.6f }
-            MapButton("−") { state.zoom = (state.zoom / 1.6f).coerceAtLeast(0.25f); state.pan = state.pan / 1.6f }
-            MapButton("⤢") { state.reset() }
-            MapButton(if (state.showReplay) "⏹" else "⏵") { state.showReplay = !state.showReplay; if (!state.showReplay) state.scrub = null }
+            MapButton(
+                if (state.fullscreen) MapGlyph.CLOSE else MapGlyph.FULLSCREEN,
+                if (state.fullscreen) Texts.tr("Exit full screen", "Esci da schermo intero") else Texts.tr("Full screen", "Schermo intero"),
+            ) { state.fullscreen = !state.fullscreen }
+            MapButton(MapGlyph.PLUS, Texts.tr("Zoom in", "Avvicina")) { state.zoom = (state.zoom * 1.6f).coerceAtMost(2000f); state.pan = state.pan * 1.6f }
+            MapButton(MapGlyph.MINUS, Texts.tr("Zoom out", "Allontana")) { state.zoom = (state.zoom / 1.6f).coerceAtLeast(0.25f); state.pan = state.pan / 1.6f }
+            MapButton(MapGlyph.FIT, Texts.tr("Show everything", "Mostra tutto")) { state.reset() }
+            MapButton(if (state.showReplay) MapGlyph.STOP else MapGlyph.PLAY, Texts.tr("Replay", "Ripercorri"), active = state.showReplay) {
+                state.showReplay = !state.showReplay; if (!state.showReplay) state.scrub = null
+            }
             if (here != null) {
-                FilledTonalIconButton(
-                    onClick = {
-                        state.follow = true
-                        state.focusOn(here.lat, here.lon, spanM = 600.0)
-                    },
-                    modifier = Modifier.size(40.dp),
-                    colors = if (state.follow) androidx.compose.material3.IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
-                    ) else androidx.compose.material3.IconButtonDefaults.filledTonalIconButtonColors(),
-                ) { Text("◎") }
+                MapButton(MapGlyph.LOCATE, Texts.tr("Follow me", "Seguimi"), active = state.follow) {
+                    state.follow = true
+                    state.focusOn(here.lat, here.lon, spanM = 600.0)
+                }
             }
         }
 
         // ── Bottom: download progress, replay scrubber, selection or area editor ──
-        val bottomPad = if (state.fullscreen) Modifier.navigationBarsPadding() else Modifier
+        val bottomPad: Modifier = Modifier
         Column(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().then(bottomPad).padding(8.dp)
                 .heightIn(max = if (state.fullscreen) 420.dp else 230.dp)
@@ -1003,15 +1025,63 @@ private fun DownloadDialog(box: DoubleArray, onDismiss: () -> Unit, onStart: (St
 /** Full-screen version of the map, sharing [state] with the inline one. */
 @Composable
 fun FullscreenMap(content: @Composable () -> Unit, onClose: () -> Unit) {
-    Dialog(
-        onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
-    ) { Box(Modifier.fillMaxSize().background(MapColors.background)) { content() } }
+    FullScreenDialog(onDismiss = onClose, background = MapColors.background) { Box(Modifier.fillMaxSize()) { content() } }
 }
 
 @Composable
-private fun MapButton(label: String, onClick: () -> Unit) {
-    FilledTonalIconButton(onClick = onClick, modifier = Modifier.size(40.dp)) { Text(label) }
+private fun MapButton(glyph: MapGlyph, description: String, active: Boolean = false, onClick: () -> Unit) {
+    FilledTonalIconButton(
+        onClick = onClick,
+        modifier = Modifier.size(44.dp),
+        colors = if (active) androidx.compose.material3.IconButtonDefaults.filledTonalIconButtonColors(
+            containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary,
+        ) else androidx.compose.material3.IconButtonDefaults.filledTonalIconButtonColors(),
+    ) { MapGlyphIcon(glyph, description) }
+}
+
+/** Map button icons. Drawn here (or from the core icon set) so no font can turn them into boxes or emoji. */
+enum class MapGlyph { MENU, INFO, CLOSE, PLUS, MINUS, FULLSCREEN, FIT, PLAY, STOP, LOCATE }
+
+@Composable
+private fun MapGlyphIcon(g: MapGlyph, description: String) {
+    val core = when (g) {
+        MapGlyph.MENU -> androidx.compose.material.icons.Icons.Filled.Menu
+        MapGlyph.INFO -> androidx.compose.material.icons.Icons.Filled.Info
+        MapGlyph.CLOSE -> androidx.compose.material.icons.Icons.Filled.Close
+        MapGlyph.PLUS -> androidx.compose.material.icons.Icons.Filled.Add
+        MapGlyph.PLAY -> androidx.compose.material.icons.Icons.Filled.PlayArrow
+        else -> null
+    }
+    if (core != null) { androidx.compose.material3.Icon(core, description); return }
+    val c = androidx.compose.material3.LocalContentColor.current
+    Canvas(Modifier.size(22.dp).semantics { contentDescription = description }) {
+        val w = size.width; val sw = 2.2.dp.toPx(); val k = w * 0.3f
+        val stroke = Stroke(sw, cap = StrokeCap.Round)
+        when (g) {
+            MapGlyph.MINUS -> drawLine(c, Offset(w * 0.2f, w / 2), Offset(w * 0.8f, w / 2), sw, StrokeCap.Round)
+            MapGlyph.FULLSCREEN -> {
+                val a = w * 0.15f; val b = w * 0.85f
+                listOf(Offset(a, a) to Offset(1f, 1f), Offset(b, a) to Offset(-1f, 1f), Offset(a, b) to Offset(1f, -1f), Offset(b, b) to Offset(-1f, -1f)).forEach { (p, d) ->
+                    drawLine(c, p, Offset(p.x + d.x * k, p.y), sw, StrokeCap.Round)
+                    drawLine(c, p, Offset(p.x, p.y + d.y * k), sw, StrokeCap.Round)
+                }
+            }
+            MapGlyph.FIT -> {
+                drawRect(c, Offset(w * 0.22f, w * 0.22f), androidx.compose.ui.geometry.Size(w * 0.56f, w * 0.56f), style = stroke)
+                drawCircle(c, w * 0.08f, Offset(w / 2, w / 2))
+            }
+            MapGlyph.STOP -> drawRect(c, Offset(w * 0.25f, w * 0.25f), androidx.compose.ui.geometry.Size(w * 0.5f, w * 0.5f))
+            MapGlyph.LOCATE -> {
+                drawCircle(c, w * 0.28f, Offset(w / 2, w / 2), style = stroke)
+                drawCircle(c, w * 0.11f, Offset(w / 2, w / 2))
+                listOf(Offset(w / 2, 0f) to Offset(w / 2, w * 0.18f), Offset(w / 2, w) to Offset(w / 2, w * 0.82f),
+                    Offset(0f, w / 2) to Offset(w * 0.18f, w / 2), Offset(w, w / 2) to Offset(w * 0.82f, w / 2)).forEach { (a, b) ->
+                    drawLine(c, a, b, sw, StrokeCap.Round)
+                }
+            }
+            else -> {}
+        }
+    }
 }
 
 /** Draws the offline basemap tiles under the track. Missing tiles fall back to a scaled-up ancestor while they render. */

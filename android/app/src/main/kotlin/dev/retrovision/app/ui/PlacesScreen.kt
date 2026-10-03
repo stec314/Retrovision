@@ -189,8 +189,8 @@ fun PlacesScreen(modifier: Modifier) {
         }
         Text(
             Texts.tr(
-                "◎ follows you · ⏵ replay · chips show or hide each device · tap a ◆ for when it was heard",
-                "◎ ti segue · ⏵ ripercorri · i chip mostrano o nascondono ogni dispositivo · tocca un ◆ per sapere quando è stato sentito",
+                "Target button follows you · play button replays · chips show or hide each device · tap a ◆ for when it was heard",
+                "Il mirino ti segue · play ripercorre · i chip mostrano o nascondono ogni dispositivo · tocca un ◆ per sapere quando è stato sentito",
             ),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,

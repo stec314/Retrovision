@@ -287,11 +287,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     }
 
     // Full screen: the evidence needs room, and a stressed tap must not hit "it's mine" by mistake.
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onClose,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+    FullScreenDialog(onDismiss = onClose) {
+        run {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     androidx.compose.material3.IconButton(onClick = onClose) {

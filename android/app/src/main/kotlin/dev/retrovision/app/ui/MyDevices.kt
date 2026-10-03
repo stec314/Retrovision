@@ -165,9 +165,9 @@ fun MyDevicesScanDialog(onClose: () -> Unit) {
     val count = picked.size + pickedNets.size
 
     // Edge to edge, insets handled here: the action bar must stay above the navigation bar and the keyboard.
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-          Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+    FullScreenDialog(onDismiss = onClose) {
+        run {
+          Column(Modifier.fillMaxSize()) {
             // Top bar: close and save are always reachable, whatever the list length.
             Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                 androidx.compose.material3.IconButton(onClick = onClose) {

@@ -13,6 +13,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -161,5 +167,26 @@ fun LevelPill(l: Level) {
     ) {
         androidx.compose.foundation.layout.Box(Modifier.size(7.dp).clip(CircleShape).background(c))
         Text("  " + Texts.level(l), style = MaterialTheme.typography.labelMedium, color = c, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * A full-screen layer over the app. Android 15 draws every window edge to edge, and inside a dialog
+ * window Compose often gets no system-bar insets, so content slid under the status bar and the
+ * navigation buttons. The insets are read here from the activity (where they are always right) and
+ * applied inside the dialog as plain padding. Every full-screen dialog goes through this.
+ */
+@Composable
+fun FullScreenDialog(onDismiss: () -> Unit, background: Color? = null, content: @Composable () -> Unit) {
+    val safe = androidx.compose.foundation.layout.WindowInsets.systemBars
+        .union(androidx.compose.foundation.layout.WindowInsets.displayCutout)
+        .asPaddingValues()
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Surface(Modifier.fillMaxSize(), color = background ?: MaterialTheme.colorScheme.background) {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize().padding(safe).imePadding()) { content() }
+        }
     }
 }
