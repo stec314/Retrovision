@@ -44,6 +44,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -81,116 +82,162 @@ fun StatusScreen(modifier: Modifier) {
     // Only slow-changing state is read here: anything that updates several times a second (probe
     // counters, radar, GPS) is read inside its own small composable, so Status doesn't redraw whole.
     val analysis by Collector.analysis.collectAsState()
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var layout by remember { mutableStateOf(Dashboard.load(app.prefs)) }
 
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.ACCESS_FINE_LOCATION] == true) CollectorService.start(ctx)
     }
-
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Retrovision", style = MaterialTheme.typography.headlineMedium)
-        Text(
-            Texts.tr(
-                "The probe only listens. It never transmits, and nothing leaves this phone unless you tap a lookup.",
-                "La sonda ascolta soltanto: non trasmette mai e nulla lascia il telefono se non avvii tu una ricerca.",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        VerdictCard()
-        Button(
-            onClick = {
-                if (running) CollectorService.stop(ctx) else {
-                    val req = buildList {
-                        add(Manifest.permission.ACCESS_FINE_LOCATION)
-                        add(Manifest.permission.ACCESS_COARSE_LOCATION)
-                        if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
-                        if (Build.VERSION.SDK_INT >= 31) {
-                            add(Manifest.permission.BLUETOOTH_SCAN)
-                            add(Manifest.permission.BLUETOOTH_CONNECT)
-                        }
-                    }
-                    permissions.launch(req.toTypedArray())
+    val startStop = {
+        if (running) CollectorService.stop(ctx) else {
+            val req = buildList {
+                add(Manifest.permission.ACCESS_FINE_LOCATION)
+                add(Manifest.permission.ACCESS_COARSE_LOCATION)
+                if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+                if (Build.VERSION.SDK_INT >= 31) {
+                    add(Manifest.permission.BLUETOOTH_SCAN)
+                    add(Manifest.permission.BLUETOOTH_CONNECT)
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text(if (running) Texts.tr("Stop collecting", "Ferma la raccolta") else Texts.tr("Start collecting", "Avvia la raccolta")) }
+            }
+            permissions.launch(req.toTypedArray())
+        }
+    }
+
+    Column(
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Retrovision", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    Texts.tr("Listen-only · nothing leaves this phone", "Solo ascolto · nulla lascia il telefono"),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            androidx.compose.material3.IconButton(onClick = { editing = !editing }) {
+                androidx.compose.material3.Icon(
+                    if (editing) androidx.compose.material.icons.Icons.Filled.Check else androidx.compose.material.icons.Icons.Filled.Edit,
+                    contentDescription = if (editing) Texts.tr("Done", "Fine") else Texts.tr("Customise dashboard", "Personalizza la dashboard"),
+                )
+            }
+        }
 
         var crash by remember { mutableStateOf(dev.retrovision.app.CrashLog.read(ctx)) }
         crash?.let { text ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(Texts.tr("The app crashed last time", "L'app si è chiusa per un errore l'ultima volta"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    Text(text.lines().take(14).joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
-                            cm?.setPrimaryClip(android.content.ClipData.newPlainText("Retrovision crash", text))
-                        }) { Text(Texts.tr("Copy", "Copia")) }
-                        OutlinedButton(onClick = { DiagNav.open.value = true }) { Text(Texts.tr("Details", "Dettagli")) }
-                        TextButton(onClick = { dev.retrovision.app.CrashLog.clear(ctx); crash = null }) { Text(Texts.tr("Dismiss", "Chiudi")) }
-                    }
+            Panel(title = Texts.tr("The app crashed last time", "L'app si è chiusa per un errore"), tint = MaterialTheme.colorScheme.error) {
+                Text(text.lines().take(8).joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { DiagNav.open.value = true }) { Text(Texts.tr("Details", "Dettagli")) }
+                    TextButton(onClick = { dev.retrovision.app.CrashLog.clear(ctx); crash = null }) { Text(Texts.tr("Dismiss", "Chiudi")) }
                 }
             }
         }
 
-        val threats by Collector.threats.collectAsState()
-        if (threats.isNotEmpty()) {
-            Card(
-                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
-                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("⚠ " + Texts.tr("Wi-Fi attacks nearby", "Attacchi Wi-Fi nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
-                    threats.take(5).forEach {
-                        Text("• " + Texts.threat(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
+        if (editing) {
+            DashboardEditor(layout) { layout = it; Dashboard.save(app.prefs, it) }
+        } else {
+            for (w in layout.order) {
+                if (w in layout.hidden) continue
+                when (w) {
+                    Widget.VERDICT -> VerdictCard()
+                    Widget.CONTROLS -> Button(onClick = startStop, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                        Text(if (running) Texts.tr("Stop collecting", "Ferma la raccolta") else Texts.tr("Start collecting", "Avvia la raccolta"))
                     }
-                    Text(Texts.tr("Tap for the evidence ›", "Tocca per le prove ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    Widget.ATTACKS -> AttacksPanel()
+                    Widget.OVERVIEW -> OverviewPanel()
+                    Widget.RADAR -> RadarSection(running)
+                    Widget.SENSORS -> {
+                        var showSensors by rememberSaveable { mutableStateOf(false) }
+                        SensorsSummary(expanded = showSensors) { showSensors = !showSensors }
+                        if (showSensors) SensorDetails(running)
+                    }
+                    Widget.ROUTE -> RouteCheckCard(analysis)
+                    Widget.COMPANIONS -> CompanionsCard()
+                    Widget.DRONES -> DronesPanel()
+                    Widget.CLIENTS -> ClientsPanel()
+                    Widget.REVIEW -> RetrospectiveCard()
                 }
             }
         }
+    }
+}
 
-        WhatToDoCard()
-        RadarSection(running)
+@Composable
+private fun AttacksPanel() {
+    val threats by Collector.threats.collectAsState()
+    if (threats.isEmpty()) return
+    Panel(title = Texts.tr("Radio attacks nearby", "Attacchi radio vicini"), tint = MaterialTheme.colorScheme.error, onClick = { AlertsNav.open.value = true }) {
+        threats.take(5).forEach { Text(Texts.threat(it), style = MaterialTheme.typography.bodyMedium) }
+        Text(Texts.tr("Open the evidence ›", "Apri le prove ›"), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error)
+    }
+}
 
-        // Probe, phone and GPS: one line each by default; the full technical detail on tap.
-        var showSensors by rememberSaveable { mutableStateOf(false) }
-        SensorsSummary(expanded = showSensors) { showSensors = !showSensors }
-        if (showSensors) {
-            SensorDetails(running)
-        }
-        RouteCheckCard(analysis)
-        CompanionsCard()
+@Composable
+private fun DronesPanel() {
+    val drones by Collector.drones.collectAsState()
+    if (drones.isEmpty()) return
+    Panel(title = Texts.tr("Drones nearby", "Droni vicini"), tint = MaterialTheme.colorScheme.tertiary, onClick = { AlertsNav.open.value = true }) {
+        drones.take(5).forEach { Text(Texts.drone(it), style = MaterialTheme.typography.bodyMedium) }
+    }
+}
 
-        val drones by Collector.drones.collectAsState()
-        if (drones.isNotEmpty()) {
-            Card(
-                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
-                colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
-            ) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("🛸 " + Texts.tr("Drones nearby", "Droni nelle vicinanze"), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                    drones.take(5).forEach {
-                        Text("• " + Texts.drone(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                    }
-                }
+@Composable
+private fun ClientsPanel() {
+    val assoc by Collector.associations.collectAsState()
+    if (assoc.isEmpty()) return
+    Panel(title = Texts.tr("Connected clients", "Client connessi")) {
+        assoc.take(6).forEach { ap ->
+            Row(Modifier.fillMaxWidth()) {
+                Text(ap.ssid ?: ap.bssid.toString(), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text("${ap.clients.size}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+    }
+}
 
-        val assoc by Collector.associations.collectAsState()
-        if (assoc.isNotEmpty()) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(Texts.tr("Connected clients (data frames)", "Client connessi (frame di dati)"), style = MaterialTheme.typography.titleMedium)
-                    assoc.take(6).forEach { ap ->
-                        Text(
-                            "• " + (ap.ssid ?: ap.bssid.toString()) + " — " + ap.clients.size + " " + Texts.tr("clients", "client"),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+/** Key numbers of the current window at a glance. */
+@Composable
+private fun OverviewPanel() {
+    val analysis by Collector.analysis.collectAsState()
+    val threats by Collector.threats.collectAsState()
+    val load by Collector.analysisLoad.collectAsState()
+    val a = analysis
+    val trackers = remember(a) { a?.entities.orEmpty().count { it.category == dev.retrovision.core.identity.DeviceCategory.TRACKER } }
+    val minutes = if (load.oldestMs > 0) minOf(app.prefs.lookbackMin.toLong(), (System.currentTimeMillis() - load.oldestMs) / 60_000) else 0
+    Panel(title = Texts.tr("Overview", "Panoramica"), onClick = { AlertsNav.open.value = true }) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Stat("${a?.totalEntities ?: 0}", Texts.tr("devices", "dispositivi"), Modifier.weight(1f))
+            Stat("${a?.alerts?.size ?: 0}", Texts.tr("alerts", "allerte"), Modifier.weight(1f), if ((a?.alerts?.size ?: 0) > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            Stat("$trackers", Texts.tr("trackers", "tracker"), Modifier.weight(1f))
+            Stat("${threats.size}", Texts.tr("attacks", "attacchi"), Modifier.weight(1f), if (threats.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        }
+        Text(Texts.tr("$minutes min analysed", "$minutes min analizzati"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Reorder and show/hide the dashboard widgets. */
+@Composable
+private fun DashboardEditor(layout: Dashboard.Layout, onChange: (Dashboard.Layout) -> Unit) {
+    Panel(title = Texts.tr("Customise dashboard", "Personalizza la dashboard")) {
+        Text(
+            Texts.tr("Move widgets up or down and choose which to show. Saved on this phone.", "Sposta i widget su o giù e scegli quali mostrare. Salvato su questo telefono."),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        layout.order.forEachIndexed { i, w ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(w.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f),
+                    color = if (w in layout.hidden) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
+                androidx.compose.material3.IconButton(enabled = i > 0, onClick = { onChange(layout.move(i, -1)) }) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.KeyboardArrowUp, Texts.tr("Move up", "Sposta su"))
                 }
+                androidx.compose.material3.IconButton(enabled = i < layout.order.size - 1, onClick = { onChange(layout.move(i, +1)) }) {
+                    androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.KeyboardArrowDown, Texts.tr("Move down", "Sposta giù"))
+                }
+                Switch(checked = w !in layout.hidden, onCheckedChange = { onChange(layout.toggle(w)) })
             }
         }
-
-                RetrospectiveCard()
+        TextButton(onClick = { onChange(Dashboard.Layout.DEFAULT) }) { Text(Texts.tr("Reset to default", "Ripristina predefinita")) }
     }
 }
 
@@ -241,59 +288,64 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onClose) { Text("←") }
-                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 2)
+                    androidx.compose.material3.IconButton(onClick = onClose) {
+                        androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, Texts.tr("Back", "Indietro"))
+                    }
+                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f), maxLines = 2)
                 }
                 Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    // 1. The answer, in words.
+                    // Header: the answer, what it is, the key numbers.
+                    LevelPill(lv)
                     Text(
-                        "${Texts.levelIcon(lv)} ${Texts.level(lv)}".trim(),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = when (lv) {
-                            dev.retrovision.core.analysis.Level.STRONG -> MaterialTheme.colorScheme.error
-                            dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> MaterialTheme.colorScheme.tertiary
-                            else -> MaterialTheme.colorScheme.onSurface
-                        },
+                        CategoryUi.label(r.category) + " · " + Texts.tr("last heard ", "ultimo ascolto ") + fmt.format(Date(r.lastSeenMs)),
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Text(
-                        CategoryUi.icon(r.category) + "  " + CategoryUi.label(r.category) + " · " +
-                            Texts.tr("last heard ", "ultimo ascolto ") + fmt.format(Date(r.lastSeenMs)),
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                    if (lv == dev.retrovision.core.analysis.Level.STRONG || lv == dev.retrovision.core.analysis.Level.WORTH_A_LOOK) {
-                        WhatToDoBlock()
+                    Panel {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Stat("${r.placeIds.size}", Texts.tr("places", "luoghi"), Modifier.weight(1f))
+                            Stat("${(r.lastSeenMs - r.firstSeenMs) / 60_000} min", Texts.tr("heard over", "sentito per"), Modifier.weight(1f))
+                            Stat("${r.sightings}", Texts.tr("frames", "frame"), Modifier.weight(1f))
+                            Stat("${r.maxRssi}", "dBm max", Modifier.weight(1f))
+                        }
                     }
 
-                    // 2. Why: reasons ranked by what they added.
-                    Text(Texts.tr("Why", "Perché"), style = MaterialTheme.typography.titleMedium)
-                    EvidenceBars(r)
-                    r.notable.filter { it.note.isNotBlank() }.forEach {
-                        Text("👁 ${it.name}: ${it.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    // Each block opens on tap; the reasons start open.
+                    Expandable(
+                        Texts.tr("Why", "Perché"),
+                        summary = r.reasons.firstOrNull()?.let { Texts.reason(it) },
+                        initiallyOpen = true,
+                    ) {
+                        EvidenceBars(r)
+                        r.notable.filter { it.note.isNotBlank() }.forEach {
+                            Text("${it.name}: ${it.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                        }
                     }
-
-                    // 3. Verdict, before the long technical part.
-                    FeedbackRowUi(r, onClose)
-                    OutlinedButton(onClick = { confirmMine = true }) { Text(Texts.tr("It's mine (stop showing it)", "È mio (non mostrarlo più)")) }
-
-                    // 4. Evidence detail: when/where, addresses, networks.
-                    Text(Texts.tr("Evidence", "Prove"), style = MaterialTheme.typography.titleMedium)
-                    Text(Texts.tr("First heard ", "Primo ascolto ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
-                    DeviceDetails(r)
-
-                    // 5. Raw data and tools, collapsed.
-                    TextButton(onClick = { showRaw = !showRaw }) {
-                        Text(if (showRaw) Texts.tr("Hide tools and lookups ▴", "Nascondi strumenti e ricerche ▴") else Texts.tr("Tools and online lookups ▾", "Strumenti e ricerche online ▾"))
+                    if (r.visits.isNotEmpty()) {
+                        Expandable(
+                            Texts.tr("When and where", "Quando e dove"),
+                            summary = Texts.tr("${r.visits.size} stretches · first ", "${r.visits.size} periodi · primo ") + fmt.format(Date(r.firstSeenMs)),
+                        ) { VisitsList(r) }
                     }
-                    if (showRaw) {
+                    Expandable(
+                        Texts.tr("Identity and addresses", "Identità e indirizzi"),
+                        summary = trustLabel(r.macTrust) + if (r.addresses.size > 1) Texts.tr(" · ${r.addresses.size} linked addresses", " · ${r.addresses.size} indirizzi collegati") else "",
+                    ) { IdentityPart(r) }
+                    if (r.probeRequests > 0 || r.joinAttempts.isNotEmpty()) {
+                        Expandable(
+                            Texts.tr("Networks", "Reti"),
+                            summary = Texts.tr("${r.probedSsids.size} asked by name · ${r.joinAttempts.size} joins", "${r.probedSsids.size} chieste per nome · ${r.joinAttempts.size} connessioni"),
+                        ) { NetworksPart(r) }
+                    }
+                    Expandable(Texts.tr("Tools and online lookups", "Strumenti e ricerche online"), summary = Texts.tr("Find it · WiGLE · BeaconDB", "Trovalo · WiGLE · BeaconDB")) {
                         var findIt by remember { mutableStateOf(false) }
                         OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
                         if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r)) { findIt = false }
                         Text(
                             Texts.tr("Lookups send only the identifier you tap, to that service.", "Le ricerche inviano solo l'identificativo che tocchi, a quel servizio."),
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         queries.forEach { (label, q) ->
                             enrichers.all().filter { it.supports(q) }.forEach { e ->
@@ -320,10 +372,16 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         }
                         output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
                         val isTarget = r.entityId in app.prefs.targets
-                        OutlinedButton(onClick = {
+                        TextButton(onClick = {
                             app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
                             onClose()
                         }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
+                    }
+
+                    // Your verdict.
+                    Panel(title = Texts.tr("Your verdict", "Il tuo giudizio")) {
+                        FeedbackRowUi(r, onClose)
+                        TextButton(onClick = { confirmMine = true }) { Text(Texts.tr("It's mine — stop showing it", "È mio — non mostrarlo più")) }
                     }
                     androidx.compose.foundation.layout.Spacer(Modifier.padding(16.dp))
                 }
@@ -858,9 +916,8 @@ private fun RouteCheckCard(analysis: dev.retrovision.core.analysis.AnalysisResul
         if (e.reasons.any { it is dev.retrovision.core.analysis.Reason.StaysPut || it is dev.retrovision.core.analysis.Reason.OneAreaOnly }) return@mapNotNull null
         e.reasons.filterIsInstance<dev.retrovision.core.analysis.Reason.StayedThroughTurns>().firstOrNull()?.let { e to it.turns }
     }.sortedByDescending { it.second } }
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(Texts.tr("Route check", "Verifica percorso"), style = MaterialTheme.typography.titleMedium)
+    Panel(title = Texts.tr("Route check", "Verifica percorso")) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 Texts.tr(
                     "${a.turns} turns in the window. On a straight road everyone \"follows\" you; what stays through turns matters.",
@@ -969,7 +1026,6 @@ private fun FeedbackRowUi(r: EntityReport, onClose: () -> Unit) {
         Collector.analyzeNow.value = System.nanoTime()
         onClose()
     }
-    Text(Texts.tr("Your verdict (helps tune the thresholds):", "Il tuo giudizio (serve a tarare le soglie):"), style = MaterialTheme.typography.labelMedium)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         OutlinedButton(onClick = { send(0) }) { Text(Texts.tr("False alarm", "Falso allarme")) }
         OutlinedButton(onClick = { send(2) }) { Text(Texts.tr("Suspicious", "Sospetto")) }
@@ -1056,12 +1112,12 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
     val bleOn by Collector.phoneBleActive.collectAsState()
     val fix by Collector.location.collectAsState()
     val running by Collector.running.collectAsState()
-    Card(Modifier.fillMaxWidth().clickable { onToggle() }) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(Texts.tr("Sensors", "Sensori"), style = MaterialTheme.typography.titleMedium)
-                Text(if (expanded) Texts.tr("Hide details ▴", "Nascondi dettagli ▴") else Texts.tr("Details ▾", "Dettagli ▾"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-            }
+    Panel(
+        title = Texts.tr("Sensors", "Sensori"),
+        onClick = onToggle,
+        trailing = { Text(if (expanded) Texts.tr("Hide details", "Nascondi dettagli") else Texts.tr("Details", "Dettagli"), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge) },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             val s = conn.session
             if (s != null) {
                 val h = probeHealth(s)

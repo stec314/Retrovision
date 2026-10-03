@@ -101,6 +101,15 @@ class Prefs(ctx: Context) {
         get() = p.getInt("retentionDays", 7)
         set(v) = p.edit().putInt("retentionDays", v).apply()
 
+    /** Dashboard widget order (ids, comma separated) and hidden widgets. */
+    var dashboardOrder: String
+        get() = p.getString("dashOrder", "") ?: ""
+        set(v) = p.edit().putString("dashOrder", v).apply()
+
+    var dashboardHidden: Set<String>
+        get() = p.getStringSet("dashHidden", emptySet())?.toSet() ?: emptySet()
+        set(v) = p.edit().putStringSet("dashHidden", v).apply()
+
     /** Comma/newline separated SSIDs of your own networks: access points with these names are ignored. */
     var ownSsids: String
         get() = secret("ownSsids")

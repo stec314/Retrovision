@@ -88,6 +88,8 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)
+    // Small core icon set (vectors, shrunk by R8), for a cleaner look than emoji in navigation and headers.
+    implementation(libs.compose.material.icons.core)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)

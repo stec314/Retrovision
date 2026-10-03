@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -93,39 +94,47 @@ fun VerdictCard() {
     val color = verdictColor(v.state)
     val analysis by Collector.analysis.collectAsState()
     val title = Texts.verdictTitle(v.state)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(color.copy(alpha = 0.14f))
-            .clickable { AlertsNav.open.value = true }
-            .padding(16.dp)
-            .semantics { contentDescription = title + ". " + Texts.verdictLine(v) },
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+    Panel(
+        modifier = Modifier.semantics { contentDescription = title + ". " + Texts.verdictLine(v) },
+        tint = color,
+        onClick = { AlertsNav.open.value = true },
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(Texts.verdictIcon(v.state), fontSize = 28.sp)
-            Text(title, style = MaterialTheme.typography.headlineSmall, color = color, fontWeight = FontWeight.SemiBold)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            androidx.compose.material3.Icon(verdictIcon(v.state), contentDescription = null, tint = color, modifier = Modifier.size(30.dp))
+            Column(Modifier.weight(1f)) {
+                Overline(Texts.tr("Right now", "Adesso"))
+                Text(title, style = MaterialTheme.typography.headlineSmall, color = color)
+            }
         }
         Text(Texts.verdictLine(v), style = MaterialTheme.typography.bodyMedium)
 
         // The findings, in words (no percentages here).
         val alerts = remember(analysis) { analysis?.alerts.orEmpty().sortedByDescending { Levels.of(it).ordinal } }
-        alerts.take(4).forEach { r ->
-            val l = Levels.of(r)
-            Text("${Texts.levelIcon(l)} ${Texts.level(l)} · ${Texts.entityLabel(r)}", style = MaterialTheme.typography.bodySmall)
+        if (alerts.isNotEmpty()) {
+            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            alerts.take(4).forEach { r ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LevelPill(Levels.of(r))
+                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
+            }
+            if (alerts.size > 4) Text(Texts.tr("+${alerts.size - 4} more", "+${alerts.size - 4} altri"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (alerts.size > 4) Text(Texts.tr("+${alerts.size - 4} more", "+${alerts.size - 4} altri"), style = MaterialTheme.typography.bodySmall)
 
         if (v.gaps.isNotEmpty() && v.state != Verdict.State.STOPPED) {
-            Text(Texts.tr("What the app can't see right now:", "Cosa l'app ora non vede:"), style = MaterialTheme.typography.labelMedium)
-            v.gaps.forEach { g -> Text("• " + Texts.gap(g), style = MaterialTheme.typography.bodySmall) }
+            androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Overline(Texts.tr("Not visible right now", "Ora non visibile"))
+            v.gaps.forEach { g -> Text(Texts.gap(g), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         CoverageLine()
-        if (v.state != Verdict.State.STOPPED) {
-            Text(Texts.tr("Tap for all alerts and the evidence ›", "Tocca per tutte le allerte e le prove ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-        }
     }
+}
+
+private fun verdictIcon(s: Verdict.State) = when (s) {
+    Verdict.State.CLEAR -> androidx.compose.material.icons.Icons.Filled.CheckCircle
+    Verdict.State.STRONG, Verdict.State.WORTH_A_LOOK -> androidx.compose.material.icons.Icons.Filled.Warning
+    Verdict.State.STOPPED -> androidx.compose.material.icons.Icons.Filled.PlayArrow
+    else -> androidx.compose.material.icons.Icons.Filled.Info
 }
 
 /** "Probe ✓ · GPS ±4 m ✓ · 47 min analysed": the basis of the verdict in one line. */
@@ -149,31 +158,4 @@ private fun CoverageLine() {
         }
     }
     Text(parts.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-/** Calm, practical steps. Shown only when there is something to act on. */
-@Composable
-fun WhatToDoCard() {
-    val v = rememberVerdict()
-    if (v.state != Verdict.State.WORTH_A_LOOK && v.state != Verdict.State.STRONG) return
-    WhatToDoBlock()
-}
-
-/** The steps themselves; also shown at the top of a device detail when it alerts. */
-@Composable
-fun WhatToDoBlock() {
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(Texts.tr("What you can do", "Cosa puoi fare"), style = MaterialTheme.typography.titleMedium)
-        Texts.whatToDo().forEachIndexed { i, s -> Text("${i + 1}. $s", style = MaterialTheme.typography.bodyMedium) }
-        Text(
-            Texts.tr(
-                "A finding is a reason to check, not proof. Most turn out to be fixed devices or people sharing your route.",
-                "Un risultato è un motivo per verificare, non una prova. Spesso sono dispositivi fissi o persone sul tuo stesso percorso.",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
 }

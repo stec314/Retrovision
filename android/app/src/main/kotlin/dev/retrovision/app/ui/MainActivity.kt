@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 
 class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
@@ -65,20 +66,20 @@ private fun AppRoot() {
         return
     }
     val tabs = listOf(
-        "📡" to Texts.tr("Status", "Stato"),
-        "🔎" to Texts.tr("Devices", "Dispositivi"),
-        "📍" to Texts.tr("Places", "Luoghi"),
-        "🔌" to Texts.tr("Probe", "Sonda"),
-        "⚙" to Texts.tr("Settings", "Impostazioni"),
+        androidx.compose.material.icons.Icons.Filled.Home to Texts.tr("Status", "Stato"),
+        androidx.compose.material.icons.Icons.AutoMirrored.Filled.List to Texts.tr("Devices", "Dispositivi"),
+        androidx.compose.material.icons.Icons.Filled.Place to Texts.tr("Places", "Luoghi"),
+        androidx.compose.material.icons.Icons.Filled.Build to Texts.tr("Probe", "Sonda"),
+        androidx.compose.material.icons.Icons.Filled.Settings to Texts.tr("Settings", "Impostazioni"),
     )
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            NavigationBar(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.surfaceContainerLow, tonalElevation = 0.dp) {
                 tabs.forEachIndexed { i, (icon, label) ->
                     NavigationBarItem(
                         selected = tab == i,
                         onClick = { tab = i },
-                        icon = { Text(icon) },
+                        icon = { androidx.compose.material3.Icon(icon, contentDescription = null) },
                         label = { Text(label) },
                     )
                 }

@@ -292,29 +292,20 @@ fun trustLabel(t: MacTrust) = when (t) {
 @Composable
 fun EntityCard(r: EntityReport, query: String = "", onClick: (() -> Unit)? = null) {
     val catColor = CategoryUi.color(r.category)
-    Card(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
-        Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Panel(onClick = onClick) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Box(
-                Modifier.size(42.dp).clip(CircleShape).background(catColor.copy(alpha = 0.16f)),
+                Modifier.size(40.dp).clip(CircleShape).background(catColor.copy(alpha = 0.14f)),
                 contentAlignment = Alignment.Center,
             ) { Text(CategoryUi.icon(r.category), fontSize = 20.sp, color = catColor) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleSmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // A level in words, never a percentage: the score is not a probability.
                     val lv = dev.retrovision.core.analysis.Levels.of(r)
-                    Text(
-                        (Texts.levelIcon(lv) + " " + Texts.level(lv)).trim(),
-                        color = when (lv) {
-                            dev.retrovision.core.analysis.Level.STRONG -> MaterialTheme.colorScheme.error
-                            dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> MaterialTheme.colorScheme.tertiary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        fontWeight = FontWeight.SemiBold,
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    if (lv != dev.retrovision.core.analysis.Level.LOW) LevelPill(lv)
+                    Text(CategoryUi.label(r.category), style = MaterialTheme.typography.labelMedium, color = catColor)
                 }
-                Text(CategoryUi.label(r.category), style = MaterialTheme.typography.labelSmall, color = catColor)
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (r.macTrust != MacTrust.STABLE) Badge("⚠ " + trustLabel(r.macTrust), WARN)
                     if (r.addresses.size > 1) Badge("🔗 " + Texts.tr("${r.addresses.size} addresses linked", "${r.addresses.size} indirizzi collegati"), LINK)
@@ -333,10 +324,13 @@ fun EntityCard(r: EntityReport, query: String = "", onClick: (() -> Unit)? = nul
                     }
                 }
                 Text(
-                    "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("sightings", "avvistamenti")} · ${r.maxRssi} dBm",
-                    style = MaterialTheme.typography.bodySmall,
+                    "${r.placeIds.size} ${Texts.tr("places", "luoghi")} · ${r.sightings} ${Texts.tr("frames", "frame")} · ${r.maxRssi} dBm",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
+                // The two reasons that weighed most; the rest are in the detail.
+                val top = remember(r) { r.reasons.sortedByDescending { r.reasonWeights[it] ?: 0.0 }.take(2) }
+                top.forEach { Text(Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
+                if (r.reasons.size > 2) Text(Texts.tr("+${r.reasons.size - 2} more reasons", "+${r.reasons.size - 2} altri motivi"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -345,6 +339,16 @@ fun EntityCard(r: EntityReport, query: String = "", onClick: (() -> Unit)? = nul
 /** Extra facts in the device dialog: addresses and their reliability, networks searched and joined. */
 @Composable
 fun DeviceDetails(r: EntityReport) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        IdentityPart(r)
+        VisitsList(r)
+        NetworksPart(r)
+    }
+}
+
+/** What it is, how far its address can be trusted, its addresses and how they were linked. */
+@Composable
+fun IdentityPart(r: EntityReport) {
     val fmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CategoryUi.icon(r.category) + "  " + CategoryUi.label(r.category) + (r.bleName?.let { " · “$it”" } ?: ""))
@@ -362,7 +366,6 @@ fun DeviceDetails(r: EntityReport) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        VisitsSection(r)
         if (r.addressLinks.size > 1) {
             Text("🔗 " + Texts.tr("Linked addresses", "Indirizzi collegati"), style = MaterialTheme.typography.titleSmall, color = LINK)
             Text(
@@ -407,6 +410,14 @@ fun DeviceDetails(r: EntityReport) {
             )
         }
 
+    }
+}
+
+/** Networks it searched for by name and tried to join. */
+@Composable
+fun NetworksPart(r: EntityReport) {
+    val fmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (r.probeRequests > 0) {
             Text(Texts.tr("Network search", "Ricerca di reti"), style = MaterialTheme.typography.titleSmall, color = SEARCH)
             Text(
@@ -447,14 +458,13 @@ fun DeviceDetails(r: EntityReport) {
  * position: one receiver cannot locate a transmitter. Text only, no per-device map.
  */
 @Composable
-private fun VisitsSection(r: EntityReport) {
+fun VisitsList(r: EntityReport) {
     if (r.visits.isEmpty()) return
     val routine by remember { dev.retrovision.app.RetrovisionApp.instance.db.dao().familiarPlaces() }.collectAsState(initial = emptyList())
     val here by Collector.location.collectAsState()
     val day = remember { java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault()) }
     val time = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
     val today = remember { day.format(Date()) }
-    Text("🕒 " + Texts.tr("When and where you heard it", "Quando e dove l'hai sentito"), style = MaterialTheme.typography.titleSmall)
     Text(
         Texts.tr(
             "Where you were at the time (your GPS), not where the device is. Newest first.",

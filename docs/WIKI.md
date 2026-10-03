@@ -121,12 +121,14 @@ Some OSes reset the sequence counter when they rotate the address, and recent de
 
 **What the HT capabilities tell you.** For a Wi-Fi client, the device details show the decoded 802.11 HT capabilities (e.g. "HT 20MHz · LDPC · SGI20 · 1×RxSTBC") — the PHY/driver features the device advertises. It is a **model-level clue, shared by every identical phone**, shown for transparency, not used to link rotations. Research shows these fields can be *decomposed* into subfields to cluster devices across a whole population (Puig et al., 2026, up to ~90% in a 22-device lab); Retrovision deliberately does not do that — population de-anonymisation is a tracking technique, the opposite of this tool's job, and it cannot tell two same-model phones apart anyway.
 
-**Device detail.** Tapping a device opens a full screen, in this order:
-1. **The answer:** level in words, what it is, when it was last heard. With an alert, *What you can do*.
-2. **Why:** the reasons, ranked by how much each added to the score, with a bar and the amount (+0.27, +0.15…). The score and threshold follow, labelled "a sum of clues, not a probability". If a cap held it down, it says by how much and why (few places, stays put, one area, resident).
-3. **Your verdict:** *False alarm* / *Suspicious*, and *It's mine*, which asks for confirmation (a device planted on you also "travels with you").
-4. **Evidence:** when and where it was heard, linked addresses, networks searched and joined.
-5. **Tools and online lookups**, collapsed: Find it, WiGLE/BeaconDB lookups (only the identifier you tap is sent), field-test target.
+**Device detail.** Tapping a device opens a full screen: the level, what it is, when it was last heard, and four key numbers (places, time heard, frames, strongest signal). Below, sections that open on tap, each with a one-line summary while closed:
+1. **Why** (open by default): the reasons, ranked by how much each added to the score, with a bar and the amount (+0.27, +0.15…). The score and threshold follow, labelled "a sum of clues, not a probability". If a cap held it down, it says by how much and why (few places, stays put, one area, resident).
+2. **When and where:** each stretch it was heard and where you were.
+3. **Identity and addresses:** address reliability, linked addresses and why, AP uptime, HT capabilities.
+4. **Networks:** networks searched for by name and joins.
+5. **Tools and online lookups:** Find it, WiGLE/BeaconDB lookups (only the identifier you tap is sent), field-test target.
+
+Then **your verdict:** *False alarm* / *Suspicious*, and *It's mine*, which asks for confirmation (a device planted on you also "travels with you").
 
 **Searching devices.** The search box on *Devices* matches names, network names (its own, the ones it searches for, the ones it joined), vendor, category and addresses in any notation (`aa:bb:cc`, `AA-BB-CC`, `aabbcc`, or a fragment). Case and accents don't matter, and several words must all match. The search combines with the filter chips, whose counts follow the search. With the *Looking for a network* filter on, a row of chips lists every network being searched for by name, with how many devices ask for it. Tap one to see who asks for it. A network many unrelated devices know is a public one (a chain, a station); one that a single device knows says more about that device.
 
@@ -478,7 +480,7 @@ Under it: the alerts in words, what the app can't see right now, and the basis i
 
 The exact score is in the device's detail, labelled as such.
 
-**What you can do.** With a finding, *Status* shows calm, practical steps: don't confront anyone; go somewhere busy; tell someone you trust; check it by changing route or moving > 600 m (fixed and passing devices drop out, a follower stays); call 112 if you feel in danger.
+**The dashboard.** *Status* is a dashboard of widgets: verdict, start/stop, radio attacks, overview (devices, alerts, trackers, attacks, minutes analysed), radar, sensors, route check, drones, "is this yours?", connected clients, review of saved data. Tap the pencil to reorder them (up/down) and show or hide each one; *Reset to default* restores the original order. The layout is saved on the phone.
 
 **Notifications.**
 - All following alerts go into **one** notification, updated in place, titled with the levels ("Strong signs: 1 · Worth a look: 2"). It opens the alert grid.

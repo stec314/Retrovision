@@ -195,14 +195,6 @@ object Texts {
         dev.retrovision.core.analysis.Verdict.Gap.TRUNCATED -> tr("Too many devices: only the most recent part of the window is analysed", "Troppi dispositivi: si analizza solo la parte più recente della finestra")
     }
 
-    /** Calm, practical steps when something may be following. No alarmism, nothing confrontational. */
-    fun whatToDo(): List<String> = listOf(
-        tr("Don't confront anyone and don't let on that you noticed.", "Non affrontare nessuno e non far capire di averlo notato."),
-        tr("Head somewhere busy and public.", "Vai in un posto frequentato e pubblico."),
-        tr("Tell someone you trust where you are.", "Di' a una persona di fiducia dove sei."),
-        tr("Check it: change route with a few turns, or move more than 600 m. Something fixed or passing by drops out; something following you stays.", "Verifica: cambia percorso con qualche svolta, o spostati di più di 600 m. Ciò che è fisso o di passaggio sparisce; ciò che ti segue resta."),
-        tr("If you feel in danger, call the emergency number (112 in Europe).", "Se ti senti in pericolo, chiama il numero di emergenza (112)."),
-    )
 
     fun entityLabel(r: EntityReport): String {
         val addr = r.addresses.first()
