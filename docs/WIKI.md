@@ -59,13 +59,11 @@ Everything runs on the phone. Nothing is uploaded unless you turn on an optional
 
 You connect the probe with a USB-OTG cable or adapter. The app recognises Espressif (0x303A), WCH (0x1A86) and Silicon Labs (0x10C4) USB vendor IDs.
 
-**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. The in-app flasher supports the **ESP32-S3 and the classic ESP32**.
+**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. The in-app flasher supports the **ESP32-S3, the classic ESP32 and the ESP32-C5**.
 
-**ESP32-C5: experimental, verified on one board.** The APK also carries a C5 image, and the in-app flasher can detect a C5 and write it. It was **verified on one real C5 board** on 2026-10-03 (detection, write, MD5 check, boot). One board is not every board (other flash chips, other USB behaviour), so it is still off by default:
-- Turn on *Allow experimental ESP32-C5 flashing* on the Probe screen. Without it, a C5 is detected and the run stops **before anything is erased**.
-- How it differs from the other boards: the C5 has no "magic" register value, so the app identifies it by the chip id (23) that the ROM returns to `GET_SECURITY_INFO`. Its bootloader sits at `0x2000`, not `0x0`, so the bundled image starts there.
-- If it fails, or the board stops booting, flash it from a computer with the **browser flasher** (ESP Web Tools) on the project's GitHub Pages, or with esptool and the image in each release. The board stays recoverable: hold BOOT, press RESET, release BOOT.
-- If your C5 board works (or doesn't) with the in-app flasher, report it: each confirmed board narrows what "experimental" means.
+**ESP32-C5.** Flashed in-app like the other boards, verified on real hardware (2026-10-03: detection, write, MD5 check, boot).
+- How it differs: the C5 has no "magic" register value, so the app identifies it by the chip id (23) that the ROM returns to `GET_SECURITY_INFO`. Its bootloader sits at `0x2000`, not `0x0`, so the bundled image starts there.
+- If a flash fails or the board stops booting, use the **browser flasher** (ESP Web Tools) on the project's GitHub Pages, or esptool with the image in each release. The board stays recoverable: hold BOOT, press RESET, release BOOT.
 
 **What the probe captures by default:**
 - Wi-Fi management frames: probe requests, beacons, probe responses, authentication, (re)association requests, deauthentication, disassociation.

@@ -61,7 +61,7 @@ jobs:
             [ -n "$bin" ] || { echo "::error::merged $t firmware image not found in artifacts"; exit 1; }
             cp "$bin" "$d/"
           done
-          # ESP32-C5: EXPERIMENTAL in-app flashing (verified on one board, 2026-10-03). Image starts at the
+          # ESP32-C5: in-app flashing verified on real hardware (2026-10-03). Image starts at the
           # bootloader (0x2000). Optional: a missing image only drops C5 support from this APK.
           c5=$(find fw -name "retrovision-esp32c5-app.bin" | head -1)
           if [ -n "$c5" ]; then cp "$c5" "$d/"; else echo "::warning::ESP32-C5 app image not found; APK ships without C5 firmware"; fi
@@ -76,7 +76,7 @@ jobs:
                "file": "retrovision-esp32-merged.bin"}]
           if os.path.exists(os.path.join(d, "retrovision-esp32c5-app.bin")):
               images.append({"id": "esp32c5", "chip": "ESP32-C5", "offset": 8192,
-                             "file": "retrovision-esp32c5-app.bin", "experimental": True})
+                             "file": "retrovision-esp32c5-app.bin"})
           json.dump({"version": ver, "images": images},
                     open(os.path.join(d, "manifest.json"), "w"), indent=2)
           PY

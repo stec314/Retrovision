@@ -133,8 +133,8 @@ class DbHit(
 
 class TimeRssi(val timeMs: Long, val rssi: Int)
 
-/** Where you were (nearest GPS fix) during one time bucket in which a device was heard. */
-class HeardRow(val t0: Long, val t1: Long, val n: Int, val rssi: Int, val lat: Double?, val lon: Double?)
+/** One time bucket in which a device was heard. */
+class HeardRow(val t0: Long, val t1: Long, val n: Int, val rssi: Int)
 
 @Dao
 interface AppDao {
@@ -214,19 +214,16 @@ interface AppDao {
     )
     suspend fun searchAll(like: String, a: ByteArray, b: ByteArray, c: ByteArray, limit: Int): List<DbHit>
 
-    /**
-     * Every time bucket in which any of [ids] was heard, over all stored data, with your position
-     * then (the GPS fix nearest to the bucket start, within a minute). Uses the entityId and the
-     * fixes' time indexes, so it is fast even on large databases.
-     */
+    /** Every time bucket in which any of [ids] was heard, over all stored data (entityId index). */
     @Query(
-        "SELECT g.t0 AS t0, g.t1 AS t1, g.n AS n, g.rssi AS rssi, " +
-            "(SELECT f.lat FROM fixes f WHERE f.timeMs BETWEEN g.t0 - 60000 AND g.t1 + 60000 ORDER BY ABS(f.timeMs - g.t0) LIMIT 1) AS lat, " +
-            "(SELECT f.lon FROM fixes f WHERE f.timeMs BETWEEN g.t0 - 60000 AND g.t1 + 60000 ORDER BY ABS(f.timeMs - g.t0) LIMIT 1) AS lon " +
-            "FROM (SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
-            "WHERE entityId IN (:ids) GROUP BY timeMs / :bucketMs) g ORDER BY g.t0 LIMIT :limit",
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE entityId IN (:ids) GROUP BY timeMs / :bucketMs ORDER BY t0 LIMIT :limit",
     )
-    suspend fun heardWhere(ids: List<String>, bucketMs: Long, limit: Int): List<HeardRow>
+    suspend fun heardBuckets(ids: List<String>, bucketMs: Long, limit: Int): List<HeardRow>
+
+    /** One GPS fix per [stepMs] between two times (the first of each step), for matching positions to times. */
+    @Query("SELECT MIN(timeMs) AS timeMs, lat, lon, accuracyM, speedMps FROM fixes WHERE timeMs BETWEEN :from AND :to GROUP BY timeMs / :stepMs ORDER BY timeMs")
+    suspend fun fixesThinned(from: Long, to: Long, stepMs: Long): List<FixRow>
 
     @Query("SELECT timeMs, rssi FROM sightings WHERE entityId = :id ORDER BY timeMs LIMIT :limit")
     suspend fun timesFor(id: String, limit: Int): List<TimeRssi>
