@@ -24,6 +24,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -42,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.retrovision.app.Collector
 import dev.retrovision.core.analysis.EntityReport
+import dev.retrovision.core.analysis.EntitySearch
 import dev.retrovision.core.identity.DeviceCategory
 import dev.retrovision.core.identity.MacTrust
 import dev.retrovision.core.model.WifiKind
@@ -135,7 +138,11 @@ fun DevicesScreen(modifier: Modifier) {
     var selected by remember { mutableStateOf<EntityReport?>(null) }
     var filter by rememberSaveable { mutableStateOf(DeviceFilter.ALL) }
     val all = analysis?.entities.orEmpty()
-    val list = all.filter(filter.match)
+    var query by rememberSaveable { mutableStateOf("") }
+    // UI-side text (label with vendor, category) is searchable too; computed once per analysis.
+    val extra = remember(all) { all.associate { it.entityId to listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) } }
+    val matched = remember(all, query) { all.filter { EntitySearch.matches(it, query, extra[it.entityId].orEmpty()) } }
+    val list = matched.filter(filter.match)
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(
@@ -143,15 +150,24 @@ fun DevicesScreen(modifier: Modifier) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size}/${all.size})", style = MaterialTheme.typography.titleLarge)
+            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size}/${all.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Analyse now", "Analizza ora")) }
         }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            placeholder = { Text(Texts.tr("Search: name, network, MAC, vendor", "Cerca: nome, rete, MAC, produttore")) },
+            leadingIcon = { Text("🔎") },
+            trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("✕") } },
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        )
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             DeviceFilter.entries.forEach { f ->
-                val n = all.count(f.match)
+                val n = matched.count(f.match)
                 if (n == 0 && f != DeviceFilter.ALL && f != filter) return@forEach
                 FilterChip(
                     selected = filter == f,
@@ -161,9 +177,47 @@ fun DevicesScreen(modifier: Modifier) {
             }
         }
         if (all.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
+        else if (list.isEmpty() && query.isNotBlank()) {
+            Text(Texts.tr("No device matches “$query” in the analysed window.", "Nessun dispositivo corrisponde a “$query” nella finestra analizzata."))
+        }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (filter == DeviceFilter.SEARCHING) {
+                item(key = "networks") {
+                    val nets = remember(all) { EntitySearch.searchedNetworks(all) }
+                    if (nets.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                Texts.tr("Networks being searched for (devices asking)", "Reti cercate (dispositivi che le chiedono)"),
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                            Text(
+                                Texts.tr(
+                                    "Tap one to see who asks for it. A network many devices know is a public one; one only a single device knows says more about that device.",
+                                    "Toccane una per vedere chi la cerca. Una rete nota a molti dispositivi è pubblica; una che conosce un solo dispositivo dice di più su di esso.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                nets.take(60).forEach { (ssid, n) ->
+                                    FilterChip(
+                                        selected = EntitySearch.norm(query) == EntitySearch.norm(ssid),
+                                        onClick = { query = if (EntitySearch.norm(query) == EntitySearch.norm(ssid)) "" else ssid },
+                                        label = { Text("“$ssid” · $n") },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             items(list.take(300), key = { it.entityId }) { r ->
-                EntityCard(r) { selected = r }
+                EntityCard(r, query) { selected = r }
+            }
+            if (list.size > 300) item(key = "more") {
+                Text(
+                    Texts.tr("Showing 300 of ${list.size}. Search or filter to narrow down.", "Mostrati 300 su ${list.size}. Cerca o filtra per restringere."),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }
@@ -196,7 +250,7 @@ fun trustLabel(t: MacTrust) = when (t) {
 }
 
 @Composable
-fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
+fun EntityCard(r: EntityReport, query: String = "", onClick: (() -> Unit)? = null) {
     val catColor = CategoryUi.color(r.category)
     Card(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)) {
         Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -222,9 +276,12 @@ fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
                         Badge("🔗 " + Texts.tr("joining ", "si collega a ") + (it.ssid.ifEmpty { it.bssid.toString() }), JOIN)
                     }
                     if (r.probedSsids.isNotEmpty()) {
+                        // Networks matching the search come first, so the reason it matched is visible.
+                        val words = EntitySearch.norm(query).split(' ').filter { it.isNotBlank() }
+                        val shown = r.probedSsids.sortedByDescending { s -> words.any { EntitySearch.norm(s).contains(it) } }
                         Badge(
-                            "🔍 " + Texts.tr("looking for ", "cerca ") + r.probedSsids.take(3).joinToString(", ") { "“$it”" } +
-                                if (r.probedSsids.size > 3) " +${r.probedSsids.size - 3}" else "",
+                            "🔍 " + Texts.tr("looking for ", "cerca ") + shown.take(3).joinToString(", ") { "“$it”" } +
+                                if (shown.size > 3) " +${shown.size - 3}" else "",
                             SEARCH,
                         )
                     }
