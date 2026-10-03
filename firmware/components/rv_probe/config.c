@@ -59,21 +59,19 @@ bool rv_cfg_channel_supported(uint32_t ch)
 }
 
 #ifdef RV_HAS_5GHZ
-// Dual-band default, built around what reveals devices:
-// - 2.4 GHz primaries (1, 6, 11): phones send probe requests on every 2.4 channel, so these
-//   three catch them, plus most APs.
-// - 5 GHz non-DFS (UNII-1 36-48, UNII-3 149-165): the only 5 GHz channels where phones may
-//   transmit probe requests (active scanning is not allowed on DFS channels).
-// - A few DFS channels (100, 116, 132) once per cycle: there only beacons are heard (access
-//   points, hotspots), so they get a short look, not a full sweep.
-// A full cycle is about 2.6 s.
+// Dual-band default (the app normally sends the same plan): built around what can move with you.
+// - 2.4 GHz 1/6/11, three times a cycle: phones send probe requests on every 2.4 channel.
+// - 2.4 GHz 3 and 9 once: a receiver also decodes neighbouring 2.4 channels, so hotspots on any
+//   channel 1..11 are heard.
+// - 5 GHz 36-48 and 149-165: the only 5 GHz channels where phones may probe and portable
+//   hotspots run. No DFS: there only fixed routers beacon (the app's Balanced/All plans add them).
+// A full cycle is about 2.5 s.
 static const rv_hop_t k_default_hop_dualband[] = {
     {1, 150}, {6, 150}, {11, 150},
-    {36, 110}, {40, 110}, {44, 110}, {48, 110},
+    {36, 110}, {40, 110}, {44, 110}, {48, 110}, {3, 80},
     {1, 150}, {6, 150}, {11, 150},
-    {149, 110}, {153, 110}, {157, 110}, {161, 110}, {165, 90},
+    {149, 110}, {153, 110}, {157, 110}, {161, 110}, {165, 90}, {9, 80},
     {1, 150}, {6, 150}, {11, 150},
-    {100, 80}, {116, 80}, {132, 80},
 };
 #endif
 

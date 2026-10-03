@@ -816,22 +816,13 @@ fun SettingsScreen(modifier: Modifier) {
             }
             Text(
                 Texts.tr(
-                    "Cycle about %.1f s on the C5 · %d%% of the time on the channels where phones send probe requests. More channels = more access points heard, fewer phone sightings."
+                    "Cycle about %.1f s on the C5 · %d%% of the time on the channels where phones send probe requests. Focused also covers hotspots on any 2.4 GHz channel; Balanced and All add DFS channels (fixed routers): more networks, fewer phone sightings."
                         .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
-                    "Ciclo di circa %.1f s sul C5 · %d%% del tempo sui canali dove i telefoni mandano probe request. Più canali = più access point sentiti, meno avvistamenti di telefoni."
+                    "Ciclo di circa %.1f s sul C5 · %d%% del tempo sui canali dove i telefoni mandano probe request. Mirato copre anche gli hotspot su qualsiasi canale 2.4 GHz; Bilanciato e Tutti aggiungono i canali DFS (router fissi): più reti, meno avvistamenti di telefoni."
                         .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
                 ),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            var sweep by remember { mutableStateOf(prefs.sweepAtStops) }
-            if (plan != 2) SettingSwitch(
-                Texts.tr("Sweep every channel at stops", "Scansione completa nelle soste"),
-                Texts.tr(
-                    "Still for 3 minutes: once a minute the C5 also listens to the channels this plan skips (~2.7 s). About 4% of the time, only when you are not moving.",
-                    "Fermo da 3 minuti: una volta al minuto il C5 ascolta anche i canali che questo piano salta (~2,7 s). Circa il 4% del tempo, solo quando non ti muovi.",
-                ),
-                sweep,
-            ) { sweep = it; prefs.sweepAtStops = it }
             var drift by remember { mutableStateOf(prefs.driftGuard) }
             SettingSwitch(
                 Texts.tr("Reject GPS drift while the phone is still", "Scarta la deriva GPS quando il telefono è fermo"),

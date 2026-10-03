@@ -118,7 +118,6 @@ class CollectorService : Service() {
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
         scope.launch { phoneLoop() }
-        scope.launch { stopSweepLoop() }
         return START_NOT_STICKY
     }
 
@@ -257,40 +256,6 @@ class CollectorService : Service() {
     private fun hasPerm(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
     /** Keeps the phone's BLE scanner and motion sensor in the state the settings ask for. */
-    /**
-     * At a stop (phone still, or GPS within 40 m, for 3 minutes) a dual-band probe makes one pass
-     * over the channels its plan skips, once a minute. Moving: never, every second counts there.
-     */
-    private suspend fun stopSweepLoop() {
-        var anchor: dev.retrovision.core.model.GeoFix? = null
-        var stillSince = 0L
-        var lastSweep = 0L
-        while (scope.isActive) {
-            delay(5_000)
-            val s = Collector.session ?: continue
-            val st = s.state.value
-            val dual = st.info?.probeType?.endsWith("esp32c5") == true || st.wifi5Obs > 0
-            if (!prefs.sweepAtStops || prefs.channelPlan == 2 || !dual || st.phase != dev.retrovision.app.probe.Phase.STREAMING) { stillSince = 0; continue }
-            val now = System.currentTimeMillis()
-            val fix = Collector.location.value
-            val motion = Collector.phoneMotion.value
-            val gpsStill = fix != null && anchor?.let { dev.retrovision.core.analysis.Geo.distanceM(it, fix) < 40.0 } == true
-            if (fix != null && (anchor == null || !gpsStill)) anchor = fix
-            val still = when (motion) {
-                dev.retrovision.app.phone.MotionState.MOVING -> false
-                dev.retrovision.app.phone.MotionState.RESTING, dev.retrovision.app.phone.MotionState.HANDHELD -> true
-                else -> gpsStill
-            }
-            if (!still) { stillSince = 0; continue }
-            if (stillSince == 0L) stillSince = now
-            if (now - stillSince >= 3 * 60_000L && now - lastSweep >= 60_000L) {
-                lastSweep = now
-                s.sweepOnce()
-                Diag.i("probe", "stop sweep: ${dev.retrovision.app.probe.ChannelPlans.sweep.size} extra channels")
-            }
-        }
-    }
-
     private suspend fun phoneLoop() {
         motion = dev.retrovision.app.phone.MotionMonitor(this).also { m ->
             m.start()

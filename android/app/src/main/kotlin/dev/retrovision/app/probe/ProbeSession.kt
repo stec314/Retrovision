@@ -228,6 +228,7 @@ class ProbeSession(
     }
 
     private fun onHello(h: Hello) {
+        dualBand = h.capabilitiesList.contains(dev.retrovision.proto.v1.Capability.CAPABILITY_WIFI_5GHZ)
         if (h.protocolMajor != PROTOCOL_MAJOR) {
             send(
                 Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
@@ -392,28 +393,12 @@ class ProbeSession(
 
     fun setLedEnabled(on: Boolean) = resendConfig()
 
-    @Volatile private var sweeping = false
-
-    /**
-     * One pass over the channels the running plan skips, then back to the plan. Used at stops: the
-     * same phones are around for minutes, so ~3 s every minute costs little and maps every network.
-     */
-    fun sweepOnce() {
-        if (sweeping) return
-        sweeping = true
-        synchronized(lock) {
-            send(Envelope.newBuilder().setSeq(nextSeq()).setCommand(Command.newBuilder().setSetConfig(configWith(ledOn(), dataFrames(), ChannelPlans.sweep))).build())
-        }
-        scope.launch {
-            delay(ChannelPlans.sweepMs + 300L)
-            sweeping = false
-            resendConfig()
-        }
-    }
+    /** Set from the probe's Hello: it can tune 5 GHz (ESP32-C5). */
+    @Volatile private var dualBand = false
 
     private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
 
-    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = ChannelPlans.hops(channelPlan())): Config = Config.newBuilder()
+    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = ChannelPlans.hops(channelPlan(), dualBand)): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
