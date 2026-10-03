@@ -158,4 +158,14 @@ class AnalyzerTest {
         assertTrue(v[0].durationMs >= 29 * 60_000L)
         assertEquals(11.03, v[1].lon, 1e-6)
     }
+
+    /** Field report: 45,000 entities in a city centre ran the phone out of memory. */
+    @Test fun resultIsTrimmedButAlertsAndResidentsSurvive() {
+        val crowd = (0 until 200).map { ble("passer$it", 20 * min) }
+        val cfg = AnalysisConfig(lookbackMs = 3 * 3600_000L, maxReports = 20)
+        val res = Analyzer(cfg).analyze(now, crowd + fourPlaceSightings("follower"), walk(40 * min))
+        assertEquals(20, res.entities.size)
+        assertEquals(201, res.totalEntities)
+        assertTrue(res.entities.any { it.entityId == "follower" && it.alert })
+    }
 }

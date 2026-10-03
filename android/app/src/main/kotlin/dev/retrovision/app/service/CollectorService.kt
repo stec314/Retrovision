@@ -730,13 +730,13 @@ class CollectorService : Service() {
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
         val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
-        for (e in result.entities) {
-            if (e.placeIds.isEmpty() || e.unfamiliarPlaces > 0) continue // only devices confined to routine places
-            val b = dao.baseline(e.entityId)
+        // Every device confined to routine places, including those trimmed from the result.
+        for (id in result.routineOnlyIds) {
+            val b = dao.baseline(id)
             if (b == null) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, 1, day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now))
             } else if (b.lastDay != day) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, (b.days + 1).coerceAtMost(30), day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, (b.days + 1).coerceAtMost(30), day, now))
             }
         }
     }
@@ -1009,13 +1009,13 @@ class CollectorService : Service() {
         private const val BASELINE_MIN_DAYS = 3
         private const val COMPANION_DAYS = 3
         /** Hard ceiling on rows held in memory by one analysis pass (~50-80 MB worst case). */
-        private const val MAX_ANALYSIS_ROWS = 120_000
+        private const val MAX_ANALYSIS_ROWS = 100_000
         /** USB chunks buffered between the reader and the decoder (≤16 KiB each). */
         private const val INBOX_CHUNKS = 1024
         private const val STORE_BUCKET_MS = 10_000L
         private const val WINDOW_BUCKET_MS = 60_000L
         private const val RECENT_RAW_MS = 5 * 60_000L
-        private const val RECENT_RAW_MAX = 60_000
+        private const val RECENT_RAW_MAX = 30_000
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))

@@ -355,6 +355,7 @@ Suggested values: 30–50 m in cities (default 50), 75–100 m if you are mostly
 - **Storage:** 10 s slots. The database grows about ten times slower than with one row per frame.
 - **Live analysis:** 60 s slots, kept **in memory** and updated as frames arrive, so a run no longer re-reads the database. The window is loaded from storage once, at start or when you change the analysis window. At most 120,000 slots are held; beyond that the oldest are dropped and the *Alerts* card says so in red. Then shorten the analysis window.
 - **Attack and drone detection** use every frame of the last 5 minutes, kept separately in memory.
+- **Reports kept:** at most **5,000** devices per analysis. A city centre gives 40,000+ entities in two hours, mostly rotating Bluetooth addresses; keeping them all ran the phone out of memory. Alerts are always kept, then devices with something to show (searching for networks, trackers, drones, notable), then by score. *Devices* says when the list was trimmed. Learning of residents still sees every device.
 
 **Why not a huge window?** Persistence would build up from ordinary life (the same café twice a week), and alerts would fire on stale history. Live mode is for "now".
 

@@ -171,8 +171,19 @@ fun DevicesScreen(modifier: Modifier) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size}/${all.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            Text(Texts.tr("Devices", "Dispositivi") + " (${list.size}/${analysis?.totalEntities ?: all.size})", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             OutlinedButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Analyse now", "Analizza ora")) }
+        }
+        val total = analysis?.totalEntities ?: 0
+        if (total > all.size) {
+            Text(
+                Texts.tr(
+                    "Keeping the ${all.size} most relevant of $total devices (alerts, network searches, trackers, drones, notable, then by score). The rest scored lower.",
+                    "Tengo i ${all.size} più rilevanti su $total dispositivi (allerte, ricerche di rete, tracker, droni, notevoli, poi per punteggio). Gli altri hanno punteggio più basso.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
         }
         OutlinedTextField(
             value = query,

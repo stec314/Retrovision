@@ -51,6 +51,13 @@ data class AnalysisConfig(
      * Fixes with unknown accuracy (0) are kept, so there is no regression when it is unreported.
      */
     val maxFixAccuracyM: Double = 50.0,
+    /**
+     * Reports kept in the result. A city centre yields 40,000+ entities in two hours, mostly
+     * rotating Bluetooth addresses heard once; keeping them all ran the phone out of memory
+     * (field report). Alerts are always kept; then devices with something to show (searching for
+     * networks, trackers, drones, notable), then by score.
+     */
+    val maxReports: Int = 5_000,
 )
 
 /** A tuned config for reviewing all saved data over [spanMs]: rewards recurring, travelling presence. */
@@ -283,6 +290,10 @@ class AnalysisResult(
     /** Your changes of direction and stops in the window (route-check context). */
     val turns: Int = 0,
     val stops: Int = 0,
+    /** Entities analysed before [AnalysisConfig.maxReports] trimmed the list. */
+    val totalEntities: Int = entities.size,
+    /** Ids of every entity heard only at your routine places (for learning residents), untrimmed. */
+    val routineOnlyIds: List<String> = emptyList(),
 ) {
     /** Computed once: the UI reads this on every redraw, over tens of thousands of entities. */
     val alerts: List<EntityReport> by lazy { entities.filter { it.alert } }
@@ -368,7 +379,18 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         }
         groups(reports)
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
-        return AnalysisResult(nowMs, clusterer.places, reports, ignored, turns.size, stops.size)
+        // Learning "residents" needs every device seen only at routine places, kept or not.
+        val routineOnly = reports.filter { it.placeIds.isNotEmpty() && it.unfamiliarPlaces == 0 }.map { it.entityId }
+        val total = reports.size
+        val kept = if (reports.size <= config.maxReports) reports else {
+            fun interesting(r: EntityReport) = r.probedSsids.isNotEmpty() || r.joinAttempts.isNotEmpty() ||
+                r.tracker != null || r.isDrone || r.notable.isNotEmpty()
+            val (alerts, rest) = reports.partition { it.alert }
+            val (shown, other) = rest.partition { interesting(it) }
+            (alerts + shown + other).take(maxOf(config.maxReports, alerts.size))
+                .sortedWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
+        }
+        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
@@ -659,7 +681,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             droneId = droneId,
             isDrone = drone,
             effectivePlaces = effPlaces,
-            buckets = list.map { it.sighting.timeMs / 300_000L }.toSet(),
+            buckets = if (places.size >= 3) list.map { it.sighting.timeMs / 300_000L }.toSet() else emptySet(),
             htProfile = htProfile,
             addressLinks = addressLinks(list, mergedVia),
             visits = visits.result(),
