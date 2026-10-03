@@ -392,9 +392,28 @@ class ProbeSession(
 
     fun setLedEnabled(on: Boolean) = resendConfig()
 
+    @Volatile private var sweeping = false
+
+    /**
+     * One pass over the channels the running plan skips, then back to the plan. Used at stops: the
+     * same phones are around for minutes, so ~3 s every minute costs little and maps every network.
+     */
+    fun sweepOnce() {
+        if (sweeping) return
+        sweeping = true
+        synchronized(lock) {
+            send(Envelope.newBuilder().setSeq(nextSeq()).setCommand(Command.newBuilder().setSetConfig(configWith(ledOn(), dataFrames(), ChannelPlans.sweep))).build())
+        }
+        scope.launch {
+            delay(ChannelPlans.sweepMs + 300L)
+            sweeping = false
+            resendConfig()
+        }
+    }
+
     private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
 
-    private fun configWith(led: Boolean, data: Boolean): Config = Config.newBuilder()
+    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = ChannelPlans.hops(channelPlan())): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
@@ -408,7 +427,7 @@ class ProbeSession(
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
                 .apply { if (data) addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DATA) }
-                .apply { ChannelPlans.hops(channelPlan()).forEach { (ch, ms) -> addHop(ChannelDwell.newBuilder().setChannel(ch).setDwellMs(ms)) } }
+                .apply { hops.forEach { (ch, ms) -> addHop(ChannelDwell.newBuilder().setChannel(ch).setDwellMs(ms)) } }
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),

@@ -27,6 +27,15 @@ object ChannelPlans {
         else -> emptyList() // the probe's own default
     }
 
+    /**
+     * One pass over everything the focused plan leaves out: 2.4 GHz secondaries and every DFS
+     * channel, 105 ms each (one beacon interval, so an access point there is heard). ~2.7 s.
+     */
+    val sweep: List<Pair<Int, Int>> =
+        listOf(2, 3, 4, 5, 7, 8, 9, 10, 12, 13).map { it to 100 } +
+            listOf(52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144).map { it to 105 }
+    val sweepMs: Int get() = sweep.sumOf { it.second }
+
     /** Share of the cycle spent on the channels where phones send probe requests. */
     fun probeShare(plan: Int): Double {
         val h = hops(plan).ifEmpty { return 0.91 }

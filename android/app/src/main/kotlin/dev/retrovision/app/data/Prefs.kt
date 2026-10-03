@@ -112,6 +112,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("channelPlan", 0)
         set(v) = p.edit().putInt("channelPlan", v).apply()
 
+    /** At stops, a dual-band probe sweeps every channel once a minute. */
+    var sweepAtStops: Boolean
+        get() = p.getBoolean("sweepAtStops", true)
+        set(v) = p.edit().putBoolean("sweepAtStops", v).apply()
+
     /** Devices list as one-line rows instead of cards. */
     var devicesCompact: Boolean
         get() = p.getBoolean("devicesCompact", false)

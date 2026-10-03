@@ -823,6 +823,15 @@ fun SettingsScreen(modifier: Modifier) {
                 ),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            var sweep by remember { mutableStateOf(prefs.sweepAtStops) }
+            if (plan != 2) SettingSwitch(
+                Texts.tr("Sweep every channel at stops", "Scansione completa nelle soste"),
+                Texts.tr(
+                    "Still for 3 minutes: once a minute the C5 also listens to the channels this plan skips (~2.7 s). About 4% of the time, only when you are not moving.",
+                    "Fermo da 3 minuti: una volta al minuto il C5 ascolta anche i canali che questo piano salta (~2,7 s). Circa il 4% del tempo, solo quando non ti muovi.",
+                ),
+                sweep,
+            ) { sweep = it; prefs.sweepAtStops = it }
             var drift by remember { mutableStateOf(prefs.driftGuard) }
             SettingSwitch(
                 Texts.tr("Reject GPS drift while the phone is still", "Scarta la deriva GPS quando il telefono è fermo"),
