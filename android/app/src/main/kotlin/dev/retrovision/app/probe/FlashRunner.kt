@@ -31,7 +31,7 @@ object FlashRunner {
 
     /** Shown with every failure of an experimental image: the browser flasher is the known-good path. */
     const val EXPERIMENTAL_FALLBACK =
-        "Flash ESP32-C5 dall'app SPERIMENTALE, mai provato su una C5 reale. Se fallisce usa il flasher web " +
+        "Flash ESP32-C5 dall'app SPERIMENTALE, verificato su una sola scheda. Se fallisce usa il flasher web " +
             "(ESP Web Tools) dal computer: la scheda resta recuperabile in download mode (tieni BOOT, premi RESET)."
 
     /**

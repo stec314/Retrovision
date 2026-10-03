@@ -380,11 +380,11 @@ fun ProbeScreen(modifier: Modifier) {
                     if (hasExperimental) {
                         Text(
                             Texts.tr(
-                                "ESP32-C5: in-app flashing is EXPERIMENTAL and has never been tested on a real C5. " +
-                                    "The browser flasher (ESP Web Tools, from a computer) remains the safe way. " +
+                                "ESP32-C5: in-app flashing is EXPERIMENTAL, verified on one board so far. " +
+                                    "If it fails, the browser flasher (ESP Web Tools, from a computer) recovers the board. " +
                                     "Without this switch a C5 is detected and left untouched.",
-                                "ESP32-C5: il flash dall'app è SPERIMENTALE e non è mai stato provato su una C5 reale. " +
-                                    "Il flasher web (ESP Web Tools, dal computer) resta la via sicura. " +
+                                "ESP32-C5: il flash dall'app è SPERIMENTALE, verificato finora su una sola scheda. " +
+                                    "Se fallisce, il flasher web (ESP Web Tools, dal computer) recupera la scheda. " +
                                     "Senza questo interruttore una C5 viene riconosciuta e lasciata intatta.",
                             ),
                             style = MaterialTheme.typography.bodySmall,
@@ -427,8 +427,8 @@ fun ProbeScreen(modifier: Modifier) {
                     Texts.tr("This overwrites the firmware on the connected board.", "Sovrascrive il firmware della scheda collegata.") +
                         if (allowExperimental) {
                             Texts.tr(
-                                "\n\nExperimental ESP32-C5 flashing is ON: untested on hardware. If it fails, use the browser flasher.",
-                                "\n\nFlash sperimentale ESP32-C5 ATTIVO: non testato su hardware. Se fallisce, usa il flasher web.",
+                                "\n\nExperimental ESP32-C5 flashing is ON (verified on one board). If it fails, use the browser flasher.",
+                                "\n\nFlash sperimentale ESP32-C5 ATTIVO (verificato su una scheda). Se fallisce, usa il flasher web.",
                             )
                         } else "",
                 )

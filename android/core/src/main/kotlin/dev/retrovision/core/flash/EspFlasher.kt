@@ -43,7 +43,7 @@ enum class Chip(
     ESP32_S2("ESP32-S2", setOf(0x000007C6), true, 2),
     ESP32_S3("ESP32-S3", setOf(0x00000009), true, 9),
     ESP32_C3("ESP32-C3", setOf(0x6921506F, 0x1B31506F, 0x4881606F, 0x4361606F), true, 5),
-    // EXPERIMENTAL, untested on hardware: the C5 has no magic register value; it is detected by its
+    // EXPERIMENTAL, verified on one real board (2026-10-03): the C5 has no magic register value; it is detected by its
     // chip id (23) via GET_SECURITY_INFO. Its bootloader lives at 0x2000 (see the manifest offset).
     ESP32_C5("ESP32-C5", emptySet(), true, 23),
     ;
@@ -137,7 +137,7 @@ class EspFlasher(
         val magic = runCatching { readReg(0x40001000) }.getOrNull()
         magic?.let { Chip.fromMagic(it)?.let { c -> return c } }
         // No magic matched: newer chips (ESP32-C5…) report USES_MAGIC_VALUE=False and are
-        // identified by the chip id in GET_SECURITY_INFO. EXPERIMENTAL, untested on a real C5.
+        // identified by the chip id in GET_SECURITY_INFO. EXPERIMENTAL, verified on one real C5.
         val chipId = securityChipId()
         chipId?.let { Chip.fromChipId(it)?.let { c -> return c } }
         throw FlashException(
