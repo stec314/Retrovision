@@ -142,9 +142,9 @@ interface AppDao {
     @Query(
         "SELECT MAX(id) AS id, timeMs, radio, address, entityId, rssi, SUM(merged) AS merged, wifiKind, channel, " +
             "ssid, bssid, seq, ies, bleAddrKind, advType, advData, txPower, source, tsf FROM sightings " +
-            "WHERE timeMs >= :from GROUP BY entityId, radio, wifiKind, advType, ssid, timeMs / :bucketMs ORDER BY timeMs DESC LIMIT :limit",
+            "WHERE timeMs >= :from AND timeMs < :to GROUP BY entityId, radio, wifiKind, advType, ssid, timeMs / :bucketMs ORDER BY timeMs DESC LIMIT :limit",
     )
-    suspend fun sightingsThinned(from: Long, bucketMs: Long, limit: Int): List<SightingRow>
+    suspend fun sightingsThinned(from: Long, to: Long, bucketMs: Long, limit: Int): List<SightingRow>
 
     /** Cheap row estimate (two index lookups instead of counting millions of encrypted rows). */
     @Query("SELECT IFNULL(MAX(id) - MIN(id) + 1, 0) FROM sightings")

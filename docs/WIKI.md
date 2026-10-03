@@ -154,7 +154,7 @@ Some OSes reset the sequence counter when they rotate the address, and recent de
 
 An AirTag **separated from its owner** that moves with you is the classic planted-tracker situation. It gets the largest bonus in the score.
 
-**Moving access points** are networks that travel: phone hotspots, car Wi-Fi, dashcams, action cameras, Wi-Fi Direct. They are recognised by default SSID patterns and vendor prefixes. A moving AP seen at several of your places is a strong signal, because it is usually a vehicle. These are **default names only**; a renamed hotspot is not recognised.
+**Moving access points** are networks that travel: phone hotspots, car Wi-Fi, dashcams, action cameras, Wi-Fi Direct. They are recognised by default SSID patterns and vendor prefixes. A locally administered BSSID alone is **not** taken as a hotspot sign: shop, city and guest networks on multi-SSID routers use them too. A moving AP seen at several of your places is a strong signal, because it is usually a vehicle. These are **default names only**; a renamed hotspot is not recognised.
 
 ## The following score
 
@@ -197,6 +197,12 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
 - **Resident → score ≤ 0.25** (see *Places, routine places and residents*).
+- **Stays put → score ≤ 0.35.** Walking around a block or between two squares, a fixed access point or beacon is heard at several 100 m "places", for the whole time, before and after every turn. Geometry alone makes it look like a follower. Its signal gives it away: it is loudest near one spot and fades the farther you walk from it. The app tests this on one receiver, with at least 16 positioned readings:
+  1. It estimates the spot from the strongest readings of **half** the samples.
+  2. It measures the fade on the **other half**: the rank correlation (Spearman ρ) between your distance from the spot and the RSSI.
+  3. It calls the device fixed if ρ ≤ −0.2, the fade is statistically clear (z = ρ·√(n−1) ≤ −4), all readings fall within 450 m of the spot, and your distance from it actually varied (≥ 40 m).
+
+  Splitting the samples matters: estimating and testing on the same readings shows a fake fade even for pure noise, which would hide a tag carried on you. Something moving with you, or in your bag, shows no fade and is never capped this way.
 
 **Alert rule.** An alert fires when **score ≥ alert threshold** (default 0.70) **and effective places ≥ minimum places** (default 3). Both are in Settings.
 
@@ -223,6 +229,7 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Same access point under a new name | See *Network signals* |
 | Moves together with N other devices | See *Network signals* |
 | Known at your routine places | Resident: damped |
+| Stays in one spot … | Its signal fades as you walk away from one point: a fixed device you keep passing. Capped at 0.35 |
 
 ### Worked examples
 
@@ -231,6 +238,8 @@ places = (3−1)/3 = 0.67 → 0.267 · windows = 1 → 0.200 · span = 25/30 →
 Base = 0.78. Co-movement +0.15, moving AP +0.10 → **1.00 (clamped). Alert.**
 
 *Your neighbour's router.* It is seen only at home (a confirmed routine place) for 12 hours. effPlaces = 0.3 → capped at 0.30, and after 3 days it becomes a resident (≤ 0.25). **No alert.**
+
+*The bookshop's Wi-Fi in the old town.* You walk loops between two squares for two hours. The shop's AP is heard at 7 places, in all windows, for 2 hours, through every turn, up to 450 m apart: score 1.00 before the fix. Its RSSI drops steadily with your distance from the shop (ρ ≈ −0.75), so it **stays put → 0.35. No alert.** Before build r67 its locally administered BSSID also made it a "phone hotspot" (+0.10): that rule was removed, because multi-SSID routers derive their extra BSSIDs the same way.
 
 *A commuter on your train.* Their phone has a stable address and is seen at 4 stations over 40 minutes, moving with you. The score is high and **this is a real false positive**: they really did travel with you. The reasons make that visible ("moved with you" during the train ride, no presence before or after). See *Limits*.
 
@@ -333,7 +342,10 @@ Suggested values: 30–50 m in cities (default 50), 75–100 m if you are mostly
 
 **Live analysis** answers "is something following me *now*?". It looks back over the **analysis window** (Settings, 30–720 minutes, default 120) and runs every 60 s. The four windows only cover the last 20 minutes, so a short window reacts fast and stays focused on the current trip.
 
-**Thinning.** Live analysis doesn't load every frame of the window: a phone that advertises every second says the same thing 60 times a minute. The app keeps one row per device, frame kind, advert type and SSID per bucket. The bucket is 5 s for up to 100,000 frames in the window, then 15 s, 60 s and 180 s as the window gets busier. Frame counts are summed, so they stay right. At most 120,000 rows are analysed; if the window holds more, the oldest part is left out and the *Alerts* card says so in red. Then shorten the analysis window. Attack and drone detection always use every frame from the last 5 minutes.
+**Slots instead of frames.** A phone that advertises every second says the same thing 60 times a minute. Repeats are collapsed into **slots**: one per device, frame kind (or advert type) and SSID per time bucket, keeping the newest reading and summing the frame counts, so counts stay right.
+- **Storage:** 10 s slots. The database grows about ten times slower than with one row per frame.
+- **Live analysis:** 60 s slots, kept **in memory** and updated as frames arrive, so a run no longer re-reads the database. The window is loaded from storage once, at start or when you change the analysis window. At most 120,000 slots are held; beyond that the oldest are dropped and the *Alerts* card says so in red. Then shorten the analysis window.
+- **Attack and drone detection** use every frame of the last 5 minutes, kept separately in memory.
 
 **Why not a huge window?** Persistence would build up from ordinary life (the same café twice a week), and alerts would fire on stale history. Live mode is for "now".
 

@@ -167,6 +167,10 @@ object Texts {
             "Same access point under a new name or address (same boot moment): “${r.from}” → “${r.to}”",
             "Stesso access point con nuovo nome o indirizzo (stesso istante di accensione): “${r.from}” → “${r.to}”",
         )
+        is Reason.StaysPut -> tr(
+            "Stays in one spot: its signal fades as you walk away from one point (heard within ~${r.reachM.toInt()} m). A fixed device you keep passing, not one moving with you",
+            "Resta in un punto fisso: il segnale cala man mano che ti allontani da un punto (sentito entro ~${r.reachM.toInt()} m). Un dispositivo fisso vicino a cui continui a passare, non uno che si muove con te",
+        )
         is Reason.TravelsInGroup -> tr(
             "Moves together with ${r.size - 1} other device(s): same places, same times",
             "Si muove insieme ad altri ${r.size - 1} dispositivi: stessi luoghi, stessi orari",

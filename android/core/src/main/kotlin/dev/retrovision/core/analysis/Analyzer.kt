@@ -119,6 +119,11 @@ sealed class Reason {
     data class TravelsInGroup(val size: Int, val groupId: String) : Reason()
     /** A drone: [remoteId] true when it broadcast Remote ID ([id] is then its serial). */
     data class Drone(val id: String?, val remoteId: Boolean) : Reason()
+    /**
+     * Stays in one spot: its signal fades the farther you walk from one point, and it was only heard
+     * within [reachM] of it. A shop's Wi-Fi you keep circling past, not something moving with you.
+     */
+    data class StaysPut(val reachM: Double, val decay: Double) : Reason()
 }
 
 enum class EntityKind { WIFI_CLIENT, WIFI_AP, BLE_DEVICE, BLE_TRACKER }
@@ -328,6 +333,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val ownNetNames = LinkedHashSet<String>()
         var remoteId = false
         var droneId: String? = null
+        val positioned = ArrayList<Triple<GeoFix, Int, String>>() // where you were, RSSI, receiver
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
         for (es in list) {
@@ -401,6 +407,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             f.remoteId?.let { r -> remoteId = true; r.uasId?.let { droneId = it } }
 
             timeline.nearest(s.timeMs)?.let { fix ->
+                if (s.rssi != 0) positioned += Triple(fix, s.rssi, s.probeId)
                 val p = placeOfFix[fix] ?: return@let
                 places += p.id
                 if (p.id != lastPlace) {
@@ -492,6 +499,12 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         for (n in notable) if (n.kind != NotableKind.DRONE) reasons += Reason.Notable(n.name, n.kind)
 
         if (effPlaces < 2) score = minOf(score, 0.3)
+        // Geometry alone can't tell a follower from a fixed transmitter you keep walking around
+        // (several "places" within its range). The signal can: see [stationary].
+        if (nPlaces >= 2) stationary(positioned)?.let { (reach, rho) ->
+            reasons += Reason.StaysPut(reach, rho)
+            score = minOf(score, STAYS_PUT_CAP)
+        }
         if (isResident) {
             reasons += Reason.KnownAtRoutine
             score = minOf(score, 0.25) // belongs to your routine environment: not a follower
@@ -551,7 +564,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
      * person or vehicle. A group survives one member rotating its address, so it's extra evidence.
      */
     private fun groups(reports: MutableList<EntityReport>) {
-        val cand = reports.indices.filter { reports[it].placeIds.size >= 3 && reports[it].reasons.none { r -> r is Reason.KnownAtRoutine } }
+        val cand = reports.indices.filter { reports[it].placeIds.size >= 3 && reports[it].reasons.none { r -> r is Reason.KnownAtRoutine || r is Reason.StaysPut } }
         if (cand.size < 2) return
         val parent = IntArray(reports.size) { it }
         fun find(x: Int): Int { var y = x; while (parent[y] != y) { parent[y] = parent[parent[y]]; y = parent[y] }; return y }
@@ -615,6 +628,60 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         return best
     }
 
+    /**
+     * Evidence that the transmitter is fixed: returns (reach m, Spearman ρ) or null.
+     *
+     * A fixed transmitter is loudest near one point and fades with your distance from it. The point
+     * is estimated from the strongest readings of HALF the samples, and the fade is measured on the
+     * OTHER half: estimating and testing on the same samples would show a fake fade even for pure
+     * noise (the strongest samples are near the estimate by construction), and could hide a tag
+     * carried on you. A device moving with you, or on you, shows no such fade.
+     * One receiver only: the probe and the phone read different dBm for the same signal.
+     */
+    internal fun stationary(samples: List<Triple<GeoFix, Int, String>>): Pair<Double, Double>? {
+        if (samples.size < STAYS_PUT_MIN_SAMPLES) return null
+        val main = samples.groupBy { it.third }.values.maxBy { it.size }
+        if (main.size < STAYS_PUT_MIN_SAMPLES) return null
+        val fit = main.filterIndexed { i, _ -> i % 2 == 0 }
+        val test = main.filterIndexed { i, _ -> i % 2 == 1 }
+        val top = fit.sortedByDescending { it.second }.take(maxOf(3, fit.size / 5))
+        val cLat = top.sumOf { it.first.lat } / top.size
+        val cLon = top.sumOf { it.first.lon } / top.size
+        val dist = test.map { Geo.distanceM(it.first.lat, it.first.lon, cLat, cLon) }
+        val sorted = dist.sorted()
+        val reach = sorted[(sorted.size * 9 / 10).coerceAtMost(sorted.size - 1)]
+        val spread = reach - sorted[sorted.size / 10]
+        if (reach > STAYS_PUT_MAX_REACH_M || spread < STAYS_PUT_MIN_SPREAD_M) return null
+        val rho = spearman(dist, test.map { it.second.toDouble() })
+        // Both a clear fade and a significant one: z ≈ ρ·√(n−1) under "no relation". At z ≤ −4 a
+        // device carried with you is mistaken for a fixed one about 3 times in 100,000.
+        val z = rho * Math.sqrt((test.size - 1).toDouble())
+        return if (rho <= STAYS_PUT_MAX_RHO && z <= STAYS_PUT_MAX_Z) reach to rho else null
+    }
+
+    private fun spearman(a: List<Double>, b: List<Double>): Double {
+        fun ranks(x: List<Double>): DoubleArray {
+            val idx = x.indices.sortedBy { x[it] }
+            val r = DoubleArray(x.size)
+            var i = 0
+            while (i < idx.size) {
+                var j = i
+                while (j + 1 < idx.size && x[idx[j + 1]] == x[idx[i]]) j++
+                val avg = (i + j) / 2.0
+                for (k in i..j) r[idx[k]] = avg
+                i = j + 1
+            }
+            return r
+        }
+        val ra = ranks(a); val rb = ranks(b)
+        val ma = ra.average(); val mb = rb.average()
+        var num = 0.0; var da = 0.0; var db = 0.0
+        for (i in ra.indices) {
+            num += (ra[i] - ma) * (rb[i] - mb); da += (ra[i] - ma) * (ra[i] - ma); db += (rb[i] - mb) * (rb[i] - mb)
+        }
+        return if (da == 0.0 || db == 0.0) 0.0 else num / Math.sqrt(da * db)
+    }
+
     /** Index of the CYT window containing `ageMs`, or null if older than the last one. */
     fun windowIndex(ageMs: Long): Int? {
         if (ageMs < 0) return 0
@@ -629,5 +696,12 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         const val COMOVE_MAX_STD = 7.5
         const val GROUP_PLACES_J = 0.75
         const val GROUP_TIME_J = 0.4
+        const val STAYS_PUT_MIN_SAMPLES = 16
+        /** Generous: an outdoor AP can be heard 300+ m away. The fade test does the real work. */
+        const val STAYS_PUT_MAX_REACH_M = 450.0
+        const val STAYS_PUT_MIN_SPREAD_M = 40.0
+        const val STAYS_PUT_MAX_RHO = -0.2
+        const val STAYS_PUT_MAX_Z = -4.0
+        const val STAYS_PUT_CAP = 0.35
     }
 }

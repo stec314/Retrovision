@@ -71,6 +71,18 @@ class CollectorService : Service() {
     private val prefs get() = app.prefs
     private val resolver = EntityResolver()
     private val queue = Channel<SightingRow>(capacity = 16_384)
+
+    /** Repeats collapsed before storage: one row per device/kind/SSID per 10 s (see SightingBuckets). */
+    private val storeBuckets = dev.retrovision.core.analysis.SightingBuckets(STORE_BUCKET_MS)
+
+    /** The analysis window, kept in memory: no database scan every minute. */
+    private val liveWindow = dev.retrovision.core.analysis.SightingBuckets(WINDOW_BUCKET_MS, MAX_ANALYSIS_ROWS)
+
+    /** Live sightings at or after this time go to [liveWindow]; older ones come from the database. */
+    @Volatile private var liveFromMs = Long.MAX_VALUE
+
+    /** Every frame of the last few minutes, for attack and drone detection (they count frames). */
+    private val recentRaw = ArrayDeque<Sighting>()
     private var locationManager: LocationManager? = null
     private var lastFixWritten = 0L
     private val notifiedAt = HashMap<String, Long>()
@@ -100,6 +112,7 @@ class CollectorService : Service() {
         registerWifiCallback()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
+        scope.launch { storeFlushLoop() }
         scope.launch { analysisLoop() }
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
@@ -118,6 +131,17 @@ class CollectorService : Service() {
         motion?.stop()
         netCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         scope.cancel()
+        // Don't lose the last few seconds: open slots and anything still queued go to the database.
+        val pending = ArrayList<SightingRow>()
+        while (true) pending += queue.tryReceive().getOrNull() ?: break
+        storeBuckets.drainAll().mapTo(pending) { it.sighting.toRow(it.entityId) }
+        if (pending.isNotEmpty()) {
+            val dao = app.db.dao()
+            Thread {
+                runCatching { kotlinx.coroutines.runBlocking { dao.insertSightings(pending) } }
+                    .onFailure { Diag.e("db", "final flush of ${pending.size} rows failed", it) }
+            }.start()
+        }
         super.onDestroy()
     }
 
@@ -309,10 +333,13 @@ class CollectorService : Service() {
                 }
             }
         }
-        // Full queue: drop rather than block the decoder.
-        if (queue.trySend(s.toRow(res.entityId)).isFailure) {
-            Diag.update { it.copy(queueDrops = it.queueDrops + 1) }
-            if (Diag.metrics.value.queueDrops % 1000 == 1L) Diag.w("db", "write queue full: sightings dropped (${Diag.metrics.value.queueDrops} so far)")
+        val es = dev.retrovision.core.analysis.EntitySighting(res.entityId, s)
+        storeBuckets.add(es)
+        if (s.timeMs >= liveFromMs) liveWindow.add(es)
+        synchronized(recentRaw) {
+            recentRaw.addLast(s)
+            while (recentRaw.isNotEmpty() && s.timeMs - recentRaw.first().timeMs > RECENT_RAW_MS) recentRaw.removeFirst()
+            while (recentRaw.size > RECENT_RAW_MAX) recentRaw.removeFirst()
         }
     }
 
@@ -498,6 +525,20 @@ class CollectorService : Service() {
 
     // ---- database --------------------------------------------------------------
 
+    /** Moves closed 10 s slots from [storeBuckets] to the write queue. */
+    private suspend fun storeFlushLoop() {
+        while (scope.isActive) {
+            delay(2_000)
+            for (es in storeBuckets.drainClosed(System.currentTimeMillis())) {
+                // Full queue: drop rather than block.
+                if (queue.trySend(es.sighting.toRow(es.entityId)).isFailure) {
+                    Diag.update { it.copy(queueDrops = it.queueDrops + 1) }
+                    if (Diag.metrics.value.queueDrops % 1000 == 1L) Diag.w("db", "write queue full: sightings dropped (${Diag.metrics.value.queueDrops} so far)")
+                }
+            }
+        }
+    }
+
     private suspend fun writerLoop() {
         val dao = app.db.dao()
         while (scope.isActive) {
@@ -556,17 +597,23 @@ class CollectorService : Service() {
             maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
         )
         val from = now - cfg.lookbackMs
-        // Memory: the window is loaded thinned and converted once (see AppDao.sightingsThinned).
-        val raw = dao.sightingCountSince(from)
-        val bucketMs = when {
-            raw <= 100_000 -> 5_000L
-            raw <= 400_000 -> 15_000L
-            raw <= 1_500_000 -> 60_000L
-            else -> 180_000L
+        // The window lives in memory. It is filled from the database once (at start, or when the
+        // look-back changes); after that only live sightings are added.
+        if (warmedLookbackMs != cfg.lookbackMs) {
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            liveFromMs = now
+            liveWindow.clear()
+            for (r in dao.sightingsThinned(from, now, WINDOW_BUCKET_MS, MAX_ANALYSIS_ROWS)) {
+                liveWindow.add(EntitySighting(r.entityId, r.toSighting()))
+            }
+            warmedLookbackMs = cfg.lookbackMs
+            Diag.i("analysis", "window loaded from storage: ${liveWindow.size} slots in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
         }
-        val window: List<EntitySighting> = dao.sightingsThinned(from, bucketMs, MAX_ANALYSIS_ROWS)
-            .asReversed().map { EntitySighting(it.entityId, it.toSighting()) }
-        Collector.analysisLoad.value = AnalysisLoad(raw, window.size, bucketMs, window.size >= MAX_ANALYSIS_ROWS)
+        val window: List<EntitySighting> = liveWindow.snapshot(from)
+        Collector.analysisLoad.value = AnalysisLoad(
+            window.sumOf { maxOf(1, it.sighting.mergedCount).toLong() }, window.size, WINDOW_BUCKET_MS,
+            window.size >= MAX_ANALYSIS_ROWS,
+        )
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
         // "False alarm" feedback snoozes that device's alerts for a day.
@@ -593,7 +640,7 @@ class CollectorService : Service() {
 
         // Attack and drone detection need every frame (deauth counts, drone tracks): a short,
         // unthinned window, small by construction.
-        val recent = dao.sightingsSince(now - 5 * 60_000L).map { it.toSighting() }
+        val recent = synchronized(recentRaw) { recentRaw.toList() }.filter { now - it.timeMs <= RECENT_RAW_MS }
         val recentWifi = recent.filter { it.radio == dev.retrovision.core.model.Radio.WIFI && now - it.timeMs <= 3 * 60_000L }
         val recentBle = recent.filter { it.radio == dev.retrovision.core.model.Radio.BLE && now - it.timeMs <= 60_000L }
         val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
@@ -666,6 +713,7 @@ class CollectorService : Service() {
     }
 
     private var lastLearn = 0L
+    private var warmedLookbackMs = -1L
 
     /** A device seen only at your routine places gains a "day" once per local day; residents are damped. */
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
@@ -910,6 +958,10 @@ class CollectorService : Service() {
         private const val MAX_ANALYSIS_ROWS = 120_000
         /** USB chunks buffered between the reader and the decoder (≤16 KiB each). */
         private const val INBOX_CHUNKS = 1024
+        private const val STORE_BUCKET_MS = 10_000L
+        private const val WINDOW_BUCKET_MS = 60_000L
+        private const val RECENT_RAW_MS = 5 * 60_000L
+        private const val RECENT_RAW_MAX = 60_000
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))

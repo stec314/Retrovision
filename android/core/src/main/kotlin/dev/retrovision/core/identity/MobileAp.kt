@@ -25,10 +25,8 @@ object MobileAp {
     )
 
     fun classify(ssid: String, bssid: MacAddress?): Kind? {
-        patterns.firstOrNull { it.first.containsMatchIn(ssid) }?.let { return it.second }
-        // Android and iOS hotspots use a locally administered BSSID; fixed APs
-        // almost never do. Weak signal on its own, so only for non-empty SSIDs.
-        if (bssid != null && bssid.isLocallyAdministered && ssid.isNotEmpty()) return Kind.PHONE_HOTSPOT
-        return null
+        // A locally administered BSSID alone is NOT a hotspot sign: multi-SSID routers (guest networks,
+        // shop and city Wi-Fi) derive their extra BSSIDs that way. Field-tested false positive.
+        return patterns.firstOrNull { it.first.containsMatchIn(ssid) }?.second
     }
 }
