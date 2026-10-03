@@ -16,6 +16,11 @@ class RetrovisionApp : Application() {
         CrashLog.install(this)
         Diag.i("app", "started · ${BuildConfig.VERSION_NAME} · ${Diag.heapLine()}")
         Diag.startStallWatch()
+        // Map renderer: offline only. Marked disconnected so it never tries the network on its own.
+        runCatching {
+            org.maplibre.android.MapLibre.getInstance(this)
+            org.maplibre.android.MapLibre.setConnected(false)
+        }.onFailure { Diag.w("map", "renderer init failed: ${it.message}") }
         Thread { dev.retrovision.app.enrich.Vendors.load(this) }.start()
         Thread { dev.retrovision.app.map.OfflineMaps.init(this) }.start()
     }

@@ -16,6 +16,7 @@ sqlcipher = "4.6.1"
 sqlite = "2.4.0"
 usb-serial = "3.8.0"
 junit = "4.13.2"
+maplibre = "13.4.0"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -45,6 +46,7 @@ protobuf-kotlin-lite = { module = "com.google.protobuf:protobuf-kotlin-lite", ve
 protoc = { module = "com.google.protobuf:protoc", version.ref = "protobuf" }
 usb-serial = { module = "com.github.mik3y:usb-serial-for-android", version.ref = "usb-serial" }
 junit = { module = "junit:junit", version.ref = "junit" }
+maplibre = { module = "org.maplibre.gl:android-sdk", version.ref = "maplibre" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

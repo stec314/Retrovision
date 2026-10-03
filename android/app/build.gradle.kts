@@ -21,6 +21,8 @@ android {
         targetSdk = 35
         versionCode = (System.getenv("RV_VERSION_CODE") ?: "1").toInt()
         versionName = System.getenv("RV_VERSION_NAME") ?: "0.1.0-dev"
+        // The map renderer ships native code per CPU type: phones (arm64, older arm) and the emulator only.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
     }
 
     signingConfigs {
@@ -90,6 +92,8 @@ dependencies {
     implementation(libs.compose.material3)
     // Small core icon set (vectors, shrunk by R8), for a cleaner look than emoji in navigation and headers.
     implementation(libs.compose.material.icons.core)
+    // GPU map renderer; reads the offline .pmtiles/.mbtiles files directly (no network).
+    implementation(libs.maplibre)
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
