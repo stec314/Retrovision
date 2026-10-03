@@ -39,6 +39,11 @@ private fun AppRoot() {
         WikiScreen(onClose = { WikiNav.open.value = false })
         return
     }
+    val alertsOpen by AlertsNav.open.collectAsState()
+    if (alertsOpen) {
+        AlertsScreen(onClose = { AlertsNav.open.value = false })
+        return
+    }
     val diagOpen by DiagNav.open.collectAsState()
     if (diagOpen) {
         DiagnosticsScreen(onClose = { DiagNav.open.value = false })

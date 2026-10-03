@@ -124,6 +124,13 @@ sealed class Reason {
      * within [reachM] of it. A shop's Wi-Fi you keep circling past, not something moving with you.
      */
     data class StaysPut(val reachM: Double, val decay: Double) : Reason()
+    /**
+     * An access point only ever heard within [extentM] of one area: a fixed router fits that, and so
+     * would a follower that never left the area with you. Not enough movement to tell: no alert.
+     */
+    data class OneAreaOnly(val extentM: Double) : Reason()
+    /** Beacon uptime: running for [days] without a reboot. Typical of a fixed router; information only. */
+    data class ApUptime(val days: Double) : Reason()
 }
 
 enum class EntityKind { WIFI_CLIENT, WIFI_AP, BLE_DEVICE, BLE_TRACKER }
@@ -183,14 +190,34 @@ class EntityReport(
     val memberIds: Set<String> = setOf(entityId),
     /** Decoded HT capabilities summary (Wi-Fi clients), for transparency only — never drives linking. */
     val htProfile: String? = null,
+    /** Every address of this entity, oldest first, and how it was linked. */
+    val addressLinks: List<AddressLink> = emptyList(),
+    /** Access points: days since boot from the beacon timestamp, when known. */
+    val apUptimeDays: Double? = null,
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
-        memberIds, htProfile,
+        memberIds, htProfile, addressLinks, apUptimeDays,
     )
 }
+
+/** How an address came to belong to an entity (shown so you can judge the link yourself). */
+enum class LinkVia {
+    /** The address the entity was first seen with. */
+    ORIGINAL,
+    /** Wi-Fi: same probe fingerprint, 802.11 sequence number continued, similar signal. */
+    SEQUENCE,
+    /** BLE: same distinctive name and advert shape, right after the previous address went quiet. */
+    BLE_NAME,
+    /** Several addresses asking for the same rare networks. */
+    RARE_NETWORKS,
+    /** Access point with the same boot moment (beacon uptime) under a new name or address. */
+    AP_UPTIME,
+}
+
+class AddressLink(val address: MacAddress, val via: LinkVia, val firstMs: Long, val lastMs: Long, val sightings: Int)
 
 /** A client trying to connect to an access point (auth / (re)association request). */
 data class JoinAttempt(val bssid: MacAddress, val ssid: String, val kind: WifiKind, val count: Int, val lastMs: Long)
@@ -263,14 +290,21 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 ignored++
                 continue
             }
-            val r0 = score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route, ignore)
+            val via = { member: String ->
+                when {
+                    member == id -> null
+                    links.root[member] == id -> LinkVia.RARE_NETWORKS
+                    else -> LinkVia.AP_UPTIME
+                }
+            }
+            val r0 = score(id, list.sortedBy { it.sighting.timeMs }, nowMs, timeline, placeOfFix, familiarIds, id in residents, route, ignore, via)
             val members = list.map { it.entityId }.toSet()
             val r = if (members.size > 1) EntityReport(
                 r0.entityId, r0.kind, r0.score, r0.alert, r0.reasons, r0.placeIds, r0.windows, r0.firstSeenMs, r0.lastSeenMs,
                 r0.sightings, r0.activeMinutes, r0.maxRssi, r0.addresses, r0.ssids, r0.tracker, r0.bleCompanyId, r0.mobileAp,
                 r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
                 r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
-                r0.htProfile,
+                r0.htProfile, r0.addressLinks, r0.apUptimeDays,
             ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
@@ -305,6 +339,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         isResident: Boolean,
         route: RouteContext,
         ignore: IgnoreList = IgnoreList(),
+        mergedVia: (String) -> LinkVia? = { null },
     ): EntityReport {
         val first = list.first().sighting.timeMs
         val last = list.last().sighting.timeMs
@@ -334,6 +369,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var remoteId = false
         var droneId: String? = null
         val positioned = ArrayList<Triple<GeoFix, Int, String>>() // where you were, RSSI, receiver
+        var maxTsfUs = -1L
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
         for (es in list) {
@@ -352,6 +388,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 when (w.kind) {
                     WifiKind.BEACON, WifiKind.PROBE_RESP -> {
                         isAp = true
+                        if (w.tsfUs > maxTsfUs) maxTsfUs = w.tsfUs
                         if (text.isNotEmpty()) ssids += text
                         if (mobileAp == null) {
                             MobileAp.classify(text, w.bssid ?: s.address)?.let {
@@ -501,10 +538,21 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         if (effPlaces < 2) score = minOf(score, 0.3)
         // Geometry alone can't tell a follower from a fixed transmitter you keep walking around
         // (several "places" within its range). The signal can: see [stationary].
-        if (nPlaces >= 2) stationary(positioned)?.let { (reach, rho) ->
-            reasons += Reason.StaysPut(reach, rho)
+        val staysPut = if (nPlaces >= 2) stationary(positioned) else null
+        if (staysPut != null) {
+            reasons += Reason.StaysPut(staysPut.first, staysPut.second)
             score = minOf(score, STAYS_PUT_CAP)
+        } else if (isAp && nPlaces >= 2) {
+            // An access point heard only within one area: a fixed router fits, and nothing shows it
+            // left the area with you. Proof of following needs it heard farther apart than its range.
+            val extent = extentM(positioned)
+            if (extent < AP_ONE_AREA_M) {
+                reasons += Reason.OneAreaOnly(extent)
+                score = minOf(score, ONE_AREA_CAP)
+            }
         }
+        val uptimeDays = if (maxTsfUs > 0) maxTsfUs / 86_400e6 else null
+        if (uptimeDays != null && uptimeDays >= 1.0) reasons += Reason.ApUptime(uptimeDays)
         if (isResident) {
             reasons += Reason.KnownAtRoutine
             score = minOf(score, 0.25) // belongs to your routine environment: not a follower
@@ -556,7 +604,43 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             effectivePlaces = effPlaces,
             buckets = list.map { it.sighting.timeMs / 300_000L }.toSet(),
             htProfile = htProfile,
+            addressLinks = addressLinks(list, mergedVia),
+            apUptimeDays = uptimeDays,
         )
+    }
+
+    private fun addressLinks(list: List<EntitySighting>, mergedVia: (String) -> LinkVia?): List<AddressLink> {
+        class Acc(val first: EntitySighting) { var last = first.sighting.timeMs; var n = 0 }
+        val acc = LinkedHashMap<MacAddress, Acc>()
+        for (es in list) {
+            val a = acc.getOrPut(es.sighting.address) { Acc(es) }
+            a.last = maxOf(a.last, es.sighting.timeMs)
+            a.n += maxOf(1, es.sighting.mergedCount)
+        }
+        return acc.entries.map { (mac, a) ->
+            val member = a.first.entityId
+            // The address a resolver entity started with is its own id; later ones were stitched to it.
+            val original = member == dev.retrovision.core.identity.EntityResolver.defaultId(a.first.sighting.radio, mac)
+            val merged = mergedVia(member) // non-null: this whole resolver entity was merged in
+            val via = when {
+                original && merged != null -> merged
+                original -> LinkVia.ORIGINAL
+                a.first.sighting.radio == Radio.WIFI -> LinkVia.SEQUENCE
+                else -> LinkVia.BLE_NAME
+            }
+            AddressLink(mac, via, a.first.sighting.timeMs, a.last, a.n)
+        }.sortedBy { it.firstMs }
+    }
+
+    /** Largest distance between two of your positions where it was heard (≤ 150 evenly picked). */
+    private fun extentM(samples: List<Triple<GeoFix, Int, String>>): Double {
+        if (samples.size < 2) return 0.0
+        val pts = if (samples.size <= 150) samples else List(150) { samples[it * samples.size / 150] }
+        var best = 0.0
+        for (i in pts.indices) for (j in i + 1 until pts.size) {
+            best = maxOf(best, Geo.distanceM(pts[i].first.lat, pts[i].first.lon, pts[j].first.lat, pts[j].first.lon))
+        }
+        return best
     }
 
     /**
@@ -703,5 +787,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         const val STAYS_PUT_MAX_RHO = -0.2
         const val STAYS_PUT_MAX_Z = -4.0
         const val STAYS_PUT_CAP = 0.35
+        /**
+         * An outdoor AP can be heard ~250-300 m away, so a fixed one can be heard up to ~600 m apart
+         * as you walk past on opposite sides. Only beyond that is "it was there too" proof.
+         */
+        const val AP_ONE_AREA_M = 600.0
+        const val ONE_AREA_CAP = 0.45
     }
 }

@@ -121,6 +121,8 @@ Some OSes reset the sequence counter when they rotate the address, and recent de
 
 **What the HT capabilities tell you.** For a Wi-Fi client, the device details show the decoded 802.11 HT capabilities (e.g. "HT 20MHz · LDPC · SGI20 · 1×RxSTBC") — the PHY/driver features the device advertises. It is a **model-level clue, shared by every identical phone**, shown for transparency, not used to link rotations. Research shows these fields can be *decomposed* into subfields to cluster devices across a whole population (Puig et al., 2026, up to ~90% in a 22-device lab); Retrovision deliberately does not do that — population de-anonymisation is a tracking technique, the opposite of this tool's job, and it cannot tell two same-model phones apart anyway.
 
+**Seeing the links.** In a device's detail, *Linked addresses* lists every address with when it was heard and **why** it was linked: same probe fingerprint with the frame counter continuing, same distinctive Bluetooth name, same rare networks, or same access-point boot moment. The first address is marked as such. Check that the times follow on from each other: a real rotation has one address stop as the next one starts. The *Linked addresses* filter on *Devices* shows only entities with more than one address.
+
 **Randomised BLE addresses.** A new address is stitched to a previous one ("carry-over") only if:
 - the advertisement has a **distinctive, serial-like local name** (≥ 10 characters, or ≥ 4 with a digit, e.g. a fitness band broadcasting its serial), and
 - the coarse shape (company ID, service UUIDs, appearance) matches, and
@@ -197,6 +199,7 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
 - **Resident → score ≤ 0.25** (see *Places, routine places and residents*).
+- **Access point heard in one area only → score ≤ 0.45.** An access point heard only within **600 m** of one area (largest distance between your positions while hearing it) can't be told apart from a fixed router, whatever its signal does. That is twice a typical outdoor range: you can hear a fixed AP up to ~300 m away on either side. **Only being heard farther apart than that proves it moved with you.** A follower who stays within one neighbourhood with you is therefore not alerted on by position alone; co-movement, joined-after-you and turns still show in the reasons. In the old town of a city this removes the bulk of false alerts (shop, bar and city Wi-Fi heard over and over while you walk around).
 - **Stays put → score ≤ 0.35.** Walking around a block or between two squares, a fixed access point or beacon is heard at several 100 m "places", for the whole time, before and after every turn. Geometry alone makes it look like a follower. Its signal gives it away: it is loudest near one spot and fades the farther you walk from it. The app tests this on one receiver, with at least 16 positioned readings:
   1. It estimates the spot from the strongest readings of **half** the samples.
   2. It measures the fade on the **other half**: the rank correlation (Spearman ρ) between your distance from the spot and the RSSI.
@@ -230,6 +233,8 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Moves together with N other devices | See *Network signals* |
 | Known at your routine places | Resident: damped |
 | Stays in one spot … | Its signal fades as you walk away from one point: a fixed device you keep passing. Capped at 0.35 |
+| Access point only heard within ~N m of one area | Not enough movement to tell a fixed router from a follower. Capped at 0.45 |
+| Running for N days without a reboot | From the beacon clock. Typical of a fixed router. Information only: a portable router can run for days too |
 
 ### Worked examples
 
@@ -365,7 +370,7 @@ Every analysis cycle checks the **last 3 minutes** of Wi-Fi management frames an
 | **Deauth / disassoc flood** | ≥ **40** deauth+disassoc frames aimed at **one** BSSID within 3 min. Severity grows to 400 | Normal networks send a few deauths, spread across many BSSIDs (roaming, idle timeouts). An attack hammers one target. An earlier rule ("≥ 12 in total") fired on ordinary city traffic |
 | **Karma / MANA access point** | One AP answers probe responses for **≥ 5 different SSIDs** (severity saturates at 15) | A real AP has one name. A Karma AP says "yes" to every network your phone asks for, to lure it in |
 | **Evil twin of your network** | One of **your own SSIDs** (Settings → My networks) advertised from **≥ 2 BSSIDs** | Your home network should have one known AP. Add every BSSID of a mesh by listing it, or expect this to fire |
-| **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, and a signal spread (std dev) **≤ 6 dB**. Needs ≥ 2 min of history first | Walking or driving past real networks also brings many new ones, but they come from many places, so their signals spread widely. Fake ones all come from one transmitter |
+| **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, a signal spread (std dev) **≤ 6 dB**, and all of: median signal **≥ −80 dBm** (the transmitter is near you); **≥ 60 %** of them with the **same beacon template** (the information elements and their sizes, without name, channel and TIM: one tool sends one template); and either **many radios** (BSSIDs with different middle bytes for ≥ 60 % of them: random fake addresses) or **≥ 20 counted up from one base address** (more names than any real router serves). Needs ≥ 2 min of history first | Walking into range of city and shop Wi-Fi brings many new networks at once, all equally **weak** at the edge of reception, from a few multi-SSID routers. That fooled the first version in a field test (Ferrara old town). The signal, template and radio checks were added for it |
 | **BLE spam** (Flipper Zero / ESP32 "pop-up" attacks) | **≥ 25** random addresses within 1 min, each alive **≤ 10 s**, sending pairing pop-up adverts (Apple Proximity Pairing / Nearby Action, Google Fast Pair, Microsoft Swift Pair, Samsung EasySetup), with a signal spread **≤ 6 dB** | Real earbuds keep an address for minutes, and a crowd's signals spread widely. A spammer cycles a new address every advert from one spot |
 
 Not flagged, on purpose: an SSID served by many BSSIDs in general (normal for mesh, enterprise and hotspot chains) and simply "many APs around".
@@ -433,6 +438,7 @@ Use: see what is really talking on a network near you, for example devices conne
 
 **Radar** (Status screen) shows what you are hearing right now:
 - **Distance from centre = signal strength**, smoothed (EWMA). Closer to the centre means louder, which *usually* means nearer. Walls, bodies, antennas and transmit power all distort this.
+- **The lines.** A line from the centre to a dot is that device's **estimated direction**. A dot without a line has an unknown direction: its angle on the screen is arbitrary and means nothing.
 - **Direction** is shown only when it can be estimated, and is otherwise drawn as a ring with no direction. With one omnidirectional antenna there is no true angle of arrival. The only cue is that **walking toward a transmitter raises its signal**. The app fits a plane `rssi ≈ a + b·east + c·north` over the last 90 s of samples (needing ≥ 8 samples and ≥ 15 m of your own movement). The slope points toward the device, and the fit's R² is the confidence. A direction is drawn only at R² ≥ 0.4. If you walked in a straight line, it can only tell ahead from behind.
 - Something moving **with** you keeps a constant signal, so it gets no direction. That is correct, not a bug.
 - Alerting devices are highlighted. Tap a blip for details.
@@ -440,6 +446,14 @@ Use: see what is really talking on a network near you, for example devices conne
 **Find it** turns one device into a warmer/colder meter: −100 dBm reads as cold and −35 dBm as on top of it, with beeps that speed up as the signal grows. Walk slowly, turn around (your body blocks signal), and search where it peaks. It cannot point; it only tells you hotter or colder.
 
 ## Alerts and notifications
+
+**The alert grid.** Tap the *Alerts* card (or the red attacks card) on *Status* to open every current alert as a tile: radio attacks, devices that may be following you, drones. Each tile shows the score or severity, how long ago, and your verdict if you gave one. Tap a tile for the evidence:
+- **Attacks:** what the attack is, the numbers that triggered it (frames, channel, median signal, template share, radios), the network names and transmitter addresses involved, and how it can be wrong.
+- **Following:** the full device detail (reasons, linked addresses, lookups).
+- **Drones:** the Remote ID data and addresses.
+
+**Your verdict.** *Makes sense* / *False alarm* (and *Suspicious* / *False alarm* for devices). It's stored on the phone with the alert's evidence class. *False alarm* silences that alert's notifications for 24 h. The verdicts are ground truth for tuning the thresholds.
+
 
 All of these are in Settings → Notifications:
 

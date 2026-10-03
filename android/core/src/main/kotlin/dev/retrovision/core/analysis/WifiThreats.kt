@@ -42,7 +42,18 @@ object WifiThreats {
         val bssids: List<MacAddress> = emptyList(),
         val firstMs: Long = 0,
         val lastMs: Long = 0,
-    )
+        /** Example network names involved (beacon flood, KARMA). */
+        val ssids: List<String> = emptyList(),
+        val channel: Int = 0,
+        /** Median signal of the frames involved, dBm (0 = unknown). */
+        val rssi: Int = 0,
+        /** Beacon flood evidence: share of BSSIDs with the same beacon template, and distinct radios. */
+        val templateShare: Double = 0.0,
+        val radios: Int = 0,
+    ) {
+        /** Stable identity for snoozes, verdicts and notification cooldowns. */
+        val key: String get() = "threat:$kind:${bssid ?: ""}:${ssid ?: ""}"
+    }
 
     class Config(
         /**
@@ -61,6 +72,20 @@ object WifiThreats {
         val floodSaturation: Int = 120,
         /** Signal spread (std dev, dB) below which many sources look like ONE transmitter. */
         val oneTransmitterStdDb: Double = 6.0,
+        /**
+         * Beacon flood: the fake networks come from a transmitter near you. Real networks you walk
+         * into range of appear at the edge of reception, all weak (and so all "the same" signal).
+         */
+        val floodMinMedianRssi: Int = -80,
+        /** Share of the new networks that must share one beacon template (one tool, one radio). */
+        val floodMinTemplateShare: Double = 0.6,
+        /**
+         * Distinct radios (BSSIDs grouped by their middle bytes) per new network. A multi-SSID
+         * router derives its BSSIDs from one base address; a flood tool makes up a random one each time.
+         */
+        val floodMinRadioShare: Double = 0.6,
+        /** ...or this many fake networks counted up from ONE base address (real routers serve ≤ 16). */
+        val floodMinOneBase: Int = 20,
         /** BLE spam: distinct short-lived popup addresses in [spamWindowMs]. */
         val spamWindowMs: Long = 60_000,
         val spamMinAddresses: Int = 25,
@@ -88,6 +113,8 @@ object WifiThreats {
                     severity = ((n - cfg.deauthMinPerBssid).toDouble() / (cfg.deauthSaturation - cfg.deauthMinPerBssid)).coerceIn(0.0, 1.0).coerceAtLeast(0.35),
                     count = n,
                     bssid = top.key,
+                    rssi = median(top.value.map { it.rssi }),
+                    channel = top.value.first().wifi?.channel ?: 0,
                     firstMs = top.value.minOf { it.timeMs },
                     lastMs = top.value.maxOf { it.timeMs },
                 )
@@ -107,6 +134,8 @@ object WifiThreats {
                     distinctSsids = ssids.size,
                     firstMs = list.minOf { it.timeMs },
                     lastMs = list.maxOf { it.timeMs },
+                    ssids = ssids.take(20),
+                    rssi = median(list.map { it.rssi }),
                 )
             }
         }
@@ -139,6 +168,33 @@ object WifiThreats {
         return out.sortedByDescending { it.severity }
     }
 
+    private fun median(v: List<Int>): Int {
+        val x = v.filter { it != 0 }.sorted()
+        return if (x.isEmpty()) 0 else x[x.size / 2]
+    }
+
+    /**
+     * Beacon template: the information elements in order with their sizes, without the fields that
+     * differ per network (SSID, channel, TIM). One flood tool sends one template for every fake.
+     */
+    internal fun template(ies: ByteArray): String? {
+        if (ies.isEmpty()) return null
+        val sb = StringBuilder()
+        var i = 0
+        while (i + 2 <= ies.size) {
+            val id = ies[i].toInt() and 0xFF
+            val len = ies[i + 1].toInt() and 0xFF
+            if (i + 2 + len > ies.size) break
+            when (id) {
+                0, 3, 5 -> Unit
+                221 -> if (len >= 4) sb.append("v").append("%02x%02x%02x%02x".format(ies[i + 2], ies[i + 3], ies[i + 4], ies[i + 5])).append(':').append(len).append(',')
+                else -> sb.append(id).append(':').append(len).append(',')
+            }
+            i += 2 + len
+        }
+        return sb.toString()
+    }
+
     private fun std(v: List<Int>): Double {
         if (v.size < 2) return 0.0
         val m = v.average()
@@ -160,13 +216,33 @@ object WifiThreats {
         val ssids = best.mapNotNull { it.wifi?.ssidText?.takeIf { s -> s.isNotEmpty() } }.toSet()
         if (ssids.size < cfg.floodMinNew / 2) return null
         if (std(best.map { it.rssi }.filter { it != 0 }) > cfg.oneTransmitterStdDb) return null
+        // Walking into range of real networks also makes many appear at once on one channel, all
+        // equally weak. Three checks tell a flood tool apart (field report: city centre at walking pace).
+        val med = median(best.map { it.rssi })
+        if (med == 0 || med < cfg.floodMinMedianRssi) return null
+        val templates = best.mapNotNull { it.wifi?.ies?.let { ies -> template(ies) } }
+        if (templates.size < best.size / 2) return null
+        val topShare = templates.groupingBy { it }.eachCount().maxOf { it.value }.toDouble() / best.size
+        if (topShare < cfg.floodMinTemplateShare) return null
+        val bssids = best.map { it.wifi?.bssid ?: it.address }
+        val families = bssids.groupingBy { (it.bits ushr 8) and 0xFFFFFFFFL }.eachCount()
+        val radios = families.size
+        // Random fake BSSIDs: many radios. Some tools instead count up from one base address
+        // (more names than any real multi-SSID router serves). Real routers: neither.
+        if (radios < cfg.floodMinRadioShare * best.size && families.values.max() < cfg.floodMinOneBase) return null
         return Threat(
             Kind.BEACON_FLOOD,
             severity = ((best.size - cfg.floodMinNew).toDouble() / (cfg.floodSaturation - cfg.floodMinNew)).coerceIn(0.0, 1.0).coerceAtLeast(0.6),
             count = best.size,
             distinctSsids = ssids.size,
+            bssids = bssids.take(30),
             firstMs = best.minOf { it.timeMs },
             lastMs = best.maxOf { it.timeMs },
+            ssids = ssids.take(20).toList(),
+            channel = best.first().wifi!!.channel,
+            rssi = med,
+            templateShare = topShare,
+            radios = radios,
         )
     }
 

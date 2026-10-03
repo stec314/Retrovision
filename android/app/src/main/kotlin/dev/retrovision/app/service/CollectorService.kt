@@ -653,6 +653,7 @@ class CollectorService : Service() {
         if (prefs.alertsEnabled && prefs.droneAlerts && !inQuietHours(now)) {
             for (d in drones) {
                 val key = "drone:${d.key}"
+                if (key in snoozed) continue
                 val last = notifiedAt[key]
                 if (now - d.lastMs <= 2 * 60_000L && (last == null || now - last > 30 * 60_000L)) {
                     notifiedAt[key] = now
@@ -667,7 +668,8 @@ class CollectorService : Service() {
         } else emptyList()
         if (prefs.alertsEnabled && !inQuietHours(now)) {
             for (th in threats.filter { it.severity >= 0.6 }) {
-                val key = "threat:${th.kind}:${th.bssid}:${th.ssid}"
+                val key = th.key
+                if (key in snoozed) continue // "False alarm" in the alert detail
                 val last = notifiedAt[key]
                 if (last == null || now - last > 10 * 60_000L) {
                     notifiedAt[key] = now

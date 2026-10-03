@@ -94,6 +94,55 @@ class StaysPutTest {
         }
     }
 
+    /** Old-town reality: walls and crowds swamp the fade. Only heard around the block, never beyond. */
+    @Test fun apHeardOnlyAroundOneAreaNeverAlerts() {
+        val rnd = Random(5)
+        val s = (0..now / 15_000).map { i ->
+            val t = i * 15_000
+            EntitySighting(
+                "gree",
+                Sighting(
+                    t, Radio.WIFI, MacAddress(0x502CC6020546L), (-80 + rnd.nextGaussian() * 8).toInt(),
+                    wifi = WifiDetail(WifiKind.BEACON, 1, "c6020546".toByteArray(), MacAddress(0x502CC6020546L), 0, ByteArray(0)),
+                    probeId = "probe",
+                ),
+            )
+        }
+        val r = analyzer.analyze(now, s, fixes).entities.single()
+        assertTrue(r.reasons.any { it is Reason.OneAreaOnly || it is Reason.StaysPut })
+        assertFalse(r.alert)
+    }
+
+    /** A hotspot that is still there 2 km later is not "one area". */
+    @Test fun apThatTravelsFarStillAlerts() {
+        val walk = (0..now / 5000).map { i -> GeoFix(i * 5000, lat0, lon0 + (i * 5000 / 1000.0 * 1.4) * mLon, 5f) } // 10 km east
+        val s = (0..now / 15_000).map { i ->
+            val t = i * 15_000
+            EntitySighting(
+                "car",
+                Sighting(
+                    t, Radio.WIFI, MacAddress(0x00AABB112233L), -60,
+                    wifi = WifiDetail(WifiKind.BEACON, 6, "Golf".toByteArray(), MacAddress(0x00AABB112233L), 0, ByteArray(0)),
+                    probeId = "probe",
+                ),
+            )
+        }
+        val r = analyzer.analyze(now, s, walk).entities.single()
+        assertTrue(r.reasons.none { it is Reason.OneAreaOnly || it is Reason.StaysPut })
+        assertTrue(r.alert)
+    }
+
+    @Test fun rotatedAddressesShowHowTheyWereLinked() {
+        val a = MacAddress(0x02AAAAAAAAAAL)
+        val b = MacAddress(0x02BBBBBBBBBBL)
+        fun probe(mac: MacAddress, t: Long) = EntitySighting(
+            "wifi:$a",
+            Sighting(t, Radio.WIFI, mac, -60, wifi = WifiDetail(WifiKind.PROBE_REQ, 1, ByteArray(0), null, 0, ByteArray(0))),
+        )
+        val r = analyzer.analyze(now, listOf(probe(a, 1000), probe(a, 2000), probe(b, 70_000)), fixes).entities.single()
+        assertTrue(r.addressLinks.map { it.via } == listOf(LinkVia.ORIGINAL, LinkVia.SEQUENCE))
+    }
+
     @Test fun tooFewSamplesDecideNothing() {
         val f = fixes.take(10).map { Triple(it, -60, "p") }
         assertNull(analyzer.stationary(f))

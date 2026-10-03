@@ -188,11 +188,12 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
         val alerts = analysis?.alerts.orEmpty()
-        Card(Modifier.fillMaxWidth()) {
+        Card(Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true }) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(Texts.tr("Alerts", "Allerte"), style = MaterialTheme.typography.titleMedium)
                 if (alerts.isEmpty()) Text(Texts.tr("Nothing suspicious in the analysed window.", "Niente di sospetto nella finestra analizzata."))
                 alerts.take(5).forEach { Text("• ${Texts.entityLabel(it)}  ${"%.0f".format(it.score * 100)}%") }
+                Text(Texts.tr("Tap for details and your verdict ›", "Tocca per dettagli e giudizio ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
                 val load by Collector.analysisLoad.collectAsState()
                 if (load.analysedRows > 0) {
                     Text(
@@ -212,7 +213,7 @@ fun StatusScreen(modifier: Modifier) {
         val threats by Collector.threats.collectAsState()
         if (threats.isNotEmpty()) {
             Card(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
                 colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -220,6 +221,7 @@ fun StatusScreen(modifier: Modifier) {
                     threats.take(5).forEach {
                         Text("• " + Texts.threat(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onErrorContainer)
                     }
+                    Text(Texts.tr("Tap for the evidence ›", "Tocca per le prove ›"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onErrorContainer)
                 }
             }
         }
@@ -230,7 +232,7 @@ fun StatusScreen(modifier: Modifier) {
         val drones by Collector.drones.collectAsState()
         if (drones.isNotEmpty()) {
             Card(
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().clickable { AlertsNav.open.value = true },
                 colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
             ) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {

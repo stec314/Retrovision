@@ -121,6 +121,7 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", {
         it.category in setOf(DeviceCategory.TV, DeviceCategory.INPUT, DeviceCategory.HOME, DeviceCategory.BEACON, DeviceCategory.BLE_OTHER)
     }),
+    LINKED("🔗", "Linked addresses", "Indirizzi collegati", { it.addresses.size > 1 }),
     RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", { it.macTrust != MacTrust.STABLE }),
     ;
 
@@ -186,6 +187,7 @@ private fun Badge(text: String, color: Color) {
 private val SEARCH = Color(0xFFFFC857)
 private val JOIN = Color(0xFFFF8A3D)
 private val WARN = Color(0xFFFF9E80)
+private val LINK = Color(0xFF7FD8FF)
 
 fun trustLabel(t: MacTrust) = when (t) {
     MacTrust.STABLE -> Texts.tr("Fixed MAC", "MAC fisso")
@@ -215,7 +217,7 @@ fun EntityCard(r: EntityReport, onClick: (() -> Unit)? = null) {
                 LinearProgressIndicator(progress = { r.score.toFloat() }, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (r.macTrust != MacTrust.STABLE) Badge("⚠ " + trustLabel(r.macTrust), WARN)
-                    if (r.addresses.size > 1) Badge(Texts.tr("${r.addresses.size} addresses", "${r.addresses.size} indirizzi"), WARN)
+                    if (r.addresses.size > 1) Badge("🔗 " + Texts.tr("${r.addresses.size} addresses linked", "${r.addresses.size} indirizzi collegati"), LINK)
                     r.joinAttempts.firstOrNull()?.let {
                         Badge("🔗 " + Texts.tr("joining ", "si collega a ") + (it.ssid.ifEmpty { it.bssid.toString() }), JOIN)
                     }
@@ -257,7 +259,34 @@ fun DeviceDetails(r: EntityReport) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
-        Text(r.addresses.joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        if (r.addressLinks.size > 1) {
+            Text("🔗 " + Texts.tr("Linked addresses", "Indirizzi collegati"), style = MaterialTheme.typography.titleSmall, color = LINK)
+            Text(
+                Texts.tr(
+                    "These addresses were judged to be the same device. Each line says why; check that the times follow on from each other.",
+                    "Questi indirizzi sono stati giudicati lo stesso dispositivo. Ogni riga dice perché; controlla che gli orari si susseguano.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            r.addressLinks.forEach { l ->
+                Column(Modifier.padding(start = 4.dp, top = 2.dp)) {
+                    Text(
+                        "${l.address}  ${fmt.format(Date(l.firstMs))}–${fmt.format(Date(l.lastMs))} · ×${l.sightings}",
+                        fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+                    )
+                    Text(Texts.linkVia(l.via), style = MaterialTheme.typography.bodySmall, color = if (l.via == dev.retrovision.core.analysis.LinkVia.ORIGINAL) Color.Unspecified else LINK)
+                }
+            }
+        } else {
+            Text(r.addresses.joinToString("\n"), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+        }
+        r.apUptimeDays?.let { d ->
+            Text(
+                Texts.tr("Access point up for ", "Access point acceso da ") + (if (d >= 1) "%.1f ".format(d) + Texts.tr("days", "giorni") else "%.0f min".format(d * 1440)) +
+                    Texts.tr(" (beacon clock). Days: likely a fixed router. Minutes: just switched on (hotspot, car, or a router after a reboot).", " (orologio del beacon). Giorni: probabile router fisso. Minuti: appena acceso (hotspot, auto, o router riavviato)."),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         r.htProfile?.let { ht ->
             Text(

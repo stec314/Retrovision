@@ -179,8 +179,8 @@ fun RadarView() {
         val withBearing = frame.blips.count { it.bearingDeg != null }
         Text(
             Texts.tr(
-                "Tap a device for details. Radius = signal (centre = closest). Direction is real only with a pointer ($withBearing now); hollow = unknown. Red = alert.",
-                "Tocca un dispositivo per i dettagli. Raggio = segnale (centro = più vicino). La direzione è reale solo con la freccia ($withBearing ora); vuoto = ignota. Rosso = allarme.",
+                "Tap a device for details. Distance from the centre = signal (centre = closest). A line from the centre = estimated direction of that device ($withBearing now), worked out from how its signal changed while you walked. No line = direction unknown: the angle of the dot means nothing. Red = alert.",
+                "Tocca un dispositivo per i dettagli. Distanza dal centro = segnale (centro = più vicino). Una linea dal centro = direzione stimata di quel dispositivo ($withBearing ora), ricavata da come è cambiato il segnale mentre camminavi. Senza linea = direzione ignota: l'angolo del punto non significa nulla. Rosso = allerta.",
             ),
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
