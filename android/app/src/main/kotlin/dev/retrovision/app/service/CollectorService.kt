@@ -21,7 +21,9 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.util.SerialInputOutputManager
+import dev.retrovision.app.AnalysisLoad
 import dev.retrovision.app.Collector
+import dev.retrovision.app.Diag
 import dev.retrovision.app.RadarBlip
 import dev.retrovision.app.RadarFrame
 import dev.retrovision.app.ConnectionUi
@@ -69,6 +71,18 @@ class CollectorService : Service() {
     private val prefs get() = app.prefs
     private val resolver = EntityResolver()
     private val queue = Channel<SightingRow>(capacity = 16_384)
+
+    /** Repeats collapsed before storage: one row per device/kind/SSID per 10 s (see SightingBuckets). */
+    private val storeBuckets = dev.retrovision.core.analysis.SightingBuckets(STORE_BUCKET_MS)
+
+    /** The analysis window, kept in memory: no database scan every minute. */
+    private val liveWindow = dev.retrovision.core.analysis.SightingBuckets(WINDOW_BUCKET_MS, MAX_ANALYSIS_ROWS)
+
+    /** Live sightings at or after this time go to [liveWindow]; older ones come from the database. */
+    @Volatile private var liveFromMs = Long.MAX_VALUE
+
+    /** Every frame of the last few minutes, for attack and drone detection (they count frames). */
+    private val recentRaw = ArrayDeque<Sighting>()
     private var locationManager: LocationManager? = null
     private var lastFixWritten = 0L
     private val notifiedAt = HashMap<String, Long>()
@@ -91,12 +105,15 @@ class CollectorService : Service() {
             return START_NOT_STICKY
         }
         Collector.running.value = true
+        Collector.analyzeOne = { id -> analyzeSingle(id) }
+        Diag.i("service", "collection started")
         Collector.probeLedOn.value = app.prefs.probeLedOn
         Collector.captureDataFrames.value = app.prefs.captureDataFrames
         startLocation()
         registerWifiCallback()
         scope.launch { connectionLoop() }
         scope.launch { writerLoop() }
+        scope.launch { storeFlushLoop() }
         scope.launch { analysisLoop() }
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
@@ -106,14 +123,27 @@ class CollectorService : Service() {
 
     override fun onDestroy() {
         SessionRecorder.stop()
+        Diag.i("service", "collection stopped")
         Collector.running.value = false
         Collector.session = null
+        Collector.analyzeOne = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
         runCatching { locationManager?.removeUpdates(locationListener) }
         phoneBle?.stop()
         motion?.stop()
         netCallback?.let { cb -> runCatching { getSystemService(android.net.ConnectivityManager::class.java)?.unregisterNetworkCallback(cb) } }
         scope.cancel()
+        // Don't lose the last few seconds: open slots and anything still queued go to the database.
+        val pending = ArrayList<SightingRow>()
+        while (true) pending += queue.tryReceive().getOrNull() ?: break
+        storeBuckets.drainAll().mapTo(pending) { it.sighting.toRow(it.entityId) }
+        if (pending.isNotEmpty()) {
+            val dao = app.db.dao()
+            Thread {
+                runCatching { kotlinx.coroutines.runBlocking { dao.insertSightings(pending) } }
+                    .onFailure { Diag.e("db", "final flush of ${pending.size} rows failed", it) }
+            }.start()
+        }
         super.onDestroy()
     }
 
@@ -294,6 +324,7 @@ class CollectorService : Service() {
             }
         }
         val res = synchronized(resolver) { resolver.resolve(s) }
+        if (s.rssi != 0 && res.entityId in Collector.findTarget) Collector.findSamples.tryEmit(s.timeMs to s.rssi)
         if (s.rssi != 0) {
             val fix = Collector.location.value
             // Radar bearing comes from how RSSI changes as you move: a drifting fix would invent a direction.
@@ -305,16 +336,27 @@ class CollectorService : Service() {
                 }
             }
         }
-        queue.trySend(s.toRow(res.entityId)) // full queue: drop rather than block the USB thread
+        val es = dev.retrovision.core.analysis.EntitySighting(res.entityId, s)
+        storeBuckets.add(es)
+        if (s.timeMs >= liveFromMs) liveWindow.add(es)
+        synchronized(recentRaw) {
+            recentRaw.addLast(s)
+            while (recentRaw.isNotEmpty() && s.timeMs - recentRaw.first().timeMs > RECENT_RAW_MS) recentRaw.removeFirst()
+            while (recentRaw.size > RECENT_RAW_MAX) recentRaw.removeFirst()
+        }
     }
 
     /** Builds the live radar frame: smoothed RSSI as distance, movement-derived bearing when usable. */
     private suspend fun radarLoop() {
         val smooth = HashMap<String, Double>()
+        var lastAnalysis: dev.retrovision.core.analysis.AnalysisResult? = null
+        var reports: Map<String, dev.retrovision.core.analysis.EntityReport> = emptyMap()
         while (scope.isActive) {
             delay(1500)
             val now = System.currentTimeMillis()
-            val reports = Collector.analysis.value?.entities.orEmpty().associateBy { it.entityId }
+            // Re-indexed only when a new analysis arrives (tens of thousands of entities), not every frame.
+            val a = Collector.analysis.value
+            if (a !== lastAnalysis) { lastAnalysis = a; reports = a?.entities.orEmpty().associateBy { it.entityId } }
             val blips = ArrayList<RadarBlip>()
             var movedM = 0.0
             synchronized(radarLock) {
@@ -392,9 +434,11 @@ class CollectorService : Service() {
         val port = try {
             usb.openPort(dev, UsbAccess.PROBE_BAUD, release = true)
         } catch (e: Exception) {
+            Diag.e("usb", "cannot open port", e)
             null
         }
         if (port == null) {
+            Diag.w("usb", "port not opened (${"%04x:%04x".format(dev.vendorId, dev.productId)})")
             Collector.connection.value = ConnectionUi(Link.ERROR, name, error = Texts.cannotOpenPort())
             delay(3000)
             return
@@ -407,36 +451,100 @@ class CollectorService : Service() {
         val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value })
         Collector.session = session
         val done = CompletableDeferred<Unit>()
+        // The USB reader only copies bytes into [inbox]; decoding, identity resolution and the DB
+        // queue run on a separate thread. A GC pause or a busy core then delays processing instead of
+        // stalling the USB endpoint, which made the probe's writes time out and drop frames.
+        val inbox = java.util.concurrent.ArrayBlockingQueue<ByteArray>(INBOX_CHUNKS)
         val io = SerialInputOutputManager(
             port,
             object : SerialInputOutputManager.Listener {
-                override fun onNewData(data: ByteArray) = session.onBytes(data)
+                override fun onNewData(data: ByteArray) {
+                    // Full = processing is minutes behind: drop (the decoder resyncs on the next frame).
+                    if (!inbox.offer(data)) {
+                        Diag.update { it.copy(inboxDrops = it.inboxDrops + 1) }
+                        if (Diag.metrics.value.inboxDrops % 100 == 1L) Diag.w("usb", "decoder behind: USB data dropped (${Diag.metrics.value.inboxDrops} chunks)")
+                    }
+                }
                 override fun onRunError(e: Exception) {
+                    Diag.update { it.copy(usbErrors = it.usbErrors + 1) }
+                    Diag.w("usb", "reader stopped: ${e.javaClass.simpleName}: ${e.message.orEmpty().take(200)}")
                     done.complete(Unit)
                 }
             },
         )
+        // Default is one 64-byte USB packet per read call, which caps throughput near what the probe
+        // sends in a busy place. One call can return many packets.
+        io.readBufferSize = 16 * 1024
+        val worker = Thread({
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val chunk = inbox.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                    runCatching { session.onBytes(chunk) }.onFailure { Diag.e("decode", "frame handling failed", it) }
+                }
+            } catch (_: InterruptedException) {
+            }
+        }, "rv-probe-decode")
+        worker.start()
         io.start()
         session.start()
+        Diag.update { it.copy(connections = it.connections + 1) }
+        Diag.i("usb", "connected: $name")
+        // The session state changes on every frame; the UI only needs it a few times a second.
         val watcher = scope.launch {
-            session.state.collect { Collector.connection.value = ConnectionUi(Link.CONNECTED, name, it) }
+            var phase: dev.retrovision.app.probe.Phase? = null
+            var dropped = 0L
+            while (isActive) {
+                val st = session.state.value
+                Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
+                if (st.phase != phase) {
+                    phase = st.phase
+                    Diag.i("probe", "phase ${st.phase}" + (st.info?.let { " · fw ${it.firmware} · proto ${it.protocol}" } ?: "") +
+                        (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
+                }
+                if (st.probeDropped > dropped + 500) {
+                    dropped = st.probeDropped
+                    Diag.w("probe", "probe queue dropped ${st.probeDropped} frames · seq gaps ${st.lostFrames} · ${"%.0f".format(st.chipTempC)} °C")
+                }
+                Diag.update { it.copy(inboxBacklog = inbox.size) }
+                delay(400)
+            }
         }
         try {
             while (!done.isCompleted && !Collector.usbPaused.get() && usb.isAttached(dev) && scope.isActive) {
                 delay(500)
                 // Recover a stuck probe without making the user unplug it.
-                if (session.tick() == ProbeSession.Health.DEAD) break
+                when (session.tick()) {
+                    ProbeSession.Health.DEAD -> { Diag.w("probe", "no data for 45 s: reopening the port"); break }
+                    ProbeSession.Health.KICKED -> Diag.w("probe", "link stuck: asked the probe to reboot")
+                    else -> Unit
+                }
             }
         } finally {
             watcher.cancel()
             session.stop()
             Collector.session = null
             runCatching { io.stop() }
+            worker.interrupt()
             runCatching { port.close() }
+            Diag.i("usb", "disconnected")
         }
     }
 
     // ---- database --------------------------------------------------------------
+
+    /** Moves closed 10 s slots from [storeBuckets] to the write queue. */
+    private suspend fun storeFlushLoop() {
+        while (scope.isActive) {
+            delay(2_000)
+            for (es in storeBuckets.drainClosed(System.currentTimeMillis())) {
+                // Full queue: drop rather than block.
+                if (queue.trySend(es.sighting.toRow(es.entityId)).isFailure) {
+                    Diag.update { it.copy(queueDrops = it.queueDrops + 1) }
+                    if (Diag.metrics.value.queueDrops % 1000 == 1L) Diag.w("db", "write queue full: sightings dropped (${Diag.metrics.value.queueDrops} so far)")
+                }
+            }
+        }
+    }
 
     private suspend fun writerLoop() {
         val dao = app.db.dao()
@@ -449,7 +557,14 @@ class CollectorService : Service() {
                 val next = queue.tryReceive().getOrNull() ?: break
                 batch += next
             }
-            runCatching { dao.insertSightings(batch) }
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            runCatching { dao.insertSightings(batch) }.onFailure {
+                Diag.update { m -> m.copy(writerErrors = m.writerErrors + 1) }
+                Diag.e("db", "insert of ${batch.size} rows failed", it)
+            }
+            val ms = android.os.SystemClock.elapsedRealtime() - t0
+            Diag.update { it.copy(writerBatches = it.writerBatches + 1, writerLastRows = batch.size, writerLastMs = ms, writerMaxMs = maxOf(it.writerMaxMs, ms)) }
+            if (ms > 3_000) Diag.w("db", "slow insert: ${batch.size} rows in $ms ms")
         }
     }
 
@@ -465,10 +580,42 @@ class CollectorService : Service() {
             if (sinceLast >= 60_000 || trig != lastTrigger) {
                 lastTrigger = trig
                 sinceLast = 0
-                runCatching { analyzeOnce() }
+                val t0 = android.os.SystemClock.elapsedRealtime()
+                val r = runCatching { analyzeOnce() }
+                val ms = android.os.SystemClock.elapsedRealtime() - t0
+                r.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it } // service stopping
+                r.onFailure { e ->
+                    Diag.update { it.copy(analysisErrors = it.analysisErrors + 1) }
+                    Diag.e("analysis", "run failed after $ms ms · ${Diag.heapLine()}", e)
+                }
+                Diag.update { it.copy(analysisRuns = it.analysisRuns + 1, analysisLastMs = ms, analysisMaxMs = maxOf(it.analysisMaxMs, ms)) }
+                if (ms > 15_000) Diag.w("analysis", "slow run: $ms ms · ${Diag.heapLine()}")
             }
         }
     }
+
+    /** One device's full report from the live window (same settings as the periodic analysis). */
+    private suspend fun analyzeSingle(id: String): dev.retrovision.core.analysis.EntityReport? =
+        kotlinx.coroutines.withContext(Dispatchers.Default) {
+            val dao = app.db.dao()
+            val now = System.currentTimeMillis()
+            val cfg = AnalysisConfig(
+                lookbackMs = prefs.lookbackMin * 60_000L,
+                alertScore = prefs.alertScore.toDouble(),
+                alertMinPlaces = prefs.alertMinPlaces,
+                maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
+                maxReports = prefs.maxReports,
+            )
+            val from = now - cfg.lookbackMs
+            val mine = liveWindow.snapshot(from).filter { it.entityId == id }
+            if (mine.isEmpty()) return@withContext null
+            Analyzer(cfg).analyze(
+                now, mine, dao.fixesSince(from).map { it.toFix() },
+                IgnoreList(apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
+                familiar = dao.familiarNow().map { it.toModel() },
+                residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
+            ).entities.firstOrNull()
+        }
 
     private suspend fun analyzeOnce() {
         val prefs = app.prefs
@@ -479,9 +626,27 @@ class CollectorService : Service() {
             alertScore = prefs.alertScore.toDouble(),
             alertMinPlaces = prefs.alertMinPlaces,
             maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
+            maxReports = prefs.maxReports,
         )
         val from = now - cfg.lookbackMs
-        val rows = dao.sightingsSince(from)
+        // The window lives in memory. It is filled from the database once (at start, or when the
+        // look-back changes); after that only live sightings are added.
+        if (warmedLookbackMs != cfg.lookbackMs) {
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            liveFromMs = now
+            liveWindow.clear()
+            for (r in dao.sightingsThinned(from, now, WINDOW_BUCKET_MS, MAX_ANALYSIS_ROWS)) {
+                liveWindow.add(EntitySighting(r.entityId, r.toSighting()))
+            }
+            warmedLookbackMs = cfg.lookbackMs
+            Diag.i("analysis", "window loaded from storage: ${liveWindow.size} slots in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
+        }
+        val window: List<EntitySighting> = liveWindow.snapshot(from)
+        Collector.analysisLoad.value = AnalysisLoad(
+            window.sumOf { maxOf(1, it.sighting.mergedCount).toLong() }, window.size, WINDOW_BUCKET_MS,
+            window.size >= MAX_ANALYSIS_ROWS,
+            window.firstOrNull()?.sighting?.timeMs ?: 0L,
+        )
         val fixes = dao.fixesSince(from).map { it.toFix() }
         val ignoreIds = dao.ignoresNow().map { it.entityId }.toSet()
         // "False alarm" feedback snoozes that device's alerts for a day.
@@ -495,7 +660,7 @@ class CollectorService : Service() {
             ) else emptyList()
         val result = Analyzer(cfg).analyze(
             now,
-            rows.map { EntitySighting(it.entityId, it.toSighting()) },
+            window,
             fixes,
             IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
             familiar = familiar,
@@ -506,26 +671,22 @@ class CollectorService : Service() {
         learnCompanions(result, now)
         recordFieldTest(result, now)
 
-        // Wi-Fi attack detection over the last few minutes (high-certainty, separate from following).
-        val recentWifi = rows.asSequence()
-            .filter { it.radio == 0 && now - it.timeMs <= 3 * 60_000L }
-            .map { it.toSighting() }.toList()
-        val recentBle = rows.asSequence()
-            .filter { it.radio == 1 && now - it.timeMs <= 60_000L }
-            .map { it.toSighting() }.toList()
+        // Attack and drone detection need every frame (deauth counts, drone tracks): a short,
+        // unthinned window, small by construction.
+        val recent = synchronized(recentRaw) { recentRaw.toList() }.filter { now - it.timeMs <= RECENT_RAW_MS }
+        val recentWifi = recent.filter { it.radio == dev.retrovision.core.model.Radio.WIFI && now - it.timeMs <= 3 * 60_000L }
+        val recentBle = recent.filter { it.radio == dev.retrovision.core.model.Radio.BLE && now - it.timeMs <= 60_000L }
         val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
             dev.retrovision.core.analysis.WifiThreats.detectBle(recentBle)
         Collector.threats.value = threats
 
         // Drones heard in the last 5 minutes (Remote ID and drone-radio signatures).
-        val droneWindow = rows.asSequence()
-            .filter { now - it.timeMs <= 5 * 60_000L }
-            .map { it.toSighting() }.toList()
-        val drones = dev.retrovision.core.analysis.Drones.summarize(droneWindow, Collector.location.value)
+        val drones = dev.retrovision.core.analysis.Drones.summarize(recent, Collector.location.value)
         Collector.drones.value = drones
         if (prefs.alertsEnabled && prefs.droneAlerts && !inQuietHours(now)) {
             for (d in drones) {
                 val key = "drone:${d.key}"
+                if (key in snoozed) continue
                 val last = notifiedAt[key]
                 if (now - d.lastMs <= 2 * 60_000L && (last == null || now - last > 30 * 60_000L)) {
                     notifiedAt[key] = now
@@ -535,12 +696,13 @@ class CollectorService : Service() {
         }
         Collector.associations.value = if (prefs.captureDataFrames) {
             dev.retrovision.core.analysis.AssociatedClients.of(
-                rows.asSequence().filter { it.radio == 0 }.map { it.toSighting() }.toList(),
+                window.asSequence().map { it.sighting }.filter { it.radio == dev.retrovision.core.model.Radio.WIFI }.toList(),
             ).take(30)
         } else emptyList()
         if (prefs.alertsEnabled && !inQuietHours(now)) {
             for (th in threats.filter { it.severity >= 0.6 }) {
-                val key = "threat:${th.kind}:${th.bssid}:${th.ssid}"
+                val key = th.key
+                if (key in snoozed) continue // "False alarm" in the alert detail
                 val last = notifiedAt[key]
                 if (last == null || now - last > 10 * 60_000L) {
                     notifiedAt[key] = now
@@ -556,6 +718,7 @@ class CollectorService : Service() {
         }
         if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
+            val fresh = ArrayList<dev.retrovision.core.analysis.EntityReport>()
             for (a in result.alerts) {
                 // Merged entities: snooze, cooldown and last score follow every member id.
                 if (a.memberIds.any { it in snoozed }) continue
@@ -567,9 +730,11 @@ class CollectorService : Service() {
                 val risesOk = !prefs.alertOnlyIfScoreRises || lastScore == null || a.score + 1e-9 >= lastScore
                 if (escalated || (cooldownOk && risesOk)) {
                     for (m in a.memberIds) { notifiedAt[m] = now; notifiedScore[m] = a.score }
-                    notifyAlert(a)
+                    fresh += a
                 }
             }
+            // One summary notification per analysis, not one per device (field: five in a few minutes).
+            if (fresh.isNotEmpty()) notifySummary(result.alerts, fresh)
         }
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
@@ -586,18 +751,19 @@ class CollectorService : Service() {
     }
 
     private var lastLearn = 0L
+    private var warmedLookbackMs = -1L
 
     /** A device seen only at your routine places gains a "day" once per local day; residents are damped. */
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
         val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
-        for (e in result.entities) {
-            if (e.placeIds.isEmpty() || e.unfamiliarPlaces > 0) continue // only devices confined to routine places
-            val b = dao.baseline(e.entityId)
+        // Every device confined to routine places, including those trimmed from the result.
+        for (id in result.routineOnlyIds) {
+            val b = dao.baseline(id)
             if (b == null) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, 1, day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now))
             } else if (b.lastDay != day) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(e.entityId, (b.days + 1).coerceAtMost(30), day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, (b.days + 1).coerceAtMost(30), day, now))
             }
         }
     }
@@ -686,7 +852,7 @@ class CollectorService : Service() {
             "Your phone joined “$ssid” through an access point it has never used ($bssid). A mesh node or extender of yours also looks like this the first time: if it's yours, confirm it in Settings. If not, someone may be impersonating your network.",
             "Il telefono si è collegato a “$ssid” tramite un access point mai usato ($bssid). Anche un nodo mesh o un ripetitore tuo appare così la prima volta: se è tuo, confermalo in Impostazioni. Se no, qualcuno potrebbe impersonare la tua rete.",
         )
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Unknown access point for your network", "Access point sconosciuto per la tua rete"))
             .setContentText(text)
@@ -694,7 +860,7 @@ class CollectorService : Service() {
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(("ap" + ssid + bssid).hashCode(), n)
     }
 
@@ -750,41 +916,41 @@ class CollectorService : Service() {
 
     private fun notifyDrone(d: dev.retrovision.core.analysis.Drones.Drone) {
         val nm = getSystemService(NotificationManager::class.java)
-        val n = NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Drone nearby", "Drone nelle vicinanze"))
             .setContentText(Texts.drone(d))
             .setStyle(NotificationCompat.BigTextStyle().bigText(Texts.drone(d)))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
-            .build()
+        ).build()
         nm.notify(("d" + d.key).hashCode(), n)
     }
 
     private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {
         val nm = getSystemService(NotificationManager::class.java)
         val title = Texts.threatTitle(th.kind)
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(Texts.threat(th))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(("t" + th.kind + th.bssid + th.ssid).hashCode(), n)
     }
 
     private fun notifyProbeLost() {
         val nm = getSystemService(NotificationManager::class.java)
-        val n = NotificationCompat.Builder(this, CH_ALERTS)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, CH_ALERTS)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(Texts.tr("Probe disconnected", "Sonda scollegata"))
             .setContentText(Texts.tr("The probe stopped streaming. Check the cable or the board.", "La sonda ha smesso di trasmettere. Controlla il cavo o la scheda."))
             .setContentIntent(contentIntent())
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ERROR)
-            .build()
+        ).build()
         nm.notify(NOTIF_PROBE_LOST, n)
     }
 
@@ -800,22 +966,64 @@ class CollectorService : Service() {
         return if (start < end) h in start until end else h >= start || h < end
     }
 
-    private fun notifyAlert(a: dev.retrovision.core.analysis.EntityReport) {
+    /**
+     * All current following alerts in one notification, updated in place. [fresh] are the ones that
+     * passed their cooldown now (they decide that it rings). Words, not percentages.
+     */
+    private fun notifySummary(
+        all: List<dev.retrovision.core.analysis.EntityReport>,
+        fresh: List<dev.retrovision.core.analysis.EntityReport>,
+    ) {
         val nm = getSystemService(NotificationManager::class.java)
         val channel = if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS
-        val n = NotificationCompat.Builder(this, channel)
+        val levels = all.map { dev.retrovision.core.analysis.Levels.of(it) }
+        val strong = levels.count { it == dev.retrovision.core.analysis.Level.STRONG }
+        val worth = levels.size - strong
+        val title = listOfNotNull(
+            if (strong > 0) Texts.level(dev.retrovision.core.analysis.Level.STRONG) + ": $strong" else null,
+            if (worth > 0) Texts.level(dev.retrovision.core.analysis.Level.WORTH_A_LOOK) + ": $worth" else null,
+        ).joinToString(" · ")
+        val inbox = NotificationCompat.InboxStyle()
+        all.sortedByDescending { dev.retrovision.core.analysis.Levels.of(it).ordinal }.take(6).forEach { a ->
+            val l = dev.retrovision.core.analysis.Levels.of(a)
+            inbox.addLine("${Texts.levelIcon(l)} ${Texts.entityLabel(a)}")
+        }
+        val text = Texts.tr("New: ", "Nuovi: ") + fresh.joinToString(", ") { Texts.entityLabel(it) }
+        val b = NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle(Texts.alertTitle(Texts.entityLabel(a)))
-            .setContentText(a.reasons.joinToString(" · ") { Texts.reason(it) })
-            .setStyle(NotificationCompat.BigTextStyle().bigText(a.reasons.joinToString("\n") { Texts.reason(it) }))
-            .setContentIntent(contentIntent())
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(inbox.setSummaryText(Texts.tr("Tap for the evidence", "Tocca per le prove")))
+            .setContentIntent(alertsIntent())
             .setAutoCancel(true)
             .setSilent(prefs.alertSilent)
             .setPriority(if (prefs.alertSilent) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .build()
-        nm.notify(a.entityId.hashCode(), n)
+        nm.notify(NOTIF_SUMMARY, hideOnLockScreen(b).build())
     }
+
+    /**
+     * Lock screen and discreet mode show only "Something to check": what the app is and what it
+     * found must not be readable by whoever picks up the phone.
+     */
+    private fun hideOnLockScreen(b: NotificationCompat.Builder): NotificationCompat.Builder {
+        val public = NotificationCompat.Builder(this, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle("Retrovision")
+            .setContentText(Texts.publicAlert())
+            .build()
+        b.setVisibility(NotificationCompat.VISIBILITY_PRIVATE).setPublicVersion(public)
+        if (prefs.discreetAlerts) {
+            b.setContentTitle("Retrovision").setContentText(Texts.publicAlert()).setStyle(null)
+        }
+        return b
+    }
+
+    private fun alertsIntent() = PendingIntent.getActivity(
+        this, 2, Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_OPEN_ALERTS, true)
+            .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
 
     companion object {
         const val ACTION_STOP = "dev.retrovision.app.STOP"
@@ -824,8 +1032,17 @@ class CollectorService : Service() {
         private const val CH_ALERTS_SILENT = "alerts_silent"
         private const val NOTIF_ONGOING = 1
         private const val NOTIF_PROBE_LOST = 2
+        private const val NOTIF_SUMMARY = 3
         private const val BASELINE_MIN_DAYS = 3
         private const val COMPANION_DAYS = 3
+        /** Hard ceiling on rows held in memory by one analysis pass (~50-80 MB worst case). */
+        private const val MAX_ANALYSIS_ROWS = 100_000
+        /** USB chunks buffered between the reader and the decoder (≤16 KiB each). */
+        private const val INBOX_CHUNKS = 1024
+        private const val STORE_BUCKET_MS = 10_000L
+        private const val WINDOW_BUCKET_MS = 60_000L
+        private const val RECENT_RAW_MS = 5 * 60_000L
+        private const val RECENT_RAW_MAX = 30_000
 
         fun start(ctx: Context) {
             ContextCompat.startForegroundService(ctx, Intent(ctx, CollectorService::class.java))

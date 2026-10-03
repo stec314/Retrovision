@@ -56,6 +56,8 @@ data class SessionState(
     val info: ProbeInfo? = null,
     val clockUncertaintyUs: Long = -1,
     val wifiObs: Long = 0,
+    /** Wi-Fi frames heard on 5 GHz channels (dual-band probes only). */
+    val wifi5Obs: Long = 0,
     val bleObs: Long = 0,
     val droppedNoClock: Long = 0,
     val lostFrames: Long = 0,
@@ -298,7 +300,8 @@ class ProbeSession(
                     iesTruncated = w.rawIesTruncated,
                     tsfUs = if (w.tsfUs != 0L) w.tsfUs else -1,
                 )
-                update { it.copy(wifiObs = it.wifiObs + 1) }
+                val five = w.channel > 14
+                update { it.copy(wifiObs = it.wifiObs + 1, wifi5Obs = it.wifi5Obs + if (five) 1 else 0) }
                 onSighting(Sighting(timeMs, Radio.WIFI, addr, o.rssiDbm, maxOf(1, o.mergedCount), wifi = detail, probeId = probeId))
             }
             Observation.DetailCase.BLE -> {

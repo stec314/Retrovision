@@ -17,7 +17,12 @@
 
 static const char *TAG = "capture";
 
+#if CONFIG_IDF_TARGET_ESP32C5
+// More RAM and two bands of traffic: a deeper queue rides out bursts (busy 5 GHz beacons).
+#define QUEUE_DEPTH 96
+#else
 #define QUEUE_DEPTH 48
+#endif
 
 volatile uint32_t g_rv_wifi_seen;
 volatile uint32_t g_rv_ble_seen;

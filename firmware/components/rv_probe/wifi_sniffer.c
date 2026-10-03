@@ -56,6 +56,8 @@ static void promisc_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     rv_capture_submit(&s_item);
 }
 
+static uint32_t s_tune_fail;
+
 static void hop_task(void *arg)
 {
     size_t i = 0;
@@ -68,6 +70,8 @@ static void hop_task(void *arg)
         const rv_hop_t h = s_cfg->hop[i % s_cfg->hop_count];
         if (esp_wifi_set_channel(h.channel, WIFI_SECOND_CHAN_NONE) == ESP_OK) {
             s_channel = h.channel;
+        } else if (s_tune_fail++ < 5) {
+            ESP_LOGW(TAG, "cannot tune channel %u", (unsigned)h.channel);
         }
         i++;
         // Wake early on stop so reconfiguration is quick.
@@ -93,6 +97,11 @@ void rv_wifi_sniffer_init(void)
     };
     ESP_ERROR_CHECK(esp_wifi_set_country(&country));
     ESP_ERROR_CHECK(esp_wifi_start());
+#if CONFIG_SOC_WIFI_SUPPORT_5G
+    // Dual band: let channel changes move between 2.4 and 5 GHz (the hop plan mixes both).
+    esp_err_t bm = esp_wifi_set_band_mode(WIFI_BAND_MODE_AUTO);
+    ESP_LOGI(TAG, "band mode auto: %s", esp_err_to_name(bm));
+#endif
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promisc_cb));
     xTaskCreatePinnedToCore(hop_task, "rv_hop", 3072, NULL, 9, &s_hop_task, tskNO_AFFINITY);
 }

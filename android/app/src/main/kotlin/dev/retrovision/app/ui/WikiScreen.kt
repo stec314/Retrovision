@@ -85,9 +85,9 @@ fun WikiScreen(onClose: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
 
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        Column(Modifier.fillMaxSize().padding(top = 32.dp)) {
+        Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                TextButton(onClick = onClose) { Text("←") }
+                BackButton(onClose)
                 Text(
                     Texts.tr("Guide", "Guida") + " · v${BuildConfig.VERSION_NAME}",
                     style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f),

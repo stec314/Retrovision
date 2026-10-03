@@ -13,6 +13,8 @@ class RomSimulator(
     flashSize: Int = 8 shl 20,
     private val statusLen: Int = 4,
     private val banner: ByteArray = ByteArray(0),
+    /** When set, the ROM answers GET_SECURITY_INFO with a struct carrying this chip id (C5 = 23). */
+    private val chipId: Int? = null,
 ) : SerialLink {
     val flash = ByteArray(flashSize) { 0xFF.toByte() }
     var now = 0L
@@ -79,6 +81,20 @@ class RomSimulator(
                 repeat(8) { reply(cmd, 0) }
             }
             EspProtocol.CMD_READ_REG -> reply(cmd, chipMagic)
+            EspProtocol.CMD_GET_SECURITY_INFO -> {
+                val id = chipId
+                if (id == null) {
+                    reply(cmd, 0, status = 1, err = 5) // unsupported (classic ESP32)
+                } else {
+                    // flags(4) crypt(1) key_purposes(7) chip_id(4) api_version(4) = 20 bytes
+                    val info = ByteArray(20)
+                    info[12] = (id and 0xFF).toByte()
+                    info[13] = ((id ushr 8) and 0xFF).toByte()
+                    info[14] = ((id ushr 16) and 0xFF).toByte()
+                    info[15] = ((id ushr 24) and 0xFF).toByte()
+                    reply(cmd, 0, info)
+                }
+            }
             EspProtocol.CMD_SPI_ATTACH, EspProtocol.CMD_SPI_SET_PARAMS -> reply(cmd, 0)
             EspProtocol.CMD_FLASH_DEFL_BEGIN -> {
                 val w = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)

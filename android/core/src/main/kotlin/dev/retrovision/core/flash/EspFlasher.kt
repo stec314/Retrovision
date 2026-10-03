@@ -28,15 +28,30 @@ interface SerialLink {
 
 class FlashException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
-enum class Chip(val label: String, internal val magic: Set<Int>, internal val beginHasEncryptWord: Boolean) {
-    ESP32("ESP32", setOf(0x00F01D83), false),
-    ESP32_S2("ESP32-S2", setOf(0x000007C6), true),
-    ESP32_S3("ESP32-S3", setOf(0x00000009), true),
-    ESP32_C3("ESP32-C3", setOf(0x6921506F, 0x1B31506F, 0x4881606F, 0x4361606F), true),
+/**
+ * @param magic values read at register 0x40001000 (older chips). Empty for chips that esptool marks
+ *   `USES_MAGIC_VALUE = False` (ESP32-C5/C6): those have no magic and are identified by [imageChipId].
+ * @param imageChipId the chip id reported by GET_SECURITY_INFO (esptool `IMAGE_CHIP_ID`).
+ */
+enum class Chip(
+    val label: String,
+    internal val magic: Set<Int>,
+    internal val beginHasEncryptWord: Boolean,
+    internal val imageChipId: Int,
+) {
+    ESP32("ESP32", setOf(0x00F01D83), false, 0),
+    ESP32_S2("ESP32-S2", setOf(0x000007C6), true, 2),
+    ESP32_S3("ESP32-S3", setOf(0x00000009), true, 9),
+    ESP32_C3("ESP32-C3", setOf(0x6921506F, 0x1B31506F, 0x4881606F, 0x4361606F), true, 5),
+    // Verified on real hardware (2026-10-03): the C5 has no magic register value; it is detected by its
+    // chip id (23) via GET_SECURITY_INFO. Its bootloader lives at 0x2000 (see the manifest offset).
+    ESP32_C5("ESP32-C5", emptySet(), true, 23),
     ;
 
     companion object {
-        fun fromMagic(m: Int): Chip? = entries.firstOrNull { m in it.magic }
+        fun fromMagic(m: Int): Chip? = entries.firstOrNull { it.magic.isNotEmpty() && m in it.magic }
+        /** Only for chips without a magic value: a stray id 0 must never be read as a classic ESP32. */
+        fun fromChipId(id: Int): Chip? = entries.firstOrNull { it.magic.isEmpty() && it.imageChipId == id }
         fun fromId(id: String): Chip? = entries.firstOrNull {
             it.label.replace("-", "").equals(id.replace("-", "").replace("_", ""), ignoreCase = true)
         }
@@ -118,9 +133,31 @@ class EspFlasher(
     }
 
     fun detectChip(): Chip {
-        val magic = readReg(0x40001000)
-        return Chip.fromMagic(magic)
-            ?: throw FlashException("Unknown chip (magic 0x${Integer.toHexString(magic)})")
+        // Existing chips keep their exact path: magic register first (ESP32/S2/S3/C3).
+        val magic = runCatching { readReg(0x40001000) }.getOrNull()
+        magic?.let { Chip.fromMagic(it)?.let { c -> return c } }
+        // No magic matched: newer chips (ESP32-C5…) report USES_MAGIC_VALUE=False and are
+        // identified by the chip id in GET_SECURITY_INFO. Verified on real hardware.
+        val chipId = securityChipId()
+        chipId?.let { Chip.fromChipId(it)?.let { c -> return c } }
+        throw FlashException(
+            "Unknown chip (magic 0x${Integer.toHexString(magic ?: 0)}, chip id ${chipId ?: "n/a"})",
+        )
+    }
+
+    /**
+     * Reads the chip id from the ROM's GET_SECURITY_INFO response, or null if the chip does not
+     * support it (classic ESP32) or does not report a chip id (ESP32-S2). The security-info struct
+     * is flags(4) · flash_crypt_cnt(1) · key_purposes(7) · chip_id(4) · api_version(4); chip_id is
+     * the little-endian word at offset 12 and is only present when the struct is ≥ 20 bytes.
+     */
+    fun securityChipId(): Int? {
+        val r = runCatching { command(EspProtocol.CMD_GET_SECURITY_INFO, ByteArray(0), timeoutMs = 3000) }.getOrNull()
+            ?: return null
+        val d = r.data
+        if (d.size < 20) return null // error response or an S2-style struct without a chip id
+        return (d[12].toInt() and 0xFF) or ((d[13].toInt() and 0xFF) shl 8) or
+            ((d[14].toInt() and 0xFF) shl 16) or ((d[15].toInt() and 0xFF) shl 24)
     }
 
     fun readReg(addr: Int): Int {

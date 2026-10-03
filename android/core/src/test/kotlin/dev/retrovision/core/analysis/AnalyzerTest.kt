@@ -158,4 +158,26 @@ class AnalyzerTest {
         assertTrue(v[0].durationMs >= 29 * 60_000L)
         assertEquals(11.03, v[1].lon, 1e-6)
     }
+
+    /** Field report: 45,000 entities in a city centre ran the phone out of memory. */
+    @Test fun resultIsTrimmedButAlertsAndResidentsSurvive() {
+        val crowd = (0 until 200).map { ble("passer$it", 20 * min) }
+        val cfg = AnalysisConfig(lookbackMs = 3 * 3600_000L, maxReports = 20)
+        val res = Analyzer(cfg).analyze(now, crowd + fourPlaceSightings("follower"), walk(40 * min))
+        assertEquals(20, res.entities.size)
+        assertEquals(201, res.totalEntities)
+        assertTrue(res.entities.any { it.entityId == "follower" && it.alert })
+        // The trimmed ones stay findable.
+        assertEquals(181, res.others.size)
+        assertEquals(1, EntitySearch.stubs(res.others) { listOf(it.entityId) }.search("passer199").size +
+            EntitySearch.reports(res.entities) { listOf(it.entityId) }.search("passer199").size)
+    }
+
+    @Test fun reasonWeightsExplainTheScore() {
+        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min)).entities.single()
+        val places = r.reasons.filterIsInstance<Reason.SeenAtPlaces>().single()
+        assertTrue((r.reasonWeights[places] ?: 0.0) > 0.0)
+        assertTrue(r.reasonWeights.values.sum() <= r.rawScore + 1e-9)
+        assertTrue(r.caps.isEmpty())
+    }
 }

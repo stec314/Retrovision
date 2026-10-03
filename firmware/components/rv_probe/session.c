@@ -38,9 +38,52 @@ static const char *TAG = "session";
 #define LED_ON 1
 #elif CONFIG_IDF_TARGET_ESP32C5
 // ESP32-C5-DevKitC-1 / Waveshare: the status LED is an addressable RGB (WS2812) on GPIO27,
-// which needs the led_strip (RMT) driver, not gpio_set_level. Left undriven for now; the
-// LED on/off config still applies (as a no-op) and the host shows state. TODO: WS2812 driver.
-#define LED_NONE 1
+// driven over RMT below. The red power LED is wired to 3.3 V and cannot be switched off.
+#define LED_WS2812_GPIO 27
+#include "driver/rmt_tx.h"
+static rmt_channel_handle_t s_led_chan;
+static rmt_encoder_handle_t s_led_enc;
+static int s_led_last = -1;
+
+static void ws2812_init(void)
+{
+    const rmt_tx_channel_config_t c = {
+        .gpio_num = LED_WS2812_GPIO,
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .resolution_hz = 10000000, // 0.1 us ticks
+        .mem_block_symbols = 48,
+        .trans_queue_depth = 2,
+    };
+    // WS2812: 0 = 0.3 us high + 0.9 us low, 1 = 0.9 us high + 0.3 us low, MSB first, GRB order.
+    const rmt_bytes_encoder_config_t e = {
+        .bit0 = {.level0 = 1, .duration0 = 3, .level1 = 0, .duration1 = 9},
+        .bit1 = {.level0 = 1, .duration0 = 9, .level1 = 0, .duration1 = 3},
+        .flags.msb_first = 1,
+    };
+    if (rmt_new_tx_channel(&c, &s_led_chan) != ESP_OK || rmt_new_bytes_encoder(&e, &s_led_enc) != ESP_OK ||
+        rmt_enable(s_led_chan) != ESP_OK) {
+        ESP_LOGW(TAG, "status LED (WS2812) not available");
+        s_led_chan = NULL;
+    }
+}
+
+// on = a dim colour (bright LEDs give a probe away); off = dark. Sent only when it changes.
+static void ws2812_set(bool on, bool waiting)
+{
+    const int want = on ? (waiting ? 2 : 1) : 0;
+    if (!s_led_chan || want == s_led_last) {
+        return;
+    }
+    s_led_last = want;
+    // GRB: dim green when capturing, dim blue while waiting for the phone.
+    uint8_t grb[3] = {0, 0, 0};
+    if (want == 1) grb[0] = 6;
+    if (want == 2) grb[2] = 6;
+    const rmt_transmit_config_t t = {.loop_count = 0};
+    if (rmt_transmit(s_led_chan, s_led_enc, grb, sizeof grb, &t) == ESP_OK) {
+        rmt_tx_wait_all_done(s_led_chan, 20);
+    }
+}
 #else
 // XIAO ESP32-S3 user LED (orange), active low.
 #define LED_GPIO GPIO_NUM_21
@@ -326,7 +369,9 @@ static void session_task(void *arg)
             break;
         }
         xSemaphoreGive(s_lock);
-#ifndef LED_NONE
+#if defined(LED_WS2812_GPIO)
+        ws2812_set(led && !s_cfg.led_off, s_state != ST_ACTIVE);
+#elif !defined(LED_NONE)
         gpio_set_level(LED_GPIO, (led && !s_cfg.led_off) ? LED_ON : !LED_ON);
 #endif
     }
@@ -341,7 +386,11 @@ void rv_session_init(void)
     s_lock = xSemaphoreCreateMutex();
     rv_cfg_defaults(&s_cfg);
 
-#ifndef LED_NONE
+#if defined(LED_WS2812_GPIO)
+    ws2812_init();
+    s_led_last = -1;
+    ws2812_set(false, true); // start dark
+#elif !defined(LED_NONE)
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(LED_GPIO, !LED_ON);

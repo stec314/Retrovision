@@ -61,15 +61,24 @@ jobs:
             [ -n "$bin" ] || { echo "::error::merged $t firmware image not found in artifacts"; exit 1; }
             cp "$bin" "$d/"
           done
+          # ESP32-C5: in-app flashing verified on real hardware (2026-10-03). Image starts at the
+          # bootloader (0x2000). Optional: a missing image only drops C5 support from this APK.
+          c5=$(find fw -name "retrovision-esp32c5-app.bin" | head -1)
+          if [ -n "$c5" ]; then cp "$c5" "$d/"; else echo "::warning::ESP32-C5 app image not found; APK ships without C5 firmware"; fi
           ver="0.1.0-r${{ github.run_number }}"
-          python3 - "$ver" <<'PY'
-          import json, sys
-          json.dump({"version": sys.argv[1], "images": [
+          python3 - "$ver" "$d" <<'PY'
+          import json, os, sys
+          ver, d = sys.argv[1], sys.argv[2]
+          images = [
               {"id": "esp32s3", "chip": "ESP32-S3", "offset": 0,
                "file": "retrovision-esp32s3-merged.bin"},
               {"id": "esp32", "chip": "ESP32", "offset": 4096,
-               "file": "retrovision-esp32-merged.bin"}]},
-              open("android/app/src/main/assets/firmware/manifest.json", "w"), indent=2)
+               "file": "retrovision-esp32-merged.bin"}]
+          if os.path.exists(os.path.join(d, "retrovision-esp32c5-app.bin")):
+              images.append({"id": "esp32c5", "chip": "ESP32-C5", "offset": 8192,
+                             "file": "retrovision-esp32c5-app.bin"})
+          json.dump({"version": ver, "images": images},
+                    open(os.path.join(d, "manifest.json"), "w"), indent=2)
           PY
           echo "RV_VERSION_NAME=$ver" >> "$GITHUB_ENV"
           echo "RV_VERSION_CODE=${{ github.run_number }}" >> "$GITHUB_ENV"

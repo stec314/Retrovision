@@ -117,6 +117,25 @@ class FamiliarRow(
     val createdMs: Long,
 )
 
+/** One device found by a search over everything stored (not just the analysis window). */
+class DbHit(
+    val entityId: String,
+    val radio: Int,
+    val firstMs: Long,
+    val lastMs: Long,
+    val n: Int,
+    val maxRssi: Int,
+    val days: Int,
+    /** A network name that matched, and an advertisement that matched (for the BLE name), when any. */
+    val hitSsid: ByteArray?,
+    val hitAdv: ByteArray?,
+)
+
+class TimeRssi(val timeMs: Long, val rssi: Int)
+
+/** One time bucket in which a device was heard. */
+class HeardRow(val t0: Long, val t1: Long, val n: Int, val rssi: Int)
+
 @Dao
 interface AppDao {
     @Insert
@@ -131,6 +150,37 @@ interface AppDao {
     @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from")
     suspend fun sightingCountSince(from: Long): Long
 
+    @Query("SELECT COUNT(*) FROM sightings WHERE timeMs >= :from AND timeMs < :to")
+    suspend fun sightingCountBetween(from: Long, to: Long): Long
+
+    @Query("SELECT * FROM sightings WHERE timeMs >= :from AND timeMs < :to ORDER BY timeMs")
+    suspend fun sightingsBetween(from: Long, to: Long): List<SightingRow>
+
+    @Query("SELECT * FROM sightings WHERE timeMs >= :from AND timeMs < :to AND (id % :stride) = 0 ORDER BY timeMs")
+    suspend fun sightingsBetweenSampled(from: Long, to: Long, stride: Int): List<SightingRow>
+
+    @Query("SELECT * FROM fixes WHERE timeMs >= :from AND timeMs < :to ORDER BY timeMs")
+    suspend fun fixesBetween(from: Long, to: Long): List<FixRow>
+
+    /**
+     * The analysis window, thinned: one row per (device, frame kind, advert type, SSID) per
+     * [bucketMs]. A device that advertises every second says the same thing 60 times a minute;
+     * loading every copy of a 2-12 h window is what ran the app out of memory. The newest row of
+     * each bucket is kept (SQLite takes bare columns from the MAX() row), and `merged` is summed so
+     * frame counts stay right. Probe requests for different SSIDs stay separate rows.
+     * Newest first, so a [limit] cut drops the oldest part of the window, never the present.
+     */
+    @Query(
+        "SELECT MAX(id) AS id, timeMs, radio, address, entityId, rssi, SUM(merged) AS merged, wifiKind, channel, " +
+            "ssid, bssid, seq, ies, bleAddrKind, advType, advData, txPower, source, tsf FROM sightings " +
+            "WHERE timeMs >= :from AND timeMs < :to GROUP BY entityId, radio, wifiKind, advType, ssid, timeMs / :bucketMs ORDER BY timeMs DESC LIMIT :limit",
+    )
+    suspend fun sightingsThinned(from: Long, to: Long, bucketMs: Long, limit: Int): List<SightingRow>
+
+    /** Cheap row estimate (two index lookups instead of counting millions of encrypted rows). */
+    @Query("SELECT IFNULL(MAX(id) - MIN(id) + 1, 0) FROM sightings")
+    suspend fun sightingEstimate(): Long
+
     /** Memory-safe sampling for retrospective review: every :stride-th row by id. */
     @Query("SELECT * FROM sightings WHERE timeMs >= :from AND (id % :stride) = 0 ORDER BY timeMs")
     suspend fun sightingsSinceSampled(from: Long, stride: Int): List<SightingRow>
@@ -144,9 +194,6 @@ interface AppDao {
     @Query("DELETE FROM fixes WHERE timeMs < :before")
     suspend fun pruneFixes(before: Long): Int
 
-    @Query("SELECT COUNT(*) FROM sightings")
-    fun sightingCount(): Flow<Long>
-
     @Query("SELECT * FROM ignores ORDER BY createdMs DESC")
     fun ignores(): Flow<List<IgnoreRow>>
 
@@ -158,6 +205,43 @@ interface AppDao {
 
     @Query("DELETE FROM ignores WHERE entityId = :id")
     suspend fun removeIgnore(id: String)
+
+    @Query("DELETE FROM ignores")
+    suspend fun wipeIgnores()
+
+    /**
+     * Full scan of every stored sighting: address (entity id), network names (beacons and probe
+     * requests) and Bluetooth advertisements (names). Byte search because names are stored raw;
+     * [a], [b], [c] are case variants of the query. Slow on large databases: run on demand only.
+     */
+    @Query(
+        "SELECT entityId, MIN(radio) AS radio, MIN(timeMs) AS firstMs, MAX(timeMs) AS lastMs, COUNT(*) AS n, MAX(rssi) AS maxRssi, " +
+            "COUNT(DISTINCT timeMs / 86400000) AS days, " +
+            "MAX(CASE WHEN instr(ssid, :a) > 0 OR instr(ssid, :b) > 0 OR instr(ssid, :c) > 0 THEN ssid END) AS hitSsid, " +
+            "MAX(CASE WHEN instr(advData, :a) > 0 OR instr(advData, :b) > 0 OR instr(advData, :c) > 0 THEN advData END) AS hitAdv " +
+            "FROM sightings WHERE entityId LIKE :like " +
+            "OR instr(ssid, :a) > 0 OR instr(ssid, :b) > 0 OR instr(ssid, :c) > 0 " +
+            "OR instr(advData, :a) > 0 OR instr(advData, :b) > 0 OR instr(advData, :c) > 0 " +
+            "GROUP BY entityId ORDER BY lastMs DESC LIMIT :limit",
+    )
+    suspend fun searchAll(like: String, a: ByteArray, b: ByteArray, c: ByteArray, limit: Int): List<DbHit>
+
+    /** Every time bucket in which any of [ids] was heard, over all stored data (entityId index). */
+    @Query(
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE entityId IN (:ids) GROUP BY timeMs / :bucketMs ORDER BY t0 LIMIT :limit",
+    )
+    suspend fun heardBuckets(ids: List<String>, bucketMs: Long, limit: Int): List<HeardRow>
+
+    /** One GPS fix per [stepMs] between two times (the first of each step), for matching positions to times. */
+    @Query("SELECT MIN(timeMs) AS timeMs, lat, lon, accuracyM, speedMps FROM fixes WHERE timeMs BETWEEN :from AND :to GROUP BY timeMs / :stepMs ORDER BY timeMs")
+    suspend fun fixesThinned(from: Long, to: Long, stepMs: Long): List<FixRow>
+
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId = :id ORDER BY timeMs LIMIT :limit")
+    suspend fun timesFor(id: String, limit: Int): List<TimeRssi>
+
+    @Query("SELECT * FROM fixes WHERE timeMs BETWEEN :from AND :to ORDER BY ABS(timeMs - :at) LIMIT 1")
+    suspend fun fixNear(from: Long, to: Long, at: Long): FixRow?
 
     @Query("SELECT * FROM enrichments WHERE `key` = :key")
     suspend fun enrichment(key: String): EnrichRow?

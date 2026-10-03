@@ -52,6 +52,28 @@ class EntityResolverTest {
         assertEquals(1L, r.linksMade)
     }
 
+    private fun probeRssi(addr: MacAddress, t: Long, seq: Int, rssi: Int, ies: ByteArray) =
+        Sighting(t, Radio.WIFI, addr, rssi, wifi = WifiDetail(WifiKind.PROBE_REQ, 6, ByteArray(0), null, seq, ies))
+
+    @Test fun wifiDoesNotLinkAcrossBigRssiJump() {
+        // Two same-model phones (same fingerprint) whose sequence numbers happen to line up, but
+        // one is much closer than the other: the RSSI guard refuses the false merge.
+        val r = EntityResolver()
+        val ies = byteArrayOf(0x01, 0x04, 0x02, 0x04, 0x0b, 0x16, 0x32, 0x08)
+        r.resolve(probeRssi(rnd(0x01), 0, 100, -40, ies))
+        val b = r.resolve(probeRssi(rnd(0x02), 20_000, 104, -85, ies)) // 45 dB apart
+        assertFalse(b.linkedToExisting)
+        assertEquals(0L, r.linksMade)
+    }
+
+    @Test fun wifiStillLinksWithinRssiTolerance() {
+        val r = EntityResolver()
+        val ies = byteArrayOf(0x01, 0x04, 0x02, 0x04, 0x0b, 0x16, 0x32, 0x08)
+        r.resolve(probeRssi(rnd(0x01), 0, 100, -55, ies))
+        val b = r.resolve(probeRssi(rnd(0x02), 20_000, 104, -68, ies)) // 13 dB, normal fading
+        assertTrue(b.linkedToExisting)
+    }
+
     // ---- BLE carry-over: the good case ----
     @Test fun bleStitchesRotationOfASerialNamedDevice() {
         val r = EntityResolver()

@@ -20,9 +20,16 @@ import kotlin.math.abs
  *     1. same IE fingerprint ([WifiFingerprint]);
  *     2. the entity's last probe was ≤ [linkWindowMs] ago;
  *     3. 802.11 sequence number continues: 1 ≤ (seq − lastSeq) mod 4096 ≤ [maxSeqGap];
- *     4. exactly one candidate matches (ambiguity -> no link).
+ *     4. the signal is comparable: |ΔRSSI| ≤ [wifiRssiTolDb] (a real rotation keeps a similar
+ *        signal; two same-model phones at different distances would jump). This guards the
+ *        case the fingerprint cannot: two devices of the same model share a fingerprint, so a
+ *        chance sequence-number line-up would otherwise merge them into a false "follower";
+ *     5. exactly one candidate matches (ambiguity -> no link).
  *   Some OSes reset the sequence counter on rotation; those rotations are
- *   missed, never mis-linked.
+ *   missed, never mis-linked. Recent devices increasingly reset it per burst
+ *   (Puig et al., arXiv:2606.25788, 2026), so this link is conservative and
+ *   misses more than it used to — a deliberate trade: a missed link is safer
+ *   than a false one.
  * - Randomised BLE addresses (resolvable / non-resolvable private): a new address
  *   is stitched to the previous one across a MAC rotation ("carry-over") ONLY when the
  *   advertisement carries a *distinctive, serial-like local name* (e.g. a fitness band
@@ -45,6 +52,12 @@ class EntityResolver(
     private val forgetAfterMs: Long = 24 * 3600_000L,
     private val bleLinkWindowMs: Long = 300_000,
     private val bleRssiTolDb: Int = 12,
+    /**
+     * Max RSSI change (dB) across a Wi-Fi MAC rotation. Looser than BLE: probe RSSI is noisier
+     * and a rotation can span up to [linkWindowMs], during which the person may move. It only
+     * rejects gross mismatches (a device clearly at another distance), not normal fading.
+     */
+    private val wifiRssiTolDb: Int = 20,
 ) {
     class Resolution(val entityId: String, val linkedToExisting: Boolean)
 
@@ -52,7 +65,7 @@ class EntityResolver(
 
     private class AddrState(val entityId: String, var lastSeenMs: Long)
 
-    private class Trail(val entityId: String, var mac: MacAddress, var lastMs: Long, var lastSeq: Int)
+    private class Trail(val entityId: String, var mac: MacAddress, var lastMs: Long, var lastSeq: Int, var lastRssi: Int)
 
     private class BleTrail(val entityId: String, var mac: MacAddress, var lastMs: Long, var lastRssi: Int)
 
@@ -94,7 +107,8 @@ class EntityResolver(
             val candidates = trailsByFingerprint[fp].orEmpty().filter { t ->
                 val dt = s.timeMs - t.lastMs
                 val dseq = Math.floorMod(wifi.seq - t.lastSeq, 4096)
-                t.mac != s.address && dt in 0..linkWindowMs && dseq in 1..maxSeqGap
+                val rssiOk = t.lastRssi == 0 || s.rssi == 0 || abs(s.rssi - t.lastRssi) <= wifiRssiTolDb
+                t.mac != s.address && dt in 0..linkWindowMs && dseq in 1..maxSeqGap && rssiOk
             }
             if (candidates.size == 1) {
                 entityId = candidates[0].entityId
@@ -161,11 +175,12 @@ class EntityResolver(
         val list = trailsByFingerprint.getOrPut(fp) { ArrayList(2) }
         val t = list.firstOrNull { it.entityId == entityId }
         if (t == null) {
-            list += Trail(entityId, s.address, s.timeMs, wifi.seq)
+            list += Trail(entityId, s.address, s.timeMs, wifi.seq, s.rssi)
         } else if (s.timeMs >= t.lastMs) {
             t.mac = s.address
             t.lastMs = s.timeMs
             t.lastSeq = wifi.seq
+            if (s.rssi != 0) t.lastRssi = s.rssi
         }
     }
 

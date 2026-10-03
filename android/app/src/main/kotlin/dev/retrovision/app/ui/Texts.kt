@@ -16,7 +16,8 @@ object Texts {
 
     fun notifRunning() = tr("Listening for the probe", "In ascolto della sonda")
     fun channelOngoing() = tr("Collection running", "Raccolta in corso")
-    fun channelAlerts() = tr("Possible following", "Possibile pedinamento")
+    // Channel names show in system settings and to anyone handling the phone: kept neutral.
+    fun channelAlerts() = tr("Alerts", "Avvisi")
     fun threat(t: dev.retrovision.core.analysis.WifiThreats.Threat): String = when (t.kind) {
         dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD ->
             tr("${t.count} deauth/disassoc frames — someone is forcing devices off a network.",
@@ -33,6 +34,50 @@ object Texts {
         dev.retrovision.core.analysis.WifiThreats.Kind.BLE_SPAM ->
             tr("${t.count} short-lived Bluetooth addresses sending pairing pop-ups from one transmitter — BLE spam (Flipper Zero or ESP32).",
                "${t.count} indirizzi Bluetooth usa-e-getta che inviano popup di abbinamento da un solo trasmettitore — BLE spam (Flipper Zero o ESP32).")
+    }
+
+    fun linkVia(v: dev.retrovision.core.analysis.LinkVia) = when (v) {
+        dev.retrovision.core.analysis.LinkVia.ORIGINAL -> tr("first address", "primo indirizzo")
+        dev.retrovision.core.analysis.LinkVia.SEQUENCE -> tr(
+            "linked: same probe fingerprint, frame counter continued, similar signal",
+            "collegato: stessa impronta delle richieste, contatore dei frame proseguito, segnale simile",
+        )
+        dev.retrovision.core.analysis.LinkVia.BLE_NAME -> tr(
+            "linked: same distinctive Bluetooth name and advert, right after the previous address",
+            "collegato: stesso nome Bluetooth distintivo e stesso annuncio, subito dopo l'indirizzo precedente",
+        )
+        dev.retrovision.core.analysis.LinkVia.RARE_NETWORKS -> tr(
+            "linked: asks for the same rare networks",
+            "collegato: cerca le stesse reti rare",
+        )
+        dev.retrovision.core.analysis.LinkVia.AP_UPTIME -> tr(
+            "linked: same access point (same boot moment), new name or address",
+            "collegato: stesso access point (stesso momento di accensione), nuovo nome o indirizzo",
+        )
+    }
+
+    /** Longer explanation for the alert detail: what it is, the evidence, and how it can be wrong. */
+    fun threatExplain(t: dev.retrovision.core.analysis.WifiThreats.Threat): String = when (t.kind) {
+        dev.retrovision.core.analysis.WifiThreats.Kind.DEAUTH_FLOOD -> tr(
+            "Deauthentication/disassociation frames disconnect devices from a network. Normal traffic has a few, spread over many networks; here ${t.count} target one network. Usually done to push phones onto a fake copy (evil twin) or to capture reconnections. Can be wrong: a misconfigured or overloaded router kicking its own clients.",
+            "I frame di deautenticazione/disassociazione scollegano i dispositivi da una rete. Nel traffico normale sono pochi e sparsi su molte reti; qui ${t.count} colpiscono una sola rete. Di solito serve a spingere i telefoni verso una copia falsa (evil twin) o a catturare le riconnessioni. Può sbagliare: un router mal configurato o sovraccarico che butta fuori i suoi client.",
+        )
+        dev.retrovision.core.analysis.WifiThreats.Kind.KARMA_AP -> tr(
+            "One access point answered probe requests for ${t.distinctSsids} different network names: it pretends to be whatever network a phone is looking for, so phones join it automatically. Can be wrong: rarely, a hotspot gateway with many configured names.",
+            "Un access point ha risposto a richieste per ${t.distinctSsids} nomi di rete diversi: finge di essere qualunque rete il telefono cerchi, così i telefoni si collegano da soli. Può sbagliare: raramente, un gateway con molti nomi configurati.",
+        )
+        dev.retrovision.core.analysis.WifiThreats.Kind.EVIL_TWIN_OWN -> tr(
+            "Your network name is advertised by ${t.bssids.size} different access points. If you have only one router, one of them is a copy. Can be wrong: mesh nodes and extenders of your own network look exactly like this.",
+            "Il nome della tua rete è annunciato da ${t.bssids.size} access point diversi. Se hai un solo router, uno è una copia. Può sbagliare: nodi mesh e ripetitori della tua rete appaiono esattamente così.",
+        )
+        dev.retrovision.core.analysis.WifiThreats.Kind.BEACON_FLOOD -> tr(
+            "${t.count} networks (${t.distinctSsids} names) appeared within a minute on channel ${t.channel}, from a transmitter near you (median ${t.rssi} dBm), ${"%.0f".format(t.templateShare * 100)}% with the same beacon template, from ${t.radios} radio(s). Flood tools fill phone Wi-Fi lists with fake names. Can be wrong: a building full of identical access points switching on at once.",
+            "${t.count} reti (${t.distinctSsids} nomi) comparse entro un minuto sul canale ${t.channel}, da un trasmettitore vicino (mediana ${t.rssi} dBm), il ${"%.0f".format(t.templateShare * 100)}% con lo stesso modello di beacon, da ${t.radios} radio. Gli strumenti di flood riempiono l'elenco Wi-Fi dei telefoni di nomi falsi. Può sbagliare: un edificio pieno di access point identici che si accendono insieme.",
+        )
+        dev.retrovision.core.analysis.WifiThreats.Kind.BLE_SPAM -> tr(
+            "${t.count} Bluetooth addresses, each alive only a few seconds, all sending pairing pop-ups at nearly the same signal: one transmitter cycling fake identities to flood phones with pop-ups. Can be wrong: rarely, a shop demo of many earbuds.",
+            "${t.count} indirizzi Bluetooth, ognuno vivo pochi secondi, tutti con popup di abbinamento e segnale quasi uguale: un solo trasmettitore che ruota identità finte per inondare i telefoni di popup. Può sbagliare: raramente, una vetrina con molti auricolari in demo.",
+        )
     }
 
     fun threatTitle(k: dev.retrovision.core.analysis.WifiThreats.Kind) = when (k) {
@@ -82,10 +127,74 @@ object Texts {
         dev.retrovision.core.identity.NotableKind.DRONE -> tr("drone", "drone")
     }
 
-    fun channelAlertsSilent() = tr("Possible following (silent)", "Possibile pedinamento (silenzioso)")
+    fun channelAlertsSilent() = tr("Alerts (silent)", "Avvisi (silenziosi)")
     fun stop() = tr("Stop", "Ferma")
     fun cannotOpenPort() = tr("Cannot open the serial port", "Impossibile aprire la porta seriale")
     fun alertTitle(label: String) = tr("Seen with you again: $label", "Ti segue? $label")
+
+    /** Shown on the lock screen and in discreet mode: says nothing about what was found. */
+    fun publicAlert() = tr("Something to check", "Qualcosa da controllare")
+
+    fun cap(c: dev.retrovision.core.analysis.ScoreCap) = when (c) {
+        dev.retrovision.core.analysis.ScoreCap.FEW_PLACES -> tr("heard at fewer than 2 places of yours (max 0.30)", "sentito in meno di 2 tuoi luoghi (max 0,30)")
+        dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
+        dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
+        dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
+    }
+
+    fun level(l: dev.retrovision.core.analysis.Level) = when (l) {
+        dev.retrovision.core.analysis.Level.STRONG -> tr("Strong signs", "Segnali forti")
+        dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> tr("Worth a look", "Da guardare")
+        dev.retrovision.core.analysis.Level.SOME -> tr("Some signs", "Qualche segnale")
+        dev.retrovision.core.analysis.Level.LOW -> tr("Low", "Basso")
+    }
+
+    fun levelIcon(l: dev.retrovision.core.analysis.Level) = when (l) {
+        dev.retrovision.core.analysis.Level.STRONG -> "⚠️"
+        dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> "👀"
+        dev.retrovision.core.analysis.Level.SOME -> "·"
+        dev.retrovision.core.analysis.Level.LOW -> ""
+    }
+
+    fun verdictTitle(s: dev.retrovision.core.analysis.Verdict.State) = when (s) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> tr("Not collecting", "Raccolta ferma")
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> tr("Can't tell yet", "Non posso dirlo ancora")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> tr("Nothing found", "Nessun problema")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> tr("Nothing found, limited view", "Nessun problema, vista parziale")
+        dev.retrovision.core.analysis.Verdict.State.WORTH_A_LOOK -> tr("Worth a look", "Da guardare")
+        dev.retrovision.core.analysis.Verdict.State.STRONG -> tr("Strong signs", "Segnali forti")
+    }
+
+    fun verdictIcon(s: dev.retrovision.core.analysis.Verdict.State) = when (s) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> "⏸"
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> "⏳"
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> "✅"
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> "◐"
+        dev.retrovision.core.analysis.Verdict.State.WORTH_A_LOOK -> "👀"
+        dev.retrovision.core.analysis.Verdict.State.STRONG -> "⚠️"
+    }
+
+    fun verdictLine(r: dev.retrovision.core.analysis.Verdict.Result) = when (r.state) {
+        dev.retrovision.core.analysis.Verdict.State.STOPPED -> tr("Start collecting to check your surroundings.", "Avvia la raccolta per controllare cosa hai intorno.")
+        dev.retrovision.core.analysis.Verdict.State.CANT_TELL -> tr("Not enough data yet to say anything. See what's missing below.", "Non ci sono ancora dati sufficienti per dire qualcosa. Sotto vedi cosa manca.")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR -> tr("Nothing has been moving with you in the analysed time.", "Niente si è mosso con te nel periodo analizzato.")
+        dev.retrovision.core.analysis.Verdict.State.CLEAR_PARTIAL -> tr("Nothing found in what the app can see, but part of the picture is missing.", "Niente in ciò che l'app vede, ma manca una parte del quadro.")
+        else -> {
+            val n = r.strong + r.worth
+            tr("$n finding(s): tap to see the evidence.", "$n risultati: tocca per vedere le prove.")
+        }
+    }
+
+    fun gap(g: dev.retrovision.core.analysis.Verdict.Gap) = when (g) {
+        dev.retrovision.core.analysis.Verdict.Gap.NO_RECEIVER -> tr("Nothing is listening: plug in the probe or turn on the phone's Bluetooth receiver", "Nessun ricevitore attivo: collega la sonda o attiva il Bluetooth del telefono")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_PROBE -> tr("Probe not connected: Wi-Fi is not heard, Bluetooth only from the phone", "Sonda non collegata: il Wi-Fi non si sente, il Bluetooth solo dal telefono")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_GPS -> tr("No GPS: places and routes are paused", "Niente GPS: luoghi e percorsi sono in pausa")
+        dev.retrovision.core.analysis.Verdict.Gap.POOR_GPS -> tr("GPS too imprecise: places are paused", "GPS troppo impreciso: luoghi in pausa")
+        dev.retrovision.core.analysis.Verdict.Gap.TOO_SHORT -> tr("Collecting for a short time: following takes 10–20 min to show", "Raccolta da poco: un pedinamento si vede dopo 10–20 min")
+        dev.retrovision.core.analysis.Verdict.Gap.NO_ANALYSIS -> tr("Analysis not up to date yet", "Analisi non ancora aggiornata")
+        dev.retrovision.core.analysis.Verdict.Gap.TRUNCATED -> tr("Too many devices: only the most recent part of the window is analysed", "Troppi dispositivi: si analizza solo la parte più recente della finestra")
+    }
+
 
     fun entityLabel(r: EntityReport): String {
         val addr = r.addresses.first()
@@ -166,6 +275,18 @@ object Texts {
         is Reason.SameApRenamed -> tr(
             "Same access point under a new name or address (same boot moment): “${r.from}” → “${r.to}”",
             "Stesso access point con nuovo nome o indirizzo (stesso istante di accensione): “${r.from}” → “${r.to}”",
+        )
+        is Reason.OneAreaOnly -> tr(
+            "Access point only heard within ~${r.extentM.toInt()} m of one area. A fixed router fits that; a follower would have to be heard farther apart than its range (≥ 600 m). No alert until it is",
+            "Access point sentito solo entro ~${r.extentM.toInt()} m da una zona. Un router fisso è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ 600 m). Nessuna allerta finché non succede",
+        )
+        is Reason.ApUptime -> tr(
+            "Running for ${"%.0f".format(r.days)} days without a reboot (beacon clock): typical of a fixed router",
+            "Acceso da ${"%.0f".format(r.days)} giorni senza riavvii (orologio del beacon): tipico di un router fisso",
+        )
+        is Reason.StaysPut -> tr(
+            "Stays in one spot: its signal fades as you walk away from one point (heard within ~${r.reachM.toInt()} m). A fixed device you keep passing, not one moving with you",
+            "Resta in un punto fisso: il segnale cala man mano che ti allontani da un punto (sentito entro ~${r.reachM.toInt()} m). Un dispositivo fisso vicino a cui continui a passare, non uno che si muove con te",
         )
         is Reason.TravelsInGroup -> tr(
             "Moves together with ${r.size - 1} other device(s): same places, same times",

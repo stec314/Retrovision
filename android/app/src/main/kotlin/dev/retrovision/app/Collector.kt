@@ -22,6 +22,16 @@ data class ConnectionUi(
 )
 
 /** Phone's current Wi-Fi association. [own] = one of your networks; [trusted] = known access point for it. */
+/** How much of the analysis window was loaded: raw rows in the window, rows analysed, thinning bucket. */
+data class AnalysisLoad(
+    val rawRows: Long = 0,
+    val analysedRows: Int = 0,
+    val bucketMs: Long = 0,
+    val truncated: Boolean = false,
+    /** Oldest sighting in the analysed window (0 = none): how far back the analysis can see. */
+    val oldestMs: Long = 0,
+)
+
 data class WifiConn(val ssid: String, val bssid: String, val own: Boolean, val trusted: Boolean)
 
 data class FlashUi(
@@ -51,6 +61,7 @@ data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Doub
 object Collector {
     val connection = MutableStateFlow(ConnectionUi())
     val analysis = MutableStateFlow<AnalysisResult?>(null)
+    val analysisLoad = MutableStateFlow(AnalysisLoad())
     val location = MutableStateFlow<GeoFix?>(null)
     val flash = MutableStateFlow(FlashUi())
     val running = MutableStateFlow(false)
@@ -63,6 +74,17 @@ object Collector {
 
     /** Set by the UI to request an immediate analysis run. */
     val analyzeNow = MutableStateFlow(0L)
+
+    /**
+     * Full report for one device trimmed from the result (search "all devices"), computed on
+     * demand from the live window. Null while collection is off.
+     */
+    /** Entity ids "Find it" is listening for; every raw reading of them goes to [findSamples]. */
+    @Volatile var findTarget: Set<String> = emptySet()
+    /** Raw readings for "Find it": (time, dBm), unsmoothed, from any receiver, GPS not needed. */
+    val findSamples = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, Int>>(extraBufferCapacity = 256)
+
+    @Volatile var analyzeOne: (suspend (String) -> dev.retrovision.core.analysis.EntityReport?)? = null
 
     /** Mirrors Prefs.probeLedOn; ProbeSession reads it when building the probe config. */
     val probeLedOn = MutableStateFlow(true)

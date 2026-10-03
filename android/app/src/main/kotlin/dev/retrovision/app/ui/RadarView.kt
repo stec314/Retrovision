@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -177,21 +178,30 @@ fun RadarView() {
         }
 
         val withBearing = frame.blips.count { it.bearingDeg != null }
+        // The legend is one tap away; folded by default to leave the radar the room.
+        var legend by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
         Text(
-            Texts.tr(
-                "Tap a device for details. Radius = signal (centre = closest). Direction is real only with a pointer ($withBearing now); hollow = unknown. Red = alert.",
-                "Tocca un dispositivo per i dettagli. Raggio = segnale (centro = più vicino). La direzione è reale solo con la freccia ($withBearing ora); vuoto = ignota. Rosso = allarme.",
-            ),
-            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            (if (legend) "▲ " else "▼ ") + Texts.tr("How to read it", "Come leggerlo") + if (withBearing > 0) Texts.tr(" · $withBearing with direction", " · $withBearing con direzione") else "",
+            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { legend = !legend }.padding(vertical = 6.dp),
         )
-        if (frame.movedM < 20) {
+        if (legend) {
             Text(
                 Texts.tr(
-                    "Walk ~30 m for directions. A device with a steady signal while you move is moving with you.",
-                    "Cammina ~30 m per le direzioni. Un dispositivo con segnale costante mentre ti muovi si sta muovendo con te.",
+                    "Tap a device for details. Distance from the centre = signal (centre = closest). A line from the centre = estimated direction of that device, worked out from how its signal changed while you walked. No line = direction unknown: the angle of the dot means nothing. Red = alert.",
+                    "Tocca un dispositivo per i dettagli. Distanza dal centro = segnale (centro = più vicino). Una linea dal centro = direzione stimata di quel dispositivo, ricavata da come è cambiato il segnale mentre camminavi. Senza linea = direzione ignota: l'angolo del punto non significa nulla. Rosso = allerta.",
                 ),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (frame.movedM < 20) {
+                Text(
+                    Texts.tr(
+                        "Walk ~30 m for directions. A device with a steady signal while you move is moving with you.",
+                        "Cammina ~30 m per le direzioni. Un dispositivo con segnale costante mentre ti muovi si sta muovendo con te.",
+                    ),
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 
@@ -224,7 +234,7 @@ private fun BoardStrip(conn: dev.retrovision.app.ConnectionUi) {
             Column(Modifier.weight(1f)) {
                 Text(s.info?.let { probeModel(it.probeType) } ?: "—", color = Neon.cyan, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
                 Text(
-                    "Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""),
+                    "Wi-Fi ${s.wifiObs}" + (if (s.wifi5Obs > 0) " (5 GHz ${s.wifi5Obs})" else "") + " · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""),
                     color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
                 )
             }

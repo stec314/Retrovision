@@ -59,7 +59,14 @@ Everything runs on the phone. Nothing is uploaded unless you turn on an optional
 
 You connect the probe with a USB-OTG cable or adapter. The app recognises Espressif (0x303A), WCH (0x1A86) and Silicon Labs (0x10C4) USB vendor IDs.
 
-**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. The in-app flasher supports the **ESP32-S3 and the classic ESP32**. The **ESP32-C5 must be flashed from a computer** with the browser flasher (ESP Web Tools) on the project's GitHub Pages, or with esptool, using the image published in each release.
+**Flashing.** The APK bundles firmware built from the same commit as the app. *Probe → Flash* writes it over USB with a built-in ROM-bootloader flasher, so you need no computer. The in-app flasher supports the **ESP32-S3, the classic ESP32 and the ESP32-C5**.
+
+**ESP32-C5.** Flashed in-app like the other boards, verified on real hardware (2026-10-03: detection, write, MD5 check, boot).
+- **Dual band.** The C5 listens on 2.4 and 5 GHz. Its channel plan is built on where devices show themselves: 2.4 GHz 1/6/11 (phones probe on every 2.4 channel), the 5 GHz channels where phones are allowed to send probe requests (36–48 and 149–165), and a short look at three DFS channels (100, 116, 132), where only access points beacon. One cycle takes about 2.6 s. The probe status shows how many Wi-Fi frames came from 5 GHz.
+- **LEDs.** The RGB status LED (GPIO27) is driven dim: blue while waiting for the phone, green while capturing, dark with *Probe status LED* off. The red power LED is wired straight to 3.3 V: no firmware can switch it off; cover it with opaque tape, or remove its resistor if you are comfortable soldering.
+- **Not used, on purpose.** Bluetooth Coded PHY (long range) would halve the time the shared radio spends on Wi-Fi, for very few devices that use it; the phone's own Bluetooth listens for it instead. The C5's 802.15.4 radio (Thread/Zigbee) also shares that antenna time, and the devices it would hear are mostly fixed home automation, which does not follow anyone.
+- How it differs: the C5 has no "magic" register value, so the app identifies it by the chip id (23) that the ROM returns to `GET_SECURITY_INFO`. Its bootloader sits at `0x2000`, not `0x0`, so the bundled image starts there.
+- If a flash fails or the board stops booting, use the **browser flasher** (ESP Web Tools) on the project's GitHub Pages, or esptool with the image in each release. The board stays recoverable: hold BOOT, press RESET, release BOOT.
 
 **What the probe captures by default:**
 - Wi-Fi management frames: probe requests, beacons, probe responses, authentication, (re)association requests, deauthentication, disassociation.
@@ -108,9 +115,27 @@ Retrovision groups sightings into **entities** with these rules, which are conse
 1. **Same IE fingerprint.** A hash of the capability elements in the probe request (supported rates, HT/VHT capabilities, extended capabilities, vendor elements, in order), skipping per-request fields (SSID, channel) and random ones (WPS UUID). The idea comes from Vanhoef et al., *Why MAC Address Randomization is not Enough* (2016). The fingerprint is **not unique**: every phone of the same model and OS shares it.
 2. **Time adjacency.** The entity's last probe was ≤ 2 minutes ago.
 3. **Sequence-number continuity.** 802.11 frames carry a 12-bit counter. The new frame must continue it: 1 ≤ (seq − last) mod 4096 ≤ 64.
-4. **No ambiguity.** Exactly one candidate matches. If two do, nothing is linked.
+4. **Comparable signal.** |ΔRSSI| ≤ 20 dB. Two phones of the *same model* share a fingerprint, so if their sequence numbers happened to line up they could otherwise be merged into a false "follower". A real rotation keeps a similar signal; a second phone at another distance jumps. The tolerance is loose (probe RSSI is noisy and a rotation can span two minutes of walking), so it only rejects gross mismatches.
+5. **No ambiguity.** Exactly one candidate matches. If two do, nothing is linked.
 
-Some OSes reset the sequence counter when they rotate the address. Those rotations are **missed, never mis-linked**.
+Some OSes reset the sequence counter when they rotate the address, and recent devices increasingly reset it **per burst** (Puig et al., 2026). Those rotations are **missed, never mis-linked**: the link gets more conservative over time, which is the safe direction for a counter-surveillance tool.
+
+**What the HT capabilities tell you.** For a Wi-Fi client, the device details show the decoded 802.11 HT capabilities (e.g. "HT 20MHz · LDPC · SGI20 · 1×RxSTBC") — the PHY/driver features the device advertises. It is a **model-level clue, shared by every identical phone**, shown for transparency, not used to link rotations. Research shows these fields can be *decomposed* into subfields to cluster devices across a whole population (Puig et al., 2026, up to ~90% in a 22-device lab); Retrovision deliberately does not do that — population de-anonymisation is a tracking technique, the opposite of this tool's job, and it cannot tell two same-model phones apart anyway.
+
+**Device detail.** Tapping a device opens a full screen: the level, what it is, when it was last heard, and four key numbers (places, time heard, frames, strongest signal). Below, sections that open on tap, each with a one-line summary while closed:
+1. **Why** (open by default): the reasons, ranked by how much each added to the score, with a bar and the amount (+0.27, +0.15…). The score and threshold follow, labelled "a sum of clues, not a probability". If a cap held it down, it says by how much and why (few places, stays put, one area, resident).
+2. **When and where:** each stretch it was heard and where you were.
+3. **Identity and addresses:** address reliability, linked addresses and why, AP uptime, HT capabilities.
+4. **Networks:** networks searched for by name and joins.
+5. **Tools and online lookups:** Find it, WiGLE/BeaconDB lookups (only the identifier you tap is sent), field-test target.
+
+Then **your verdict:** *False alarm* / *Suspicious*, and *It's mine*, which asks for confirmation (a device planted on you also "travels with you").
+
+**Searching devices.** When the list was trimmed to the 5,000 most relevant, the switch under the search box (*Also search the other N*) extends the search to the rest. They are kept as short summaries (names, networks, addresses, category); tapping one builds its full report on demand from the live window. The search box on *Devices* matches names, network names (its own, the ones it searches for, the ones it joined), vendor, category and addresses in any notation (`aa:bb:cc`, `AA-BB-CC`, `aabbcc`, or a fragment). Case and accents don't matter, and several words must all match. The search combines with the filter chips, whose counts follow the search. With the *Looking for a network* filter on, a row of chips lists every network being searched for by name, with how many devices ask for it. Tap one to see who asks for it. A network many unrelated devices know is a public one (a chain, a station); one that a single device knows says more about that device.
+
+**When and where.** A device's detail lists when it was heard, newest first: date, time span, how many frames, the strongest signal, and **where you were** at the time (a routine place by name, or "place #N", with the distance from where you are now). It is your own GPS position, not the device's: one receiver cannot locate a transmitter. A new line starts when you change place or after 10 minutes of silence. Text only: there is deliberately no per-device map.
+
+**Seeing the links.** In a device's detail, *Linked addresses* lists every address with when it was heard and **why** it was linked: same probe fingerprint with the frame counter continuing, same distinctive Bluetooth name, same rare networks, or same access-point boot moment. The first address is marked as such. Check that the times follow on from each other: a real rotation has one address stop as the next one starts. The *Linked addresses* filter on *Devices* shows only entities with more than one address.
 
 **Randomised BLE addresses.** A new address is stitched to a previous one ("carry-over") only if:
 - the advertisement has a **distinctive, serial-like local name** (≥ 10 characters, or ≥ 4 with a digit, e.g. a fitness band broadcasting its serial), and
@@ -118,6 +143,8 @@ Some OSes reset the sequence counter when they rotate the address. Those rotatio
 - exactly one recent trail (≤ 5 minutes) matches, at a comparable signal (|ΔRSSI| ≤ 12 dB).
 
 **Anonymous phones are never stitched.** Their advertising shape (Apple, Google or Microsoft "continuity" messages) is shared by millions of devices, and BLE has no per-device counter like Wi-Fi's sequence number. This is the biggest honest limit of the tool (see *Limits*). Trails are forgotten after 5 minutes, so no cross-day identity is built from BLE.
+
+**Randomisation is weaker than it looks (but we don't exploit that).** BLE address randomisation — Resolvable Private Addresses (RPA), rotated every ≤15 min — has documented breaks: a predictable rotation interval lets old and new addresses be linked by timing (and RSSI continuity) across the change; and an allowlist side channel lets a device's rotating address be tied to a device it has paired with, because a peripheral answers `SCAN_REQ` only from allow-listed centrals (Zhang & Lin, *Breaking BLE MAC Address Randomization*, CVE-2020-35473; ~18% of 100k real devices were exposed). Retrovision uses the mild version of this — RSSI + timing + a distinctive name, within one movement — and deliberately stops there. It does **not** replay or forge packets (the probe only ever listens), and it does not link anonymous phones by timing/RSSI alone: that is population tracking, the opposite of this tool's job. Knowing it is possible is why "my phone randomises, so I'm private" is only partly true.
 
 **MAC trust.** Each entity shows how much its address can be trusted over time:
 - **Stable**: a vendor or public address. Same device, every time.
@@ -143,7 +170,7 @@ Some OSes reset the sequence counter when they rotate the address. Those rotatio
 
 An AirTag **separated from its owner** that moves with you is the classic planted-tracker situation. It gets the largest bonus in the score.
 
-**Moving access points** are networks that travel: phone hotspots, car Wi-Fi, dashcams, action cameras, Wi-Fi Direct. They are recognised by default SSID patterns and vendor prefixes. A moving AP seen at several of your places is a strong signal, because it is usually a vehicle. These are **default names only**; a renamed hotspot is not recognised.
+**Moving access points** are networks that travel: phone hotspots, car Wi-Fi, dashcams, action cameras, Wi-Fi Direct. They are recognised by default SSID patterns and vendor prefixes. A locally administered BSSID alone is **not** taken as a hotspot sign: shop, city and guest networks on multi-SSID routers use them too. A moving AP seen at several of your places is a strong signal, because it is usually a vehicle. These are **default names only**; a renamed hotspot is not recognised.
 
 ## The following score
 
@@ -186,6 +213,13 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
 - **Resident → score ≤ 0.25** (see *Places, routine places and residents*).
+- **Access point heard in one area only → score ≤ 0.45.** An access point heard only within **600 m** of one area (largest distance between your positions while hearing it) can't be told apart from a fixed router, whatever its signal does. That is twice a typical outdoor range: you can hear a fixed AP up to ~300 m away on either side. **Only being heard farther apart than that proves it moved with you.** A follower who stays within one neighbourhood with you is therefore not alerted on by position alone; co-movement, joined-after-you and turns still show in the reasons. In the old town of a city this removes the bulk of false alerts (shop, bar and city Wi-Fi heard over and over while you walk around).
+- **Stays put → score ≤ 0.35.** Walking around a block or between two squares, a fixed access point or beacon is heard at several 100 m "places", for the whole time, before and after every turn. Geometry alone makes it look like a follower. Its signal gives it away: it is loudest near one spot and fades the farther you walk from it. The app tests this on one receiver, with at least 16 positioned readings:
+  1. It estimates the spot from the strongest readings of **half** the samples.
+  2. It measures the fade on the **other half**: the rank correlation (Spearman ρ) between your distance from the spot and the RSSI.
+  3. It calls the device fixed if ρ ≤ −0.2, the fade is statistically clear (z = ρ·√(n−1) ≤ −4), all readings fall within 450 m of the spot, and your distance from it actually varied (≥ 40 m).
+
+  Splitting the samples matters: estimating and testing on the same readings shows a fake fade even for pure noise, which would hide a tag carried on you. Something moving with you, or in your bag, shows no fade and is never capped this way.
 
 **Alert rule.** An alert fires when **score ≥ alert threshold** (default 0.70) **and effective places ≥ minimum places** (default 3). Both are in Settings.
 
@@ -212,6 +246,9 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Same access point under a new name | See *Network signals* |
 | Moves together with N other devices | See *Network signals* |
 | Known at your routine places | Resident: damped |
+| Stays in one spot … | Its signal fades as you walk away from one point: a fixed device you keep passing. Capped at 0.35 |
+| Access point only heard within ~N m of one area | Not enough movement to tell a fixed router from a follower. Capped at 0.45 |
+| Running for N days without a reboot | From the beacon clock. Typical of a fixed router. Information only: a portable router can run for days too |
 
 ### Worked examples
 
@@ -220,6 +257,8 @@ places = (3−1)/3 = 0.67 → 0.267 · windows = 1 → 0.200 · span = 25/30 →
 Base = 0.78. Co-movement +0.15, moving AP +0.10 → **1.00 (clamped). Alert.**
 
 *Your neighbour's router.* It is seen only at home (a confirmed routine place) for 12 hours. effPlaces = 0.3 → capped at 0.30, and after 3 days it becomes a resident (≤ 0.25). **No alert.**
+
+*The bookshop's Wi-Fi in the old town.* You walk loops between two squares for two hours. The shop's AP is heard at 7 places, in all windows, for 2 hours, through every turn, up to 450 m apart: score 1.00 before the fix. Its RSSI drops steadily with your distance from the shop (ρ ≈ −0.75), so it **stays put → 0.35. No alert.** Before build r67 its locally administered BSSID also made it a "phone hotspot" (+0.10): that rule was removed, because multi-SSID routers derive their extra BSSIDs the same way.
 
 *A commuter on your train.* Their phone has a stable address and is seen at 4 stations over 40 minutes, moving with you. The score is high and **this is a real false positive**: they really did travel with you. The reasons make that visible ("moved with you" during the train ride, no presence before or after). See *Limits*.
 
@@ -276,6 +315,8 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 **Your phone joining an unknown access point.** For each of your own networks, only the **first** access point your phone uses is trusted automatically. Any other one raises an alert (at most every 6 hours per access point) until you **confirm it in Settings**: a mesh node or extender of yours triggers this once each. There is no automatic trust by vendor, because a common router brand would let an impersonator straight in. An unconfirmed access point is what an evil twin that got **your** phone looks like.
 
+**Add my devices by scanning** (Settings → *Scan and pick my devices*). The screen lists what your receivers hear right now (probe and phone Bluetooth, last 20 s), strongest first, so you only tick your own things and give them a name. Devices paired with this phone are marked and listed first. A second tab lists the Wi-Fi networks the phone sees: ticking one adds its name to your networks and trusts all its access points heard now. The list pauses while you choose. Limit: a device that rotates its address (most phones, earbuds) is recognised only until its next change; ticking it helps for the current session, *Is this yours?* is what catches it over days.
+
 Weak spot: the very first access point is trusted blindly. If the first time you add a network an evil twin is already answering, it becomes "trusted". Check the list in Settings once after setup.
 
 ## Your verdicts and field tests
@@ -322,6 +363,12 @@ Suggested values: 30–50 m in cities (default 50), 75–100 m if you are mostly
 
 **Live analysis** answers "is something following me *now*?". It looks back over the **analysis window** (Settings, 30–720 minutes, default 120) and runs every 60 s. The four windows only cover the last 20 minutes, so a short window reacts fast and stays focused on the current trip.
 
+**Slots instead of frames.** A phone that advertises every second says the same thing 60 times a minute. Repeats are collapsed into **slots**: one per device, frame kind (or advert type) and SSID per time bucket, keeping the newest reading and summing the frame counts, so counts stay right.
+- **Storage:** 10 s slots. The database grows about ten times slower than with one row per frame.
+- **Live analysis:** 60 s slots, kept **in memory** and updated as frames arrive, so a run no longer re-reads the database. The window is loaded from storage once, at start or when you change the analysis window. At most 120,000 slots are held; beyond that the oldest are dropped and the *Alerts* card says so in red. Then shorten the analysis window.
+- **Attack and drone detection** use every frame of the last 5 minutes, kept separately in memory.
+- **Reports kept:** at most **5,000** devices per analysis. A city centre gives 40,000+ entities in two hours, mostly rotating Bluetooth addresses; keeping them all ran the phone out of memory. Alerts are always kept, then devices with something to show (searching for networks, trackers, drones, notable), then by score. *Devices* says when the list was trimmed. Learning of residents still sees every device.
+
 **Why not a huge window?** Persistence would build up from ordinary life (the same café twice a week), and alerts would fire on stale history. Live mode is for "now".
 
 **Retrospective analysis** (*Analyze saved data*) answers "has anything been around me across the last days?". This catches someone who shows up at different moments rather than continuously. It reviews a span you pick (e.g. 24 h, 3 days, 7 days) with a tuned configuration:
@@ -340,7 +387,7 @@ Every analysis cycle checks the **last 3 minutes** of Wi-Fi management frames an
 | **Deauth / disassoc flood** | ≥ **40** deauth+disassoc frames aimed at **one** BSSID within 3 min. Severity grows to 400 | Normal networks send a few deauths, spread across many BSSIDs (roaming, idle timeouts). An attack hammers one target. An earlier rule ("≥ 12 in total") fired on ordinary city traffic |
 | **Karma / MANA access point** | One AP answers probe responses for **≥ 5 different SSIDs** (severity saturates at 15) | A real AP has one name. A Karma AP says "yes" to every network your phone asks for, to lure it in |
 | **Evil twin of your network** | One of **your own SSIDs** (Settings → My networks) advertised from **≥ 2 BSSIDs** | Your home network should have one known AP. Add every BSSID of a mesh by listing it, or expect this to fire |
-| **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, and a signal spread (std dev) **≤ 6 dB**. Needs ≥ 2 min of history first | Walking or driving past real networks also brings many new ones, but they come from many places, so their signals spread widely. Fake ones all come from one transmitter |
+| **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, a signal spread (std dev) **≤ 6 dB**, and all of: median signal **≥ −80 dBm** (the transmitter is near you); **≥ 60 %** of them with the **same beacon template** (the information elements and their sizes, without name, channel and TIM: one tool sends one template); and either **many radios** (BSSIDs with different middle bytes for ≥ 60 % of them: random fake addresses) or **≥ 20 counted up from one base address** (more names than any real router serves). Needs ≥ 2 min of history first | Walking into range of city and shop Wi-Fi brings many new networks at once, all equally **weak** at the edge of reception, from a few multi-SSID routers. That fooled the first version in a field test (Ferrara old town). The signal, template and radio checks were added for it |
 | **BLE spam** (Flipper Zero / ESP32 "pop-up" attacks) | **≥ 25** random addresses within 1 min, each alive **≤ 10 s**, sending pairing pop-up adverts (Apple Proximity Pairing / Nearby Action, Google Fast Pair, Microsoft Swift Pair, Samsung EasySetup), with a signal spread **≤ 6 dB** | Real earbuds keep an address for minutes, and a crowd's signals spread widely. A spammer cycles a new address every advert from one spot |
 
 Not flagged, on purpose: an SSID served by many BSSIDs in general (normal for mesh, enterprise and hotspot chains) and simply "many APs around".
@@ -408,13 +455,57 @@ Use: see what is really talking on a network near you, for example devices conne
 
 **Radar** (Status screen) shows what you are hearing right now:
 - **Distance from centre = signal strength**, smoothed (EWMA). Closer to the centre means louder, which *usually* means nearer. Walls, bodies, antennas and transmit power all distort this.
+- **The lines.** A line from the centre to a dot is that device's **estimated direction**. A dot without a line has an unknown direction: its angle on the screen is arbitrary and means nothing.
 - **Direction** is shown only when it can be estimated, and is otherwise drawn as a ring with no direction. With one omnidirectional antenna there is no true angle of arrival. The only cue is that **walking toward a transmitter raises its signal**. The app fits a plane `rssi ≈ a + b·east + c·north` over the last 90 s of samples (needing ≥ 8 samples and ≥ 15 m of your own movement). The slope points toward the device, and the fit's R² is the confidence. A direction is drawn only at R² ≥ 0.4. If you walked in a straight line, it can only tell ahead from behind.
 - Something moving **with** you keeps a constant signal, so it gets no direction. That is correct, not a bug.
 - Alerting devices are highlighted. Tap a blip for details.
 
-**Find it** turns one device into a warmer/colder meter: −100 dBm reads as cold and −35 dBm as on top of it, with beeps that speed up as the signal grows. Walk slowly, turn around (your body blocks signal), and search where it peaks. It cannot point; it only tells you hotter or colder.
+**Find it** turns one device into a warmer/colder meter. It reads **every raw frame** of that device from any receiver (probe or phone), with no GPS needed, so the reading moves as you move:
+- **The number** is the signal lightly smoothed (two-thirds of the previous value plus one-third of the new frame). −95 dBm reads as cold and −35 dBm as on top of it. The arcs light up with it, and the colour goes from blue to red.
+- **The arrow**: ▲ warmer, ▼ colder, ● steady. It compares the average of the last 3 s with the 3 s before them, with a ±2.5 dB dead band.
+- **The graph** shows each raw reading of the last 60 s as a dot, with the smoothed line on top. Below it: the peak and how long ago it was, readings per second, and the time since the last reading. Few readings per second means the device transmits rarely, so move more slowly.
+- **Sound and vibration** pulse faster and, for vibration, stronger as the signal grows: about 1 s apart when far, 0.1 s when on top of it. Each can be switched off.
+
+It cannot point. Walk slowly, turn around (your body blocks the signal), follow ▲, and search where it peaks: bags, pockets, car seats, wheel arches.
+
+**Device map.** The detail of a device that may follow you (an alert, or a score of 0.5 or more) opens with a map: every place it was heard, from all stored data, over your own track for the same period. It has full screen, zoom and replay, and *Open in Places* to see it next to the other devices.
 
 ## Alerts and notifications
+
+**The verdict.** The first card on *Status* gives one answer:
+
+| | Verdict | When |
+|---|---|---|
+| ✅ | **Nothing found** | Nothing alerts, and the app sees everything it can: probe streaming, GPS within your accuracy limit, at least 20 min collected, analysis up to date |
+| ◐ | **Nothing found, limited view** | Nothing alerts, but part of the picture is missing; the card lists what |
+| ⏳ | **Can't tell yet** | Nothing is listening, no analysis yet, or less than 10 min collected. The app does not say "nothing found" when it could not have seen it |
+| 👀 | **Worth a look** | At least one alert |
+| ⚠️ | **Strong signs** | An alert backed by behaviour (below), or a high-severity radio attack |
+
+Under it: the alerts in words, what the app can't see right now, and the basis in one line ("Probe ✓ · GPS ±4 m · 47 min analysed").
+
+**Levels, not percentages.** The score is a sum of clues capped at 1, not a probability, so "100 %" is never shown outside the evidence. Levels:
+- **Strong signs:** an alert **and** behaviour only something moving with you produces: steady signal over a long move, arrived and left with you at ≥ 2 stops, stayed through ≥ 3 turns, or a tracker away from its owner.
+- **Worth a look:** an alert from presence alone (many places, long time). Shared routes, public transport and neighbourhoods produce this too.
+- **Some signs / Low:** below the alert threshold.
+
+The exact score is in the device's detail, labelled as such.
+
+**The dashboard.** *Status* is a dashboard of widgets: verdict, start/stop, radio attacks, overview (devices, alerts, trackers, attacks, minutes analysed), radar, sensors, route check, drones, "is this yours?", connected clients, review of saved data. Tap the pencil to reorder them (up/down) and show or hide each one; *Reset to default* restores the original order. The layout is saved on the phone.
+
+**Notifications.**
+- All following alerts go into **one** notification, updated in place, titled with the levels ("Strong signs: 1 · Worth a look: 2"). It opens the alert grid.
+- **On the lock screen** every Retrovision alert reads only "Retrovision · Something to check". The device names and reasons appear only once the phone is unlocked.
+- **Discreet notifications** (Settings) use that neutral text everywhere, even unlocked.
+- The notification channels are called "Alerts", so system settings don't reveal what the app looks for.
+
+**The alert grid.** Tap the verdict (or the red attacks card) on *Status* to open every current alert as a tile: radio attacks, devices that may be following you, drones. Each tile shows the level, how long ago, and your verdict if you gave one. Tap a tile for the evidence:
+- **Attacks:** what the attack is, the numbers that triggered it (frames, channel, median signal, template share, radios), the network names and transmitter addresses involved, and how it can be wrong.
+- **Following:** the full device detail (reasons, linked addresses, lookups).
+- **Drones:** the Remote ID data and addresses.
+
+**Your verdict.** *Makes sense* / *False alarm* (and *Suspicious* / *False alarm* for devices). It's stored on the phone with the alert's evidence class. *False alarm* silences that alert's notifications for 24 h. The verdicts are ground truth for tuning the thresholds.
+
 
 All of these are in Settings → Notifications:
 
@@ -433,26 +524,42 @@ All of these are in Settings → Notifications:
 
 ## Maps (offline)
 
-Places and your own track can be drawn on a dark, interactive map. Maps are **offline vector tiles** (PMTiles, OpenStreetMap data via Protomaps). You download the area you need once, by a bounding-box extract that fetches only the needed tiles, and the app renders it locally. No map server sees where you are browsing.
+The map is drawn by **MapLibre Native** (GPU, the renderer behind many maps apps) directly from the offline file: **PMTiles** (vector, OpenStreetMap data via Protomaps) or **MBTiles**. Style, fonts (Noto Sans: Latin, Greek, Cyrillic) and icons are inside the app, and the renderer is marked offline, so **nothing is fetched from the network** and no map server sees where you look. You download the area you need once (menu → *Download the map of this area*), by a bounding-box extract that fetches only its tiles. Vector maps must use the Protomaps schema (the in-app download and the "offline map" workflow do); raster maps are dimmed for night use.
 
-The map shows **your** places and **your** movement. By design it does not draw where any other device has been.
+The map shows **your** places and **your** movement. It opens like a navigation app: centred on your position at street level and **following you** (◎ is highlighted) until you drag it. ⓘ shows distance, time moving, stays and GPS quality for the period. Chips over the map switch layers on and off: track, stays, routine places, flagged devices. *Offline map*, *Routine places* and *Timeline* are collapsible sections under the map; the timeline is grouped by day.
+
+**Devices that may follow you.** Devices with an alert or a score of *some signs* or more (at most eight, the most relevant) appear as coloured ◆ **wherever your receivers heard them, over all stored data** (not only the analysis window): your GPS position in each minute the device was heard, merged into one point while you did not move more than 30 m. One chip per device over the map shows or hides it, and the list under the map has a checkbox for each, *Hide all / Show all*, and opens on every place with date and time (the 100 most recent listed, all of them on the map). Tapping a device zooms to all its places and draws them in time order. The device detail has *Show all its places on the map*. Each ◆ is **your** position at that moment: no other device is ever located. Markers close together are grouped into a numbered circle in the device's colour; tap it to zoom in. **Focus on one device** (tap it in the list, or *Only this device* on a ◆): your track is coloured in that device's colour **where it was with you** (heard within a minute), so you read at once from where to where, and on which days, it followed you. The replay bar is off until you tap play.
+
+If one of these is a device of yours (it is with you everywhere, so it looks exactly like a follower), mark it as yours in *Add my devices*: that is a false alarm, not a tracker.
 
 ## Data, privacy and security
 
 - **Everything is local.** Sightings, fixes, places and settings stay on the phone.
 - **Encrypted at rest.** The database uses SQLCipher. Its key is wrapped by a key held in the Android Keystore, which cannot be exported.
 - **Retention.** Sightings are deleted after the number of days you set (1–30). GPS fixes are kept for up to 30 days, because learning routine places needs weeks.
-- **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached.
+- **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached. Lookups run only when you tap them, one identifier at a time. Looking up a network a phone asks for often points to its owner's home: use it on devices that are following you, not on passers-by. The WiGLE fields are masked.
 - **Session recordings** are **encrypted** (AES-256-GCM in independent chunks, key derived from the database passphrase), so a crash only loses the last seconds and a tampered or reordered file is rejected. Recordings made by older versions are encrypted the first time you open the Sessions screen. If the Keystore is unavailable, the app refuses to record rather than write in clear. **Export writes a plain copy** (so it can be replayed on another phone): it contains other people's device addresses and your track, so treat it like the database. Imports are encrypted on arrival.
 - **Sensitive settings** (your network names, trusted access points, your phone's fingerprint, WiGLE name and token) are **encrypted with a Keystore key**. Values stored in clear by older versions are migrated on first read. Other settings (thresholds, toggles) are plain.
-- **Delete all data** removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, trusted access points, your phone's fingerprint and field-test targets.
+- **Delete all data** (Settings → Data and privacy) removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, your devices, your network names, trusted access points, your phone's fingerprint, WiGLE credentials, field-test targets, the crash log and the event log. Optionally the offline maps too, since they show which area you use.
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
+## Devices: live window or full archive
+
+The Devices tab shows either the **live window** (the analysis, with scores and filters) or the **archive**: every device still stored, up to the retention period, newest first (at most 1000; type to search address, network names and Bluetooth names). Matching is on raw bytes, in three case forms (as typed, lower case, first letter capital). An archived device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If it is in the current window, *Open full details* opens the usual detail. The archive is a full scan of an encrypted table: seconds on a small database, longer on millions of rows. *Compact / Cards* switches between one-line rows and cards, in both modes.
+
+**Device detail.** Actions come first, as a grid of icon tiles: *Find it*, the online lookups (WiGLE, BeaconDB; one identifier per tap), *In Places* (for devices that may follow you), *Suspicious*, *False alarm*, *It's mine* (with confirmation) and *Test target*. Then the key numbers, the map (for devices that may follow you), *Why* (open), and folded: times heard, identity and addresses, networks, and what each action does.
+
+**Review saved data** (Status) analyses any period: the last 6 h, 24 h, 3 or 7 days, or any days you pick on the calendar.
+
 ## Settings reference
+
+Settings are grouped in collapsible sections, each showing its current state while closed: **My devices and networks** (scan to add, your Wi-Fi names, trusted access points, identify my phone, devices marked as mine), **Alerts and notifications**, **Sensitivity** (presets *Fewer alerts* 80/4, *Balanced* 70/3, *More alerts* 55/2, sliders, reset to defaults, your verdicts), **Receivers**, **Online lookups**, **Data and privacy**, **Advanced and help**. The tab bar order is Status, Devices, Places, Settings, Probe.
 
 | Setting | Default | What it changes |
 |---|---|---|
+| Devices kept in full detail | 5000 | Reports kept after each analysis; the rest stay searchable with *All* in Devices. Also in Devices ⋮ |
+| Shown in the Devices list | 300 | 100 / 300 / 1000 rows, from Devices ⋮ |
 | Alert when score ≥ | 70% | Alert threshold |
 | …and seen at ≥ N places | 3 | Minimum effective places for an alert |
 | Analysis window | 120 min | Live look-back. Longer means more memory but staler |
@@ -472,7 +579,7 @@ The map shows **your** places and **your** movement. By design it does not draw 
 
 This is the honest list. Read it before trusting a result.
 
-1. **Randomised phones are mostly invisible across time.** A modern phone that isn't connected to a network rotates its Wi-Fi and BLE addresses. Wi-Fi rotations are linked only when the sequence counter continues, and anonymous BLE phones are never linked. A person carrying only a well-randomised phone may appear as many short entities that never score high. **This is the biggest gap, and it is fundamental, not a bug.**
+1. **Randomised phones are mostly invisible across time.** A modern phone that isn't connected to a network rotates its Wi-Fi and BLE addresses. Wi-Fi rotations are linked only when the sequence counter continues (increasingly rare — recent phones reset it per burst, Puig et al. 2026) and the signal is comparable, and anonymous BLE phones are never linked. A person carrying only a well-randomised phone may appear as many short entities that never score high. **This is the biggest gap, and it is fundamental, not a bug.** Published research can re-link some of these (IE/HT-subfield fingerprinting, inter-frame timing), but only at population scale and only well for chatty devices — that is a tracking technique, and Retrovision deliberately does not implement it.
 2. **What *does* stay identifiable**: devices with stable addresses (many laptops, cars, IoT devices, older phones), access points (hotspots, cars, cameras), trackers, and BLE devices broadcasting serial-like names (bands, earbuds). These are where the tool is strongest.
 3. **Shared routes cause real persistence.** Commuters, bus passengers and people walking the same way genuinely travel with you. The reasons show it, but you have to judge.
 4. **One antenna, one channel at a time.** Coverage is a sample, not a complete picture. Busy places produce probe drops (shown on the probe card).
@@ -486,6 +593,19 @@ This is the honest list. Read it before trusting a result.
 12. **Notable-device tags** are name/ID patterns: easy to evade, and prone to false matches.
 13. **Thresholds are not yet validated on real data.** Use the verdict buttons and field tests; expect values to change.
 
+## Diagnostics
+
+*Settings → Diagnostics* shows what the app is doing and what went wrong, live:
+- **Memory**: the app's heap use against its limit. Amber above 80 %.
+- **USB / Decoder**: connections, reader errors, and the backlog between the USB reader and the decoder. Dropped chunks mean the phone fell far behind.
+- **Probe**: sequence gaps (frames the probe could not hand to the phone in time), probe queue drops, CRC errors, chip temperature.
+- **Database**: the last insert batch and the slowest one, plus sightings dropped because the write queue was full.
+- **Analysis**: how long each run takes and how much of the window was loaded.
+- **UI freezes**: times the screen was blocked for 2 s or more (5 s is when Android shows "app not responding").
+- **Events**: connections, phase changes, probe reboots, slow operations, errors, system low-memory warnings.
+
+If the app crashes, the error and the last events are saved and shown on *Status* at the next start. **Copy report** and **Share** build a plain-text report: versions, phone model, the counters, the events, the last crash and, optionally, the app's own warnings from the system log. It contains no device addresses or network names, and it leaves the phone only if you share it.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | What to do |
@@ -493,7 +613,8 @@ This is the honest list. Read it before trusting a result.
 | "Waiting for the probe to introduce itself" for more than ~15 s | Orphaned session, no firmware, or the wrong firmware | The app auto-reboots the probe within ~3–12 s. If it persists, flash the firmware from *Probe* |
 | Probe "rejected" | Firmware and app protocol versions differ | Flash the firmware bundled with this app |
 | Wi-Fi/BLE counters stuck at 0 but status updates | Clock not synced yet, or an orphaned session | Wait a few seconds. The watchdog recovers it |
-| Many "dropped" frames | Busy area, data frames on | Turn off data frames |
+| Many "dropped" / "lost" frames | The phone wasn't reading the USB fast enough (the probe's writes time out), or a busy area with data frames on | Update the app (the USB reader was made faster and no longer waits on processing). Turn off data frames. A probe above ~70 °C also struggles |
+| The app closes by itself | Usually memory | On the next start, *Status* shows the last error. Open *Diagnostics*, copy the report and attach it to the issue. Shorten the analysis window meanwhile |
 | No places / no alerts indoors | GPS filtered out (poor accuracy) | Expected. Go outside, or relax the GPS setting a little |
 | Deauth alert at home | A misbehaving AP or a real attack | Look at the target BSSID: is it yours? Repeated alerts on one BSSID are worth investigating |
 | Evil-twin alert for your own mesh | Your network has several APs | Expected. List all your SSIDs and accept that a mesh will trigger it, or remove the SSID |
@@ -521,5 +642,8 @@ Retrovision is free software under the **GNU GPL, version 3 or later** (`GPL-3.0
 
 - [Wire protocol](protocol.md)
 - Vanhoef et al., *Why MAC Address Randomization is not Enough*, AsiaCCS 2016
+- Matte, Cunche, Rousseau, Vanhoef, *Defeating MAC Address Randomization Through Timing Attacks*, ACM WiSec 2016
+- Puig, Michaelides, Pintor, Bellalta, Wilhelmi, *Can Machine Learning Break Wi-Fi Privacy? A Study on MAC Address Randomization*, arXiv:2606.25788, 2026
+- Zhang & Lin, *Breaking BLE MAC Address Randomization with Allowlist-Based Side Channels*, ACM ToPS 28(4), 2025 (CVE-2020-35473)
 - [AirGuard](https://github.com/seemoo-lab/AirGuard): tracker detection on Android
 - [Chasing Your Tail NG](https://github.com/ArgeliusLabs/Chasing-Your-Tail-NG)

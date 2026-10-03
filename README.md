@@ -44,9 +44,11 @@ What it is **not**: it does not identify people, does not export per-device trac
 |---|---|---|---|
 | ESP32-S3 (e.g. Seeed XIAO ESP32-S3) | native USB | ✅ | ✅ |
 | ESP32 classic (DevKitC, NodeMCU-32S…) | CP210x / CH340 at 921,600 baud | ✅ | ✅ |
-| ESP32-C5 (dual band) | native USB | ❌ | ✅ |
+| ESP32-C5 (dual band) | native USB | ✅ | ✅ |
 
 Browser flasher: ESP Web Tools on the project's GitHub Pages (`web/`). Images for every board are also attached to each release.
+
+**ESP32-C5 in-app flashing** detects the chip by its id via `GET_SECURITY_INFO` and writes the image from the bootloader at `0x2000`. It is covered by simulator tests and verified on real hardware (2026-10-03): detection, write, MD5 check and boot. The browser flasher remains the recovery path if an in-app attempt fails.
 
 ## Privacy and security
 
