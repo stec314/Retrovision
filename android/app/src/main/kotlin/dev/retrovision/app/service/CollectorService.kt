@@ -603,6 +603,7 @@ class CollectorService : Service() {
                 alertScore = prefs.alertScore.toDouble(),
                 alertMinPlaces = prefs.alertMinPlaces,
                 maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
+                maxReports = prefs.maxReports,
             )
             val from = now - cfg.lookbackMs
             val mine = liveWindow.snapshot(from).filter { it.entityId == id }
@@ -624,6 +625,7 @@ class CollectorService : Service() {
             alertScore = prefs.alertScore.toDouble(),
             alertMinPlaces = prefs.alertMinPlaces,
             maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(),
+            maxReports = prefs.maxReports,
         )
         val from = now - cfg.lookbackMs
         // The window lives in memory. It is filled from the database once (at start, or when the

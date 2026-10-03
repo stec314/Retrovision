@@ -97,6 +97,21 @@ class Prefs(ctx: Context) {
         get() = p.getInt("lookbackMin", 120)
         set(v) = p.edit().putInt("lookbackMin", v).apply()
 
+    /** Devices kept with a full report after each analysis (the rest stay searchable as stubs). */
+    var maxReports: Int
+        get() = p.getInt("maxReports", 5000)
+        set(v) = p.edit().putInt("maxReports", v).apply()
+
+    /** Rows shown in the Devices list before "search or filter". */
+    var devicesShown: Int
+        get() = p.getInt("devicesShown", 300)
+        set(v) = p.edit().putInt("devicesShown", v).apply()
+
+    /** Map: show where alerting devices were heard (only places on your own track). */
+    var mapAlertDevices: Boolean
+        get() = p.getBoolean("mapAlertDevices", true)
+        set(v) = p.edit().putBoolean("mapAlertDevices", v).apply()
+
     var retentionDays: Int
         get() = p.getInt("retentionDays", 7)
         set(v) = p.edit().putInt("retentionDays", v).apply()

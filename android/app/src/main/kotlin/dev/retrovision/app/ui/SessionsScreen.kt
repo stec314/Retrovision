@@ -79,7 +79,7 @@ fun SessionsSection() {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(Texts.tr("Recorded sessions", "Sessioni registrate"), style = MaterialTheme.typography.titleMedium)
+        Text(Texts.tr("Recorded sessions", "Sessioni registrate"), style = MaterialTheme.typography.titleSmall)
         Text(
             Texts.tr(
                 "A recording holds the observations and your GPS fixes, so you can replay it with other settings or newer analysis code. It stays on this phone unless you export it, and it contains other people's device addresses: treat it like the database.",
@@ -148,7 +148,7 @@ fun FieldTestSection() {
         e.entityId in targets || e.ssids.any { it.startsWith("RV-TARGET") }
     }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        Text(Texts.tr("Field test", "Test sul campo"), style = MaterialTheme.typography.titleMedium)
+        Text(Texts.tr("Field test", "Test sul campo"), style = MaterialTheme.typography.titleSmall)
         Text(
             Texts.tr(
                 "Carry a device you control (the retrovision-target firmware, or any phone/tag), mark it from the Devices tab, then go about your day. Detection % is the share of minutes in which it was heard; the score should cross the alert threshold once you have been to enough different places. If it does not, the weights need tuning.",

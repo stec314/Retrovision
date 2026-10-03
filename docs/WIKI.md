@@ -314,6 +314,8 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 **Your phone joining an unknown access point.** For each of your own networks, only the **first** access point your phone uses is trusted automatically. Any other one raises an alert (at most every 6 hours per access point) until you **confirm it in Settings**: a mesh node or extender of yours triggers this once each. There is no automatic trust by vendor, because a common router brand would let an impersonator straight in. An unconfirmed access point is what an evil twin that got **your** phone looks like.
 
+**Add my devices by scanning** (Settings → *Scan and pick my devices*). The screen lists what your receivers hear right now (probe and phone Bluetooth, last 20 s), strongest first, so you only tick your own things and give them a name. Devices paired with this phone are marked and listed first. A second tab lists the Wi-Fi networks the phone sees: ticking one adds its name to your networks and trusts all its access points heard now. The list pauses while you choose. Limit: a device that rotates its address (most phones, earbuds) is recognised only until its next change; ticking it helps for the current session, *Is this yours?* is what catches it over days.
+
 Weak spot: the very first access point is trusted blindly. If the first time you add a network an evil twin is already answering, it becomes "trusted". Check the list in Settings once after setup.
 
 ## Your verdicts and field tests
@@ -515,24 +517,30 @@ All of these are in Settings → Notifications:
 
 Places and your own track can be drawn on a dark, interactive map. Maps are **offline vector tiles** (PMTiles, OpenStreetMap data via Protomaps). You download the area you need once, by a bounding-box extract that fetches only the needed tiles, and the app renders it locally. No map server sees where you are browsing.
 
-The map shows **your** places and **your** movement. By design it does not draw where any other device has been.
+The map shows **your** places and **your** movement. It opens like a navigation app: centred on your position at street level and **following you** (◎ is highlighted) until you drag it. ⓘ shows distance, time moving, stays and GPS quality for the period. Chips over the map switch layers on and off: track, stays, routine places, flagged devices. *Offline map*, *Routine places* and *Timeline* are collapsible sections under the map; the timeline is grouped by day.
+
+**Flagged devices.** Devices the analysis rates *worth a look* or *strong signs* (at most six, the most relevant) appear as coloured ◆ where your receivers heard them, joined in time order. Tap a ◆ for time, number of sightings and strongest signal, then *All places of this device*; the device detail has *Show all its places on the map*. Each ◆ is **your** position at that moment, from the analysis window only: no other device is ever located, and devices that are not flagged are never drawn.
 
 ## Data, privacy and security
 
 - **Everything is local.** Sightings, fixes, places and settings stay on the phone.
 - **Encrypted at rest.** The database uses SQLCipher. Its key is wrapped by a key held in the Android Keystore, which cannot be exported.
 - **Retention.** Sightings are deleted after the number of days you set (1–30). GPS fixes are kept for up to 30 days, because learning routine places needs weeks.
-- **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached.
+- **Optional lookups.** WiGLE (BSSID/SSID → known location) and BeaconDB are **off** unless you configure them. When you use them, the queried address or SSID is sent to that service. Results are cached. Lookups exist for access points and Bluetooth addresses only: the networks a phone asks for are never looked up, because their location is usually the owner's home. The WiGLE fields are masked.
 - **Session recordings** are **encrypted** (AES-256-GCM in independent chunks, key derived from the database passphrase), so a crash only loses the last seconds and a tampered or reordered file is rejected. Recordings made by older versions are encrypted the first time you open the Sessions screen. If the Keystore is unavailable, the app refuses to record rather than write in clear. **Export writes a plain copy** (so it can be replayed on another phone): it contains other people's device addresses and your track, so treat it like the database. Imports are encrypted on arrival.
 - **Sensitive settings** (your network names, trusted access points, your phone's fingerprint, WiGLE name and token) are **encrypted with a Keystore key**. Values stored in clear by older versions are migrated on first read. Other settings (thresholds, toggles) are plain.
-- **Delete all data** removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, trusted access points, your phone's fingerprint and field-test targets.
+- **Delete all data** (Settings → Data and privacy) removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, your devices, your network names, trusted access points, your phone's fingerprint, WiGLE credentials, field-test targets, the crash log and the event log. Optionally the offline maps too, since they show which area you use.
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
 ## Settings reference
 
+Settings are grouped in collapsible sections, each showing its current state while closed: **My devices and networks** (scan to add, your Wi-Fi names, trusted access points, identify my phone, devices marked as mine), **Alerts and notifications**, **Sensitivity** (presets *Fewer alerts* 80/4, *Balanced* 70/3, *More alerts* 55/2, sliders, reset to defaults, your verdicts), **Receivers**, **Online lookups**, **Data and privacy**, **Advanced and help**. The tab bar order is Status, Devices, Places, Settings, Probe.
+
 | Setting | Default | What it changes |
 |---|---|---|
+| Devices kept in full detail | 5000 | Reports kept after each analysis; the rest stay searchable with *All* in Devices. Also in Devices ⋮ |
+| Shown in the Devices list | 300 | 100 / 300 / 1000 rows, from Devices ⋮ |
 | Alert when score ≥ | 70% | Alert threshold |
 | …and seen at ≥ N places | 3 | Minimum effective places for an alert |
 | Analysis window | 120 min | Live look-back. Longer means more memory but staler |

@@ -34,7 +34,7 @@ import kotlinx.coroutines.withContext
 
 /** Import and choose offline basemaps (.pmtiles / .mbtiles). */
 @Composable
-fun OfflineMapsCard() {
+fun OfflineMapsSection() {
     val scope = rememberCoroutineScope()
     val maps by OfflineMaps.maps.collectAsState()
     val active by OfflineMaps.active.collectAsState()
@@ -47,9 +47,9 @@ fun OfflineMapsCard() {
         }
     }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(Texts.tr("Offline map", "Mappa offline"), style = MaterialTheme.typography.titleSmall)
+    // Inside the collapsible section on Places: no card of its own.
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        run {
             Text(
                 Texts.tr(
                     "Streets come from a file on the phone: the map never asks a server where you are.",

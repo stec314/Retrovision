@@ -55,6 +55,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    // "Show on map" from a device: go to Places (which centres on it), closing any overlay.
+    val mapDevice by MapNav.device.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(mapDevice) {
+        if (mapDevice != null) { AlertsNav.open.value = false; tab = 2 }
+    }
     val wikiOpen by WikiNav.open.collectAsState()
     if (wikiOpen) {
         WikiScreen(onClose = { WikiNav.open.value = false })
@@ -74,8 +79,8 @@ private fun AppRoot() {
         androidx.compose.material.icons.Icons.Filled.Home to Texts.tr("Status", "Stato"),
         androidx.compose.material.icons.Icons.AutoMirrored.Filled.List to Texts.tr("Devices", "Dispositivi"),
         androidx.compose.material.icons.Icons.Filled.Place to Texts.tr("Places", "Luoghi"),
-        androidx.compose.material.icons.Icons.Filled.Build to Texts.tr("Probe", "Sonda"),
         androidx.compose.material.icons.Icons.Filled.Settings to Texts.tr("Settings", "Impostazioni"),
+        androidx.compose.material.icons.Icons.Filled.Build to Texts.tr("Probe", "Sonda"),
     )
     Scaffold(
         bottomBar = {
@@ -96,8 +101,8 @@ private fun AppRoot() {
             0 -> StatusScreen(m)
             1 -> DevicesScreen(m)
             2 -> PlacesScreen(m)
-            3 -> ProbeScreen(m)
-            else -> SettingsScreen(m)
+            3 -> SettingsScreen(m)
+            else -> ProbeScreen(m)
         }
     }
 }

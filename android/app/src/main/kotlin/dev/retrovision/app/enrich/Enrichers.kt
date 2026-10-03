@@ -114,21 +114,21 @@ class WigleEnricher(private val name: String, private val token: String) : Enric
         }
         val auth = "Basic " + Base64.encodeToString("$name:$token".toByteArray(), Base64.NO_WRAP)
         val (code, json) = httpJson("https://api.wigle.net/api/v2/$path", headers = mapOf("Authorization" to auth))
-        if (code == 401) throw EnrichException("WiGLE: credenziali non valide")
-        if (code == 429) throw EnrichException("WiGLE: limite giornaliero raggiunto")
+        if (code == 401) throw EnrichException(dev.retrovision.app.ui.Texts.tr("WiGLE: invalid credentials", "WiGLE: credenziali non valide"))
+        if (code == 429) throw EnrichException(dev.retrovision.app.ui.Texts.tr("WiGLE: daily limit reached", "WiGLE: limite giornaliero raggiunto"))
         if (json == null) throw EnrichException("WiGLE: risposta non valida (HTTP $code)")
         if (!json.optBoolean("success", false)) {
             throw EnrichException("WiGLE: " + json.optString("message", "errore (HTTP $code)"))
         }
         val results: JSONArray = json.optJSONArray("results") ?: JSONArray()
-        if (results.length() == 0) return EnrichResult(label, listOf("Nessun risultato su WiGLE"))
+        if (results.length() == 0) return EnrichResult(label, listOf(dev.retrovision.app.ui.Texts.tr("No results on WiGLE", "Nessun risultato su WiGLE")))
         val lines = ArrayList<String>()
-        lines += "${json.optInt("totalResults", results.length())} risultati"
+        lines += "${json.optInt("totalResults", results.length())} " + dev.retrovision.app.ui.Texts.tr("results", "risultati")
         for (i in 0 until minOf(results.length(), 10)) {
             val r = results.getJSONObject(i)
             val where = listOf(r.optString("road"), r.optString("city"), r.optString("country"))
                 .filter { it.isNotBlank() && it != "null" }.joinToString(", ")
-            lines += "%s  %s  (%.5f, %.5f)  %s  ultimo: %s".format(
+            lines += ("%s  %s  (%.5f, %.5f)  %s  " + dev.retrovision.app.ui.Texts.tr("last", "ultimo") + ": %s").format(
                 r.optString("netid"), r.optString("ssid", r.optString("name", "")),
                 r.optDouble("trilat"), r.optDouble("trilong"), where,
                 r.optString("lastupdt").take(10),

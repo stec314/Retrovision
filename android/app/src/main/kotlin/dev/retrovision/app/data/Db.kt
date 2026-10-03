@@ -175,6 +175,9 @@ interface AppDao {
     @Query("DELETE FROM ignores WHERE entityId = :id")
     suspend fun removeIgnore(id: String)
 
+    @Query("DELETE FROM ignores")
+    suspend fun wipeIgnores()
+
     @Query("SELECT * FROM enrichments WHERE `key` = :key")
     suspend fun enrichment(key: String): EnrichRow?
 

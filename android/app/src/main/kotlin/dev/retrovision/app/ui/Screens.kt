@@ -33,6 +33,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -280,7 +281,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         when (r.kind) {
             EntityKind.WIFI_AP -> add("BSSID $first" to Query.WifiBssid(first))
             EntityKind.BLE_TRACKER, EntityKind.BLE_DEVICE -> add("BLE $first" to Query.BleAddress(first))
-            EntityKind.WIFI_CLIENT -> r.ssids.take(4).forEach { add("SSID “$it”" to Query.WifiSsid(it)) }
+            // No lookups for the networks a phone asks for: they would place its owner's home on a map.
+            EntityKind.WIFI_CLIENT -> {}
         }
         if (r.kind == EntityKind.WIFI_AP && r.ssids.isNotEmpty()) add("SSID “${r.ssids.first()}”" to Query.WifiSsid(r.ssids.first()))
     }
@@ -332,7 +334,15 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         Expandable(
                             Texts.tr("When and where", "Quando e dove"),
                             summary = Texts.tr("${r.visits.size} stretches · first ", "${r.visits.size} periodi · primo ") + fmt.format(Date(r.firstSeenMs)),
-                        ) { VisitsList(r) }
+                        ) {
+                            // Only flagged devices go on the map, and only at your own positions.
+                            if (lv >= dev.retrovision.core.analysis.Level.WORTH_A_LOOK && r.visits.any { it.lat != null }) {
+                                OutlinedButton(onClick = { onClose(); MapNav.device.value = r.entityId }) {
+                                    Text(Texts.tr("Show all its places on the map", "Mostra tutti i suoi luoghi sulla mappa"))
+                                }
+                            }
+                            VisitsList(r)
+                        }
                     }
                     Expandable(
                         Texts.tr("Identity and addresses", "Identità e indirizzi"),
@@ -610,134 +620,324 @@ fun SettingsScreen(modifier: Modifier) {
     var own by remember { mutableStateOf(prefs.ownSsids) }
     var wName by remember { mutableStateOf(prefs.wigleName) }
     var wToken by remember { mutableStateOf(prefs.wigleToken) }
+    var showWigle by remember { mutableStateOf(false) }
     var beacon by remember { mutableStateOf(prefs.beaconDbEnabled) }
+    var keep by remember { mutableIntStateOf(prefs.maxReports) }
     var wipe by remember { mutableStateOf(false) }
+    var scanMine by remember { mutableStateOf(false) }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(Texts.tr("Settings", "Impostazioni"), style = MaterialTheme.typography.headlineSmall)
-        OutlinedButton(onClick = { WikiNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(Texts.tr("📖 Guide: how it works, heuristics, limits", "📖 Guida: come funziona, euristiche, limiti"))
-        }
-        OutlinedButton(onClick = { DiagNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(Texts.tr("Diagnostics (errors, performance, report)", "Diagnostica (errori, prestazioni, report)"))
-        }
 
-        Text(Texts.tr("Alert when score ≥ ", "Allerta con punteggio ≥ ") + "%.0f%%".format(alertScore * 100))
-        Slider(value = alertScore, onValueChange = { alertScore = it }, onValueChangeFinished = { prefs.alertScore = alertScore }, valueRange = 0.3f..0.95f)
-        Text(Texts.tr("…and seen at ≥ $minPlaces places", "…e visto in ≥ $minPlaces luoghi"))
-        Slider(value = minPlaces.toFloat(), onValueChange = { minPlaces = it.toInt() }, onValueChangeFinished = { prefs.alertMinPlaces = minPlaces }, valueRange = 2f..6f, steps = 3)
-        Text(Texts.tr("Analysis window: $lookback min", "Finestra di analisi: $lookback min"))
-        Slider(value = lookback.toFloat(), onValueChange = { lookback = (it / 15).toInt() * 15 }, onValueChangeFinished = { prefs.lookbackMin = lookback }, valueRange = 30f..720f)
-        Text(Texts.tr("Ignore GPS fixes worse than ±$gpsAcc m", "Ignora posizioni GPS peggiori di ±$gpsAcc m"))
-        Text(
-            Texts.tr(
-                "Indoors or in a car the GPS drifts and fakes movement. Lower = stricter (fewer false alerts, fewer fixes).",
-                "In casa o in auto il GPS deriva e simula spostamenti. Più basso = più severo (meno falsi allarmi, meno posizioni).",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Slider(value = gpsAcc.toFloat(), onValueChange = { gpsAcc = (it / 5).toInt() * 5 }, onValueChangeFinished = { prefs.maxFixAccuracyM = gpsAcc }, valueRange = 20f..150f)
-        Text(Texts.tr("Keep data for $retention days", "Conserva i dati per $retention giorni"))
-        Slider(value = retention.toFloat(), onValueChange = { retention = it.toInt() }, onValueChangeFinished = { prefs.retentionDays = retention }, valueRange = 1f..30f)
-
-        NotificationsSection()
-
-        TrustedApsSection()
-        OwnPhoneSection()
-        FeedbackStatsSection()
-
-        Text(Texts.tr("Phone sensors", "Sensori del telefono"), style = MaterialTheme.typography.titleMedium)
-        var bleMode by remember { mutableIntStateOf(prefs.phoneBleMode) }
-        Text(Texts.tr("Use the phone's Bluetooth as a receiver", "Usa il Bluetooth del telefono come ricevitore"))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf(0 to Texts.tr("Off", "No"), 1 to Texts.tr("Without probe", "Senza sonda"), 2 to Texts.tr("Always", "Sempre")).forEach { (v, l) ->
-                FilterChip(selected = bleMode == v, onClick = { bleMode = v; prefs.phoneBleMode = v }, label = { Text(l) })
+        // ── The one thing a new user should do first. ──
+        Panel(title = Texts.tr("My devices and networks", "I miei dispositivi e reti")) {
+            Text(
+                Texts.tr(
+                    "${ignores.size} device(s) and ${prefs.ownSsidSet().size} network(s) marked as yours. Your own things are the main source of false alarms.",
+                    "${ignores.size} dispositivi e ${prefs.ownSsidSet().size} reti segnati come tuoi. Le tue cose sono la prima fonte di falsi allarmi.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = { scanMine = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(Texts.tr("Scan and pick my devices…", "Scansiona e scegli i miei dispositivi…"))
             }
         }
-        var drift by remember { mutableStateOf(prefs.driftGuard) }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                Texts.tr("Reject GPS drift while the phone is still (accelerometer)", "Scarta la deriva GPS quando il telefono è fermo (accelerometro)"),
-                modifier = Modifier.weight(1f),
-            )
-            Switch(checked = drift, onCheckedChange = { drift = it; prefs.driftGuard = it })
-        }
 
-        OutlinedTextField(
-            value = own, onValueChange = { own = it; prefs.ownSsids = it }, modifier = Modifier.fillMaxWidth(),
-            label = { Text(Texts.tr("Your own Wi-Fi names (comma separated)", "Nomi delle tue reti Wi-Fi (separati da virgola)")) },
-        )
+        Expandable(
+            title = Texts.tr("Alerts and notifications", "Allerte e notifiche"),
+            summary = if (!prefs.alertsEnabled) Texts.tr("Off", "Spente") else listOfNotNull(
+                Texts.tr("On", "Attive"),
+                if (prefs.discreetAlerts) Texts.tr("discreet", "discrete") else null,
+                if (prefs.alertSilent) Texts.tr("silent", "silenziose") else null,
+                if (prefs.quietHoursEnabled) Texts.tr("quiet ${prefs.quietStartHour}–${prefs.quietEndHour}", "silenzio ${prefs.quietStartHour}–${prefs.quietEndHour}") else null,
+            ).joinToString(" · "),
+        ) { NotificationsSection() }
 
-        Text("WiGLE", style = MaterialTheme.typography.titleMedium)
-        Text(
-            Texts.tr(
-                "Free account at wigle.net → Account → API token. Lookups send only the identifier you tap.",
-                "Account gratuito su wigle.net → Account → token API. Le ricerche inviano solo l'identificativo che tocchi.",
+        Expandable(
+            title = Texts.tr("My devices, networks and phone", "Miei dispositivi, reti e telefono"),
+            summary = Texts.tr(
+                "${ignores.size} devices · ${prefs.ownSsidSet().size} Wi-Fi names · ${prefs.trustedAps.size} trusted access points · phone " +
+                    if (prefs.ownFingerprints.isEmpty()) "not identified" else "identified",
+                "${ignores.size} dispositivi · ${prefs.ownSsidSet().size} nomi Wi-Fi · ${prefs.trustedAps.size} access point fidati · telefono " +
+                    if (prefs.ownFingerprints.isEmpty()) "non riconosciuto" else "riconosciuto",
             ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-        OutlinedTextField(value = wName, onValueChange = { wName = it; prefs.wigleName = it }, modifier = Modifier.fillMaxWidth(), label = { Text("API name") }, singleLine = true)
-        OutlinedTextField(
-            value = wToken, onValueChange = { wToken = it; prefs.wigleToken = it }, modifier = Modifier.fillMaxWidth(),
-            label = { Text("API token") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        )
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("BeaconDB (Wi-Fi BSSID)")
-            Switch(checked = beacon, onCheckedChange = { beacon = it; prefs.beaconDbEnabled = it })
+        ) {
+            OutlinedButton(onClick = { scanMine = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(Texts.tr("Scan and pick my devices…", "Scansiona e scegli i miei dispositivi…"))
+            }
+            OutlinedTextField(
+                value = own, onValueChange = { own = it; prefs.ownSsids = it }, modifier = Modifier.fillMaxWidth(),
+                label = { Text(Texts.tr("Your own Wi-Fi names (comma separated)", "Nomi delle tue reti Wi-Fi (separati da virgola)")) },
+            )
+            HorizontalDivider()
+            TrustedApsSection()
+            HorizontalDivider()
+            OwnPhoneSection()
+            HorizontalDivider()
+            Text(Texts.tr("Devices marked as mine", "Dispositivi segnati come miei") + " (${ignores.size})", style = MaterialTheme.typography.titleSmall)
+            if (ignores.isEmpty()) Text(Texts.tr("None yet.", "Ancora nessuno."), style = MaterialTheme.typography.bodySmall)
+            ignores.sortedBy { it.label.lowercase() }.forEach { ig ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(ig.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        Text(ig.entityId, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                    TextButton(onClick = { scope.launch { app.db.dao().removeIgnore(ig.entityId); Collector.analyzeNow.value = System.nanoTime() } }) {
+                        Text(Texts.tr("Remove", "Rimuovi"))
+                    }
+                }
+            }
         }
 
-        var dataFrames by remember { mutableStateOf(prefs.captureDataFrames) }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(Texts.tr("Capture data frames (connected clients)", "Cattura frame di dati (client connessi)"), modifier = Modifier.weight(1f))
-            Switch(checked = dataFrames, onCheckedChange = {
+        Expandable(
+            title = Texts.tr("Sensitivity", "Sensibilità"),
+            summary = Texts.tr(
+                "Alert at ${"%.0f".format(alertScore * 100)} and $minPlaces places · window $lookback min · GPS ±$gpsAcc m",
+                "Allerta a ${"%.0f".format(alertScore * 100)} e $minPlaces luoghi · finestra $lookback min · GPS ±$gpsAcc m",
+            ),
+        ) {
+            Text(
+                Texts.tr(
+                    "Presets set the two alert rules together. Fewer alerts misses more; more alerts shows more false alarms.",
+                    "I preset impostano insieme le due regole di allerta. Meno allerte ne perde di più; più allerte mostra più falsi allarmi.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    Triple(Texts.tr("Fewer alerts", "Meno allerte"), 0.8f, 4),
+                    Triple(Texts.tr("Balanced", "Bilanciato"), 0.7f, 3),
+                    Triple(Texts.tr("More alerts", "Più allerte"), 0.55f, 2),
+                ).forEach { (label, sc, pl) ->
+                    FilterChip(
+                        selected = kotlin.math.abs(alertScore - sc) < 0.01f && minPlaces == pl,
+                        onClick = { alertScore = sc; minPlaces = pl; prefs.alertScore = sc; prefs.alertMinPlaces = pl; Collector.analyzeNow.value = System.nanoTime() },
+                        label = { Text(label) },
+                    )
+                }
+            }
+            SettingSlider(
+                Texts.tr("Alert when the score reaches", "Allerta quando il punteggio arriva a") + " ${"%.0f".format(alertScore * 100)}",
+                Texts.tr("The score adds up the evidence; it is not a probability.", "Il punteggio somma gli indizi; non è una probabilità."),
+                alertScore, 0.3f..0.95f, onChange = { alertScore = it }, onDone = { prefs.alertScore = alertScore },
+            )
+            SettingSlider(
+                Texts.tr("…and the device was seen at", "…e il dispositivo è stato visto in") + " $minPlaces " + Texts.tr("places", "luoghi"),
+                null, minPlaces.toFloat(), 2f..6f, steps = 3, onChange = { minPlaces = it.toInt() }, onDone = { prefs.alertMinPlaces = minPlaces },
+            )
+            SettingSlider(
+                Texts.tr("Analysis window", "Finestra di analisi") + ": $lookback min",
+                Texts.tr("How far back each analysis looks. Longer catches slow following, uses more memory.", "Quanto indietro guarda ogni analisi. Più lunga coglie pedinamenti lenti, usa più memoria."),
+                lookback.toFloat(), 30f..720f, onChange = { lookback = (it / 15).toInt() * 15 }, onDone = { prefs.lookbackMin = lookback },
+            )
+            SettingSlider(
+                Texts.tr("Ignore GPS fixes worse than", "Ignora posizioni GPS peggiori di") + " ±$gpsAcc m",
+                Texts.tr(
+                    "Indoors or in a car the GPS drifts and fakes movement. Lower = stricter (fewer false alerts, fewer fixes).",
+                    "In casa o in auto il GPS deriva e simula spostamenti. Più basso = più severo (meno falsi allarmi, meno posizioni).",
+                ),
+                gpsAcc.toFloat(), 20f..150f, onChange = { gpsAcc = (it / 5).toInt() * 5 }, onDone = { prefs.maxFixAccuracyM = gpsAcc },
+            )
+            TextButton(onClick = {
+                alertScore = 0.7f; minPlaces = 3; lookback = 120; gpsAcc = 50
+                prefs.alertScore = 0.7f; prefs.alertMinPlaces = 3; prefs.lookbackMin = 120; prefs.maxFixAccuracyM = 50
+                Collector.analyzeNow.value = System.nanoTime()
+            }) { Text(Texts.tr("Reset to defaults", "Ripristina predefiniti")) }
+            FeedbackStatsSection()
+        }
+
+        Expandable(
+            title = Texts.tr("Receivers", "Ricevitori"),
+            summary = Texts.tr("Phone Bluetooth, GPS drift guard, data frames", "Bluetooth del telefono, filtro deriva GPS, frame di dati"),
+        ) {
+            var bleMode by remember { mutableIntStateOf(prefs.phoneBleMode) }
+            Text(Texts.tr("Use the phone's Bluetooth as a receiver", "Usa il Bluetooth del telefono come ricevitore"), style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0 to Texts.tr("Off", "No"), 1 to Texts.tr("Without probe", "Senza sonda"), 2 to Texts.tr("Always", "Sempre")).forEach { (v, l) ->
+                    FilterChip(selected = bleMode == v, onClick = { bleMode = v; prefs.phoneBleMode = v }, label = { Text(l) })
+                }
+            }
+            var drift by remember { mutableStateOf(prefs.driftGuard) }
+            SettingSwitch(
+                Texts.tr("Reject GPS drift while the phone is still", "Scarta la deriva GPS quando il telefono è fermo"),
+                Texts.tr("Uses the accelerometer.", "Usa l'accelerometro."),
+                drift,
+            ) { drift = it; prefs.driftGuard = it }
+            var dataFrames by remember { mutableStateOf(prefs.captureDataFrames) }
+            SettingSwitch(
+                Texts.tr("Capture data frames (connected clients)", "Cattura frame di dati (client connessi)"),
+                Texts.tr(
+                    "Invasive: reveals devices connected to nearby networks that never send probe requests. More radio load and more data. Off by default.",
+                    "Invasivo: mostra i dispositivi connessi alle reti vicine che non inviano probe request. Più carico radio e più dati. Spento di default.",
+                ),
+                dataFrames,
+            ) {
                 dataFrames = it; prefs.captureDataFrames = it
                 Collector.captureDataFrames.value = it
                 Collector.session?.resendConfig()
-            })
-        }
-        Text(
-            Texts.tr(
-                "Invasive: reveals devices connected to nearby networks that never send probe requests. More radio load and more data. Off by default.",
-                "Invasivo: mostra i dispositivi connessi alle reti vicine che non inviano probe request. Più carico radio e più dati. Spento di default.",
-            ),
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        Text(Texts.tr("Ignored devices", "Dispositivi ignorati") + " (${ignores.size})", style = MaterialTheme.typography.titleMedium)
-        ignores.forEach { ig ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(ig.label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                TextButton(onClick = { scope.launch { app.db.dao().removeIgnore(ig.entityId) } }) { Text(Texts.tr("Remove", "Rimuovi")) }
             }
         }
 
-        SessionsSection()
-        FieldTestSection()
+        Expandable(
+            title = Texts.tr("Online lookups", "Ricerche online"),
+            summary = listOfNotNull(
+                "WiGLE " + if (prefs.wigleToken.isNotBlank()) Texts.tr("set", "configurato") else Texts.tr("not set", "non configurato"),
+                "BeaconDB " + if (beacon) Texts.tr("on", "attivo") else Texts.tr("off", "spento"),
+            ).joinToString(" · "),
+        ) {
+            Text(
+                Texts.tr(
+                    "Used only when you tap a lookup on an access point or a Bluetooth address. Each lookup tells the service which identifier you asked about.",
+                    "Usate solo quando tocchi una ricerca su un access point o un indirizzo Bluetooth. Ogni ricerca dice al servizio quale identificativo hai chiesto.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text("WiGLE", style = MaterialTheme.typography.titleSmall)
+            Text(
+                Texts.tr("Free account at wigle.net → Account → API token. Stored encrypted on the phone.", "Account gratuito su wigle.net → Account → token API. Salvato cifrato sul telefono."),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            val mask = if (showWigle) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation()
+            OutlinedTextField(
+                value = wName, onValueChange = { wName = it; prefs.wigleName = it }, modifier = Modifier.fillMaxWidth(),
+                label = { Text("API name") }, singleLine = true, visualTransformation = mask,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            )
+            OutlinedTextField(
+                value = wToken, onValueChange = { wToken = it; prefs.wigleToken = it }, modifier = Modifier.fillMaxWidth(),
+                label = { Text("API token") }, singleLine = true, visualTransformation = mask,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { showWigle = !showWigle }) { Text(if (showWigle) Texts.tr("Hide", "Nascondi") else Texts.tr("Show", "Mostra")) }
+                if (wName.isNotEmpty() || wToken.isNotEmpty()) TextButton(onClick = { wName = ""; wToken = ""; prefs.wigleName = ""; prefs.wigleToken = "" }) {
+                    Text(Texts.tr("Remove credentials", "Rimuovi credenziali"))
+                }
+            }
+            SettingSwitch(
+                "BeaconDB",
+                Texts.tr("Locates Wi-Fi access points by BSSID. No account needed.", "Localizza gli access point Wi-Fi dal BSSID. Nessun account."),
+                beacon,
+            ) { beacon = it; prefs.beaconDbEnabled = it }
+        }
 
-        OutlinedButton(onClick = { wipe = true }, modifier = Modifier.fillMaxWidth()) { Text(Texts.tr("Delete all collected data", "Elimina tutti i dati raccolti")) }
+        Expandable(
+            title = Texts.tr("Data and privacy", "Dati e privacy"),
+            summary = Texts.tr("Kept $retention days · $keep devices in detail · sessions · delete all", "Conservati $retention giorni · $keep dispositivi in dettaglio · sessioni · elimina tutto"),
+        ) {
+            SettingSlider(
+                Texts.tr("Keep data for", "Conserva i dati per") + " $retention " + Texts.tr("days", "giorni"),
+                null, retention.toFloat(), 1f..30f, onChange = { retention = it.toInt() }, onDone = { prefs.retentionDays = retention },
+            )
+            Text(Texts.tr("Devices kept in full detail after each analysis", "Dispositivi tenuti con tutti i dettagli dopo ogni analisi"), style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(1000, 2500, 5000, 10000).forEach { n ->
+                    FilterChip(selected = keep == n, onClick = { keep = n; prefs.maxReports = n; Collector.analyzeNow.value = System.nanoTime() }, label = { Text("$n") })
+                }
+            }
+            Text(
+                Texts.tr(
+                    "The others stay searchable with “All” in Devices. Alerts are always kept. More = more memory: lower it if the app lags.",
+                    "Gli altri restano cercabili con “Tutti” in Dispositivi. Le allerte restano sempre. Di più = più memoria: abbassalo se l'app rallenta.",
+                ),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            HorizontalDivider()
+            SessionsSection()
+            HorizontalDivider()
+            OutlinedButton(
+                onClick = { wipe = true }, modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text(Texts.tr("Delete all my data…", "Elimina tutti i miei dati…")) }
+        }
+
+        Expandable(
+            title = Texts.tr("Advanced and help", "Avanzate e aiuto"),
+            summary = Texts.tr("Guide, diagnostics, field test", "Guida, diagnostica, test sul campo"),
+        ) {
+            OutlinedButton(onClick = { WikiNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(Texts.tr("Guide: how it works, heuristics, limits", "Guida: come funziona, euristiche, limiti"))
+            }
+            OutlinedButton(onClick = { DiagNav.open.value = true }, modifier = Modifier.fillMaxWidth()) {
+                Text(Texts.tr("Diagnostics (errors, performance, report)", "Diagnostica (errori, prestazioni, report)"))
+            }
+            FieldTestSection()
+        }
     }
 
+    if (scanMine) MyDevicesScanDialog(onClose = { scanMine = false })
+
     if (wipe) {
+        var maps by remember { mutableStateOf(false) }
         AlertDialog(
             onDismissRequest = { wipe = false },
             title = { Text(Texts.tr("Delete everything?", "Eliminare tutto?")) },
-            text = { Text(Texts.tr("Sightings, GPS track and cached lookups will be erased.", "Avvistamenti, tracce GPS e ricerche in cache verranno cancellati.")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        Texts.tr(
+                            "Erases sightings, GPS track, routine places, lookups, verdicts, recorded sessions, your devices and networks, trusted access points, phone fingerprint, WiGLE credentials and the error logs.",
+                            "Cancella avvistamenti, tracce GPS, luoghi di routine, ricerche, giudizi, sessioni registrate, i tuoi dispositivi e reti, access point fidati, impronta del telefono, credenziali WiGLE e i log degli errori.",
+                        ),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.Checkbox(checked = maps, onCheckedChange = { maps = it })
+                        Text(Texts.tr("Also offline maps (they show which area you use)", "Anche le mappe offline (mostrano quale zona usi)"), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
                         val dao = app.db.dao()
                         dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar(); dao.wipeBaseline()
-                        dao.wipeCompanions(); dao.wipeFeedback()
+                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores()
                         dev.retrovision.app.data.SessionRecorder.dir(app).listFiles()?.forEach { it.delete() }
                         prefs.trustedAps = emptySet(); prefs.ownFingerprints = emptySet()
                         prefs.targets = emptySet(); prefs.testFirstAlerts = emptySet()
+                        prefs.ownSsids = ""; prefs.wigleName = ""; prefs.wigleToken = ""
+                        own = ""; wName = ""; wToken = ""
+                        dev.retrovision.app.CrashLog.clear(app)
+                        dev.retrovision.app.Diag.clear()
+                        if (maps) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            runCatching { dev.retrovision.app.map.OfflineMaps.activate(null) }
+                            dev.retrovision.app.map.OfflineMaps.maps.value.forEach { m -> runCatching { dev.retrovision.app.map.OfflineMaps.delete(m) } }
+                        }
                         Collector.analysis.value = null
                         wipe = false
                     }
-                }) { Text(Texts.tr("Delete", "Elimina")) }
+                }) { Text(Texts.tr("Delete", "Elimina"), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { wipe = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, detail: String?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+@Composable
+private fun SettingSlider(
+    title: String,
+    detail: String?,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    steps: Int = 0,
+    onChange: (Float) -> Unit,
+    onDone: () -> Unit,
+) {
+    Column {
+        Text(title, style = MaterialTheme.typography.bodyMedium)
+        if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Slider(value = value, onValueChange = onChange, onValueChangeFinished = { onDone(); Collector.analyzeNow.value = System.nanoTime() }, valueRange = range, steps = steps)
     }
 }
 
@@ -756,7 +956,6 @@ private fun NotificationsSection() {
     var qStart by remember { mutableIntStateOf(prefs.quietStartHour) }
     var qEnd by remember { mutableIntStateOf(prefs.quietEndHour) }
 
-    Text(Texts.tr("Alerts", "Allarmi"), style = MaterialTheme.typography.titleMedium)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(Texts.tr("Notify when a device may be following you", "Avvisa quando un dispositivo potrebbe seguirti"), modifier = Modifier.weight(1f))
         Switch(checked = enabled, onCheckedChange = { enabled = it; prefs.alertsEnabled = it })
@@ -980,7 +1179,7 @@ private fun TrustedApsSection() {
     val prefs = app.prefs
     val conn by Collector.wifiConnection.collectAsState()
     var trusted by remember { mutableStateOf(prefs.trustedAps) }
-    Text(Texts.tr("Your network's access points", "Access point della tua rete"), style = MaterialTheme.typography.titleMedium)
+    Text(Texts.tr("Your network's access points", "Access point della tua rete"), style = MaterialTheme.typography.titleSmall)
     Text(
         Texts.tr(
             "The first access point your phone uses for each of your networks is trusted. Any other one raises an alert until you confirm it here (mesh nodes and extenders included, once each): an unknown one may be an evil twin that got your phone.",
@@ -1050,7 +1249,7 @@ private fun OwnPhoneSection() {
     var saved by remember { mutableStateOf(prefs.ownFingerprints) }
     var running by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    Text(Texts.tr("Your phone's Wi-Fi fingerprint", "Impronta Wi-Fi del tuo telefono"), style = MaterialTheme.typography.titleMedium)
+    Text(Texts.tr("Your phone's Wi-Fi fingerprint", "Impronta Wi-Fi del tuo telefono"), style = MaterialTheme.typography.titleSmall)
     Text(
         Texts.tr(
             "Your own phone asks for your networks by name too. With the probe connected and close, tap below: the phone runs a Wi-Fi scan and the loudest probe requests are recorded as yours. Same-model phones share the fingerprint, so theirs won't trigger \"asked for your network\" either.",
@@ -1089,7 +1288,7 @@ private fun OwnPhoneSection() {
 private fun FeedbackStatsSection() {
     val list by remember { app.db.dao().feedback() }.collectAsState(initial = emptyList())
     if (list.isEmpty()) return
-    Text(Texts.tr("Your verdicts", "I tuoi giudizi"), style = MaterialTheme.typography.titleMedium)
+    Text(Texts.tr("Your verdicts", "I tuoi giudizi"), style = MaterialTheme.typography.titleSmall)
     // A verdict on a merged device is stored once per member id: count each verdict once.
     val verdicts = list.distinctBy { it.timeMs to it.label }
     val n = IntArray(3)

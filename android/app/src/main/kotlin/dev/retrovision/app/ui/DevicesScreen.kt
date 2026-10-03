@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.retrovision.app.Collector
+import dev.retrovision.app.RetrovisionApp
 import dev.retrovision.core.analysis.EntityReport
 import dev.retrovision.core.analysis.EntitySearch
 import dev.retrovision.core.identity.DeviceCategory
@@ -153,6 +154,8 @@ fun DevicesScreen(modifier: Modifier) {
     // all run off the UI thread (field report: typing in the search box froze the app).
     val others = analysis?.others.orEmpty()
     var searchAll by rememberSaveable { mutableStateOf(false) }
+    var shownMax by rememberSaveable { mutableStateOf(RetrovisionApp.instance.prefs.devicesShown) }
+    var listMenu by remember { mutableStateOf(false) }
     val index by produceState<EntitySearch.Index<EntityReport>?>(null, all) {
         value = withContext(Dispatchers.Default) {
             EntitySearch.reports(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
@@ -194,17 +197,52 @@ fun DevicesScreen(modifier: Modifier) {
                 )
             }
             TextButton(onClick = { Collector.analyzeNow.value = System.nanoTime() }) { Text(Texts.tr("Refresh", "Aggiorna")) }
-        }
-        SearchField(query, { query = it }, Texts.tr("Name, network, MAC, vendor", "Nome, rete, MAC, produttore"))
-        if (others.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    Texts.tr("Also search the other ${others.size}", "Cerca anche negli altri ${others.size}"),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
-                )
-                androidx.compose.material3.Switch(checked = searchAll, onCheckedChange = { searchAll = it })
+            Box {
+                TextButton(onClick = { listMenu = true }) { Text("⋮") }
+                androidx.compose.material3.DropdownMenu(expanded = listMenu, onDismissRequest = { listMenu = false }) {
+                    Overline(Texts.tr("Show in the list", "Mostra nella lista"), Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    listOf(100, 300, 1000).forEach { n ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text((if (shownMax == n) "● " else "○ ") + "$n") },
+                            onClick = { shownMax = n; RetrovisionApp.instance.prefs.devicesShown = n; listMenu = false },
+                        )
+                    }
+                    androidx.compose.material3.HorizontalDivider()
+                    Overline(Texts.tr("Keep in full detail", "Tieni con tutti i dettagli"), Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                    val keep = RetrovisionApp.instance.prefs.maxReports
+                    listOf(1000, 2500, 5000, 10000).forEach { n ->
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text((if (keep == n) "● " else "○ ") + "$n" + if (n == 10000) Texts.tr(" (more memory)", " (più memoria)") else "") },
+                            onClick = { RetrovisionApp.instance.prefs.maxReports = n; listMenu = false; Collector.analyzeNow.value = System.nanoTime() },
+                        )
+                    }
+                }
             }
         }
+        // "All" searches also the devices trimmed from the detailed list (indexed only when on).
+        SearchField(
+            query, { query = it }, Texts.tr("Name, network, MAC, vendor", "Nome, rete, MAC, produttore"),
+            trailing = if (others.isEmpty()) null else {
+                {
+                    val on = searchAll
+                    Text(
+                        Texts.tr("All", "Tutti"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHighest)
+                            .clickable { searchAll = !searchAll }
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
+            },
+        )
+        if (searchAll && others.isNotEmpty()) Text(
+            Texts.tr("Searching also the other ${others.size} devices", "Cerco anche negli altri ${others.size} dispositivi"),
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, start = 14.dp),
+        )
         androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 6.dp))
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
@@ -255,7 +293,7 @@ fun DevicesScreen(modifier: Modifier) {
                     }
                 }
             }
-            items(list.take(300), key = { it.entityId }) { r ->
+            items(list.take(shownMax), key = { it.entityId }) { r ->
                 EntityCard(r, query) { selected = r }
             }
             if (view.stubs.isNotEmpty()) {
@@ -274,9 +312,9 @@ fun DevicesScreen(modifier: Modifier) {
             } else if (searchAll && query.isNotBlank() && view.ready && stubIndex == null) {
                 item(key = "stubs-wait") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             }
-            if (list.size > 300) item(key = "more") {
+            if (list.size > shownMax) item(key = "more") {
                 Text(
-                    Texts.tr("Showing 300 of ${list.size}. Search or filter to narrow down.", "Mostrati 300 su ${list.size}. Cerca o filtra per restringere."),
+                    Texts.tr("Showing $shownMax of ${list.size}. Search, filter or change ⋮ to see more.", "Mostrati $shownMax su ${list.size}. Cerca, filtra o cambia ⋮ per vederne di più."),
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -559,7 +597,7 @@ internal fun stubLabel(st: dev.retrovision.core.analysis.EntityStub): String {
 
 /** Compact rounded search field: icon, text, clear. */
 @Composable
-fun SearchField(value: String, onChange: (String) -> Unit, placeholder: String) {
+fun SearchField(value: String, onChange: (String) -> Unit, placeholder: String, trailing: (@Composable () -> Unit)? = null) {
     val shape = RoundedCornerShape(50)
     Row(
         Modifier
@@ -590,6 +628,10 @@ fun SearchField(value: String, onChange: (String) -> Unit, placeholder: String) 
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp).clickable { onChange("") },
             )
+        }
+        if (trailing != null) {
+            androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
+            trailing()
         }
     }
 }
