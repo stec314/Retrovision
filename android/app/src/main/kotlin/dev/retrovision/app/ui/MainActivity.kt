@@ -2,6 +2,11 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Settings
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
