@@ -533,6 +533,12 @@ The map shows **your** places and **your** movement. It opens like a navigation 
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
+## Searching all saved data
+
+The Devices search covers the analysis window (and, with *All*, the devices trimmed from the detailed list). When you need more, type at least two characters and tap **Search all saved data**: it scans every stored sighting, up to the retention period, for the address, network names (beacons and the networks phones ask for) and Bluetooth names. Matching is on raw bytes, in three case forms (as typed, lower case, first letter capital). Results are devices, newest first (at most 300), with days, sightings and first/last time. A device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If the device is in the current window, *Open full details* opens the usual detail.
+
+It is a full scan of an encrypted table: seconds on a small database, longer on millions of rows. Nothing is indexed in advance and nothing leaves the phone.
+
 ## Settings reference
 
 Settings are grouped in collapsible sections, each showing its current state while closed: **My devices and networks** (scan to add, your Wi-Fi names, trusted access points, identify my phone, devices marked as mine), **Alerts and notifications**, **Sensitivity** (presets *Fewer alerts* 80/4, *Balanced* 70/3, *More alerts* 55/2, sliders, reset to defaults, your verdicts), **Receivers**, **Online lookups**, **Data and privacy**, **Advanced and help**. The tab bar order is Status, Devices, Places, Settings, Probe.

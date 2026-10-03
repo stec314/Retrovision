@@ -51,6 +51,8 @@ private val app get() = RetrovisionApp.instance
 /** Opens Places centred on one flagged device's places (from the device detail or the alerts). */
 object MapNav {
     val device = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    /** Opens Places on one of your past positions (e.g. where a device was heard, from the database search). */
+    val point = kotlinx.coroutines.flow.MutableStateFlow<Pair<Double, Double>?>(null)
 }
 
 /**
@@ -65,6 +67,7 @@ fun PlacesScreen(modifier: Modifier) {
     val here by Collector.location.collectAsState()
     val analysis by Collector.analysis.collectAsState()
     val navDevice by MapNav.device.collectAsState()
+    val navPoint by MapNav.point.collectAsState()
     var fixes by remember { mutableStateOf<List<GeoFix>>(emptyList()) }
     val mapState = remember { MapUiState() }
     val places = rows.map { it.toModel() }
@@ -99,9 +102,19 @@ fun PlacesScreen(modifier: Modifier) {
 
     // Opens like a maps app: centred on you, at street level, following you until you drag.
     var centred by remember { mutableStateOf(false) }
+    LaunchedEffect(navPoint) {
+        val (lat, lon) = navPoint ?: return@LaunchedEffect
+        centred = true
+        mapState.follow = false
+        // An older position may be outside the shown period: widen it to the last 7 days.
+        mapState.windowH = 168
+        mapState.selection = MapSel.Point(lat, lon)
+        mapState.focusOn(lat, lon, spanM = 500.0)
+        MapNav.point.value = null
+    }
     LaunchedEffect(here != null, navDevice) {
         val h = here ?: return@LaunchedEffect
-        if (centred || navDevice != null) return@LaunchedEffect
+        if (centred || navDevice != null || navPoint != null) return@LaunchedEffect
         centred = true
         mapState.follow = true
         mapState.focusOn(h.lat, h.lon, spanM = 600.0)

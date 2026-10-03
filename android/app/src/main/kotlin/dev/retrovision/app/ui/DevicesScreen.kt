@@ -156,6 +156,7 @@ fun DevicesScreen(modifier: Modifier) {
     var searchAll by rememberSaveable { mutableStateOf(false) }
     var shownMax by rememberSaveable { mutableStateOf(RetrovisionApp.instance.prefs.devicesShown) }
     var listMenu by remember { mutableStateOf(false) }
+    var dbSearch by remember { mutableStateOf<String?>(null) }
     val index by produceState<EntitySearch.Index<EntityReport>?>(null, all) {
         value = withContext(Dispatchers.Default) {
             EntitySearch.reports(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
@@ -237,6 +238,15 @@ fun DevicesScreen(modifier: Modifier) {
                     )
                 }
             },
+        )
+        // Last resort: everything still stored, beyond the analysis window. Slow, so only on request.
+        if (query.trim().length >= 2) Text(
+            "🗄 " + Texts.tr(
+                "Search all saved data (${RetrovisionApp.instance.prefs.retentionDays} days)",
+                "Cerca in tutti i dati salvati (${RetrovisionApp.instance.prefs.retentionDays} giorni)",
+            ),
+            style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clip(RoundedCornerShape(50)).clickable { dbSearch = query.trim() }.padding(start = 14.dp, top = 6.dp, end = 10.dp, bottom = 2.dp),
         )
         if (searchAll && others.isNotEmpty()) Text(
             Texts.tr("Searching also the other ${others.size} devices", "Cerco anche negli altri ${others.size} dispositivi"),
@@ -321,6 +331,7 @@ fun DevicesScreen(modifier: Modifier) {
         }
     }
     selected?.let { DeviceDialog(it) { selected = null } }
+    dbSearch?.let { q -> DbSearchDialog(q) { dbSearch = null } }
 }
 
 private class DevicesView(

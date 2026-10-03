@@ -118,6 +118,22 @@ class FamiliarRow(
 )
 
 @Dao
+/** One device found by a search over everything stored (not just the analysis window). */
+class DbHit(
+    val entityId: String,
+    val radio: Int,
+    val firstMs: Long,
+    val lastMs: Long,
+    val n: Int,
+    val maxRssi: Int,
+    val days: Int,
+    /** A network name that matched, and an advertisement that matched (for the BLE name), when any. */
+    val hitSsid: ByteArray?,
+    val hitAdv: ByteArray?,
+)
+
+class TimeRssi(val timeMs: Long, val rssi: Int)
+
 interface AppDao {
     @Insert
     suspend fun insertSightings(rows: List<SightingRow>)
@@ -177,6 +193,29 @@ interface AppDao {
 
     @Query("DELETE FROM ignores")
     suspend fun wipeIgnores()
+
+    /**
+     * Full scan of every stored sighting: address (entity id), network names (beacons and probe
+     * requests) and Bluetooth advertisements (names). Byte search because names are stored raw;
+     * [a], [b], [c] are case variants of the query. Slow on large databases: run on demand only.
+     */
+    @Query(
+        "SELECT entityId, MIN(radio) AS radio, MIN(timeMs) AS firstMs, MAX(timeMs) AS lastMs, COUNT(*) AS n, MAX(rssi) AS maxRssi, " +
+            "COUNT(DISTINCT timeMs / 86400000) AS days, " +
+            "MAX(CASE WHEN instr(ssid, :a) > 0 OR instr(ssid, :b) > 0 OR instr(ssid, :c) > 0 THEN ssid END) AS hitSsid, " +
+            "MAX(CASE WHEN instr(advData, :a) > 0 OR instr(advData, :b) > 0 OR instr(advData, :c) > 0 THEN advData END) AS hitAdv " +
+            "FROM sightings WHERE entityId LIKE :like " +
+            "OR instr(ssid, :a) > 0 OR instr(ssid, :b) > 0 OR instr(ssid, :c) > 0 " +
+            "OR instr(advData, :a) > 0 OR instr(advData, :b) > 0 OR instr(advData, :c) > 0 " +
+            "GROUP BY entityId ORDER BY lastMs DESC LIMIT :limit",
+    )
+    suspend fun searchAll(like: String, a: ByteArray, b: ByteArray, c: ByteArray, limit: Int): List<DbHit>
+
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId = :id ORDER BY timeMs LIMIT :limit")
+    suspend fun timesFor(id: String, limit: Int): List<TimeRssi>
+
+    @Query("SELECT * FROM fixes WHERE timeMs BETWEEN :from AND :to ORDER BY ABS(timeMs - :at) LIMIT 1")
+    suspend fun fixNear(from: Long, to: Long, at: Long): FixRow?
 
     @Query("SELECT * FROM enrichments WHERE `key` = :key")
     suspend fun enrichment(key: String): EnrichRow?

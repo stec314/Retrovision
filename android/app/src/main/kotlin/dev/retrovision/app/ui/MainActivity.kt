@@ -57,8 +57,9 @@ private fun AppRoot() {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // "Show on map" from a device: go to Places (which centres on it), closing any overlay.
     val mapDevice by MapNav.device.collectAsState()
-    androidx.compose.runtime.LaunchedEffect(mapDevice) {
-        if (mapDevice != null) { AlertsNav.open.value = false; tab = 2 }
+    val mapPoint by MapNav.point.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(mapDevice, mapPoint) {
+        if (mapDevice != null || mapPoint != null) { AlertsNav.open.value = false; tab = 2 }
     }
     val wikiOpen by WikiNav.open.collectAsState()
     if (wikiOpen) {
