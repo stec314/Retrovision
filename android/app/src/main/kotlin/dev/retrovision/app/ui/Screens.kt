@@ -78,17 +78,9 @@ private val app get() = RetrovisionApp.instance
 fun StatusScreen(modifier: Modifier) {
     val ctx = LocalContext.current
     val running by Collector.running.collectAsState()
-    val conn by Collector.connection.collectAsState()
-    val fix by Collector.location.collectAsState()
+    // Only slow-changing state is read here: anything that updates several times a second (probe
+    // counters, radar, GPS) is read inside its own small composable, so Status doesn't redraw whole.
     val analysis by Collector.analysis.collectAsState()
-    // Polled, not observed: a COUNT(*) re-run after every insert batch scanned millions of rows twice a second.
-    var count by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            count = runCatching { app.db.dao().sightingEstimate() }.getOrDefault(count)
-            kotlinx.coroutines.delay(15_000)
-        }
-    }
 
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
         if (r[Manifest.permission.ACCESS_FINE_LOCATION] == true) CollectorService.start(ctx)
@@ -103,8 +95,7 @@ fun StatusScreen(modifier: Modifier) {
             ),
             style = MaterialTheme.typography.bodySmall,
         )
-        val verdict = rememberVerdict()
-        VerdictCard(verdict)
+        VerdictCard()
         Button(
             onClick = {
                 if (running) CollectorService.stop(ctx) else {
@@ -157,60 +148,14 @@ fun StatusScreen(modifier: Modifier) {
             }
         }
 
-        WhatToDoCard(verdict)
-        val radar by Collector.liveRadar.collectAsState()
-        if (running && radar.blips.isNotEmpty()) {
-            Text(Texts.tr("Radar", "Radar"), style = MaterialTheme.typography.titleMedium)
-            RadarView()
-        }
+        WhatToDoCard()
+        RadarSection(running)
 
         // Probe, phone and GPS: one line each by default; the full technical detail on tap.
         var showSensors by rememberSaveable { mutableStateOf(false) }
         SensorsSummary(expanded = showSensors) { showSensors = !showSensors }
         if (showSensors) {
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
-                Text(linkText(conn.link, conn.device, conn.error))
-                conn.session?.let { s ->
-                    s.info?.let {
-                        Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
-                        Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
-                    }
-                    val h = probeHealth(s)
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(h.dot, color = h.color)
-                        Text(h.text, color = h.color, style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Text(phaseText(s.phase) + (if (s.clockUncertaintyUs >= 0) " · ±${s.clockUncertaintyUs} µs" else ""))
-                    if (s.rejectReason.isNotEmpty()) Text(s.rejectReason, color = MaterialTheme.colorScheme.error)
-                    val seen = s.wifiObs + s.bleObs
-                    Text("Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""), style = MaterialTheme.typography.bodySmall)
-                    val lost = s.lostFrames + s.probeDropped
-                    val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
-                    Text(
-                        Texts.tr("lost", "persi") + " $lost (%.2f%%)".format(lossPct) + " · CRC ${s.badFrames}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    )
-                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
-                    if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
-                }
-            }
-        }
-        PhoneCard(conn.session?.phase == dev.retrovision.app.probe.Phase.STREAMING, running)
-
-        Card(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("GPS", style = MaterialTheme.typography.titleMedium)
-                val f = fix
-                Text(
-                    if (f == null) Texts.tr("No fix yet", "Nessun fix")
-                    else "%.5f, %.5f (±%.0f m)".format(f.lat, f.lon, f.accuracyM),
-                )
-                Text(Texts.tr("Stored sightings: ≈", "Avvistamenti salvati: ≈") + count)
-            }
-        }
+            SensorDetails(running)
         }
         RouteCheckCard(analysis)
         CompanionsCard()
@@ -816,10 +761,11 @@ private fun RouteCheckCard(analysis: dev.retrovision.core.analysis.AnalysisResul
     val a = analysis ?: return
     if (a.turns < 2) return
     // Devices already judged fixed (stays put / one area) are not "staying with you": left out.
-    val stayed = a.entities.mapNotNull { e ->
+    // Computed once per analysis, not on every redraw.
+    val stayed = remember(a) { a.entities.mapNotNull { e ->
         if (e.reasons.any { it is dev.retrovision.core.analysis.Reason.StaysPut || it is dev.retrovision.core.analysis.Reason.OneAreaOnly }) return@mapNotNull null
         e.reasons.filterIsInstance<dev.retrovision.core.analysis.Reason.StayedThroughTurns>().firstOrNull()?.let { e to it.turns }
-    }.sortedByDescending { it.second }
+    }.sortedByDescending { it.second } }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(Texts.tr("Route check", "Verifica percorso"), style = MaterialTheme.typography.titleMedium)
@@ -1048,6 +994,78 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+
+@Composable
+private fun RadarSection(running: Boolean) {
+    val radar by Collector.liveRadar.collectAsState()
+    if (running && radar.blips.isNotEmpty()) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(Texts.tr("Radar", "Radar"), style = MaterialTheme.typography.titleMedium)
+            RadarView()
+        }
+    }
+}
+
+/** The full technical detail of probe, phone and GPS (Status → Sensors → Details). */
+@Composable
+private fun SensorDetails(running: Boolean) {
+    val conn by Collector.connection.collectAsState()
+    val fix by Collector.location.collectAsState()
+    // Polled, not observed: a COUNT(*) re-run after every insert batch scanned millions of rows twice a second.
+    var count by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            count = runCatching { app.db.dao().sightingEstimate() }.getOrDefault(count)
+            kotlinx.coroutines.delay(15_000)
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
+                Text(linkText(conn.link, conn.device, conn.error))
+                conn.session?.let { s ->
+                    s.info?.let {
+                        Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
+                        Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    val h = probeHealth(s)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(h.dot, color = h.color)
+                        Text(h.text, color = h.color, style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Text(phaseText(s.phase) + (if (s.clockUncertaintyUs >= 0) " · ±${s.clockUncertaintyUs} µs" else ""))
+                    if (s.rejectReason.isNotEmpty()) Text(s.rejectReason, color = MaterialTheme.colorScheme.error)
+                    val seen = s.wifiObs + s.bleObs
+                    Text("Wi-Fi ${s.wifiObs} · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""), style = MaterialTheme.typography.bodySmall)
+                    val lost = s.lostFrames + s.probeDropped
+                    val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
+                    Text(
+                        Texts.tr("lost", "persi") + " $lost (%.2f%%)".format(lossPct) + " · CRC ${s.badFrames}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    )
+                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
+                    if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                }
+            }
+        }
+        PhoneCard(conn.session?.phase == dev.retrovision.app.probe.Phase.STREAMING, running)
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("GPS", style = MaterialTheme.typography.titleMedium)
+                val f = fix
+                Text(
+                    if (f == null) Texts.tr("No fix yet", "Nessun fix")
+                    else "%.5f, %.5f (±%.0f m)".format(f.lat, f.lon, f.accuracyM),
+                )
+                Text(Texts.tr("Stored sightings: ≈", "Avvistamenti salvati: ≈") + count)
+            }
         }
     }
 }

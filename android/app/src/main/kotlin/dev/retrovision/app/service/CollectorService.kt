@@ -346,10 +346,14 @@ class CollectorService : Service() {
     /** Builds the live radar frame: smoothed RSSI as distance, movement-derived bearing when usable. */
     private suspend fun radarLoop() {
         val smooth = HashMap<String, Double>()
+        var lastAnalysis: dev.retrovision.core.analysis.AnalysisResult? = null
+        var reports: Map<String, dev.retrovision.core.analysis.EntityReport> = emptyMap()
         while (scope.isActive) {
             delay(1500)
             val now = System.currentTimeMillis()
-            val reports = Collector.analysis.value?.entities.orEmpty().associateBy { it.entityId }
+            // Re-indexed only when a new analysis arrives (tens of thousands of entities), not every frame.
+            val a = Collector.analysis.value
+            if (a !== lastAnalysis) { lastAnalysis = a; reports = a?.entities.orEmpty().associateBy { it.entityId } }
             val blips = ArrayList<RadarBlip>()
             var movedM = 0.0
             synchronized(radarLock) {

@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
@@ -53,7 +54,9 @@ private fun Color.luminance(): Float = 0.2126f * red + 0.7152f * green + 0.0722f
 @Composable
 internal fun rememberVerdict(): Verdict.Result {
     val running by Collector.running.collectAsState()
-    val conn by Collector.connection.collectAsState()
+    // The connection state changes on every probe counter update; only the phase matters here.
+    val connState = Collector.connection.collectAsState()
+    val streaming by remember { derivedStateOf { connState.value.session?.phase == Phase.STREAMING } }
     val bleOn by Collector.phoneBleActive.collectAsState()
     val fix by Collector.location.collectAsState()
     val analysis by Collector.analysis.collectAsState()
@@ -64,10 +67,12 @@ internal fun rememberVerdict(): Verdict.Result {
     val prefs = RetrovisionApp.instance.prefs
     val a = analysis
     val lookbackMs = prefs.lookbackMin * 60_000L
+    val entityLevels = remember(a) { a?.alerts.orEmpty().map { Levels.of(it) } }
+    val threatLevels = remember(threats) { threats.map { Levels.of(it) } }
     return Verdict.of(
         Verdict.Inputs(
             running = running,
-            probeStreaming = conn.session?.phase == Phase.STREAMING,
+            probeStreaming = streaming,
             phoneBleListening = bleOn,
             gpsAgeMs = fix?.let { now - it.timeMs },
             gpsAccuracyM = fix?.accuracyM,
@@ -75,15 +80,16 @@ internal fun rememberVerdict(): Verdict.Result {
             coveredMs = if (load.oldestMs > 0) minOf(lookbackMs, now - load.oldestMs) else 0L,
             analysisAgeMs = a?.let { now - it.nowMs },
             truncated = load.truncated,
-            entityLevels = a?.alerts.orEmpty().map { Levels.of(it) },
-            threatLevels = threats.map { Levels.of(it) },
+            entityLevels = entityLevels,
+            threatLevels = threatLevels,
         ),
     )
 }
 
 /** The first thing on Status: one answer, what it is based on, and what is missing. */
 @Composable
-fun VerdictCard(v: Verdict.Result) {
+fun VerdictCard() {
+    val v = rememberVerdict()
     val color = verdictColor(v.state)
     val analysis by Collector.analysis.collectAsState()
     val title = Texts.verdictTitle(v.state)
@@ -104,7 +110,7 @@ fun VerdictCard(v: Verdict.Result) {
         Text(Texts.verdictLine(v), style = MaterialTheme.typography.bodyMedium)
 
         // The findings, in words (no percentages here).
-        val alerts = analysis?.alerts.orEmpty().sortedByDescending { Levels.of(it).ordinal }
+        val alerts = remember(analysis) { analysis?.alerts.orEmpty().sortedByDescending { Levels.of(it).ordinal } }
         alerts.take(4).forEach { r ->
             val l = Levels.of(r)
             Text("${Texts.levelIcon(l)} ${Texts.level(l)} · ${Texts.entityLabel(r)}", style = MaterialTheme.typography.bodySmall)
@@ -125,13 +131,13 @@ fun VerdictCard(v: Verdict.Result) {
 /** "Probe ✓ · GPS ±4 m ✓ · 47 min analysed": the basis of the verdict in one line. */
 @Composable
 private fun CoverageLine() {
-    val conn by Collector.connection.collectAsState()
+    val connState = Collector.connection.collectAsState()
     val bleOn by Collector.phoneBleActive.collectAsState()
     val fix by Collector.location.collectAsState()
     val load by Collector.analysisLoad.collectAsState()
     val running by Collector.running.collectAsState()
     if (!running) return
-    val probe = conn.session?.phase == Phase.STREAMING
+    val probe by remember { derivedStateOf { connState.value.session?.phase == Phase.STREAMING } }
     val parts = buildList {
         add(Texts.tr("Probe", "Sonda") + if (probe) " ✓" else " ✗")
         if (!probe) add(Texts.tr("Phone BT", "BT telefono") + if (bleOn) " ✓" else " ✗")
@@ -147,7 +153,8 @@ private fun CoverageLine() {
 
 /** Calm, practical steps. Shown only when there is something to act on. */
 @Composable
-fun WhatToDoCard(v: Verdict.Result) {
+fun WhatToDoCard() {
+    val v = rememberVerdict()
     if (v.state != Verdict.State.WORTH_A_LOOK && v.state != Verdict.State.STRONG) return
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp),

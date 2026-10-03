@@ -284,7 +284,8 @@ class AnalysisResult(
     val turns: Int = 0,
     val stops: Int = 0,
 ) {
-    val alerts: List<EntityReport> get() = entities.filter { it.alert }
+    /** Computed once: the UI reads this on every redraw, over tens of thousands of entities. */
+    val alerts: List<EntityReport> by lazy { entities.filter { it.alert } }
 }
 
 /**
