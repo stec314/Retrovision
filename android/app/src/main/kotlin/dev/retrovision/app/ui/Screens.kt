@@ -318,6 +318,11 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         }
                     }
 
+                    // A device that may follow you: the map comes first, it is the evidence people understand.
+                    if (r.alert || r.score >= 0.5) {
+                        DeviceMapPanel(r, lv) { onClose(); MapNav.device.value = r.entityId }
+                    }
+
                     // Each block opens on tap; the reasons start open.
                     Expandable(
                         Texts.tr("Why", "Perché"),
@@ -335,7 +340,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                             summary = Texts.tr("${r.visits.size} stretches · first ", "${r.visits.size} periodi · primo ") + fmt.format(Date(r.firstSeenMs)),
                         ) {
                             // Only flagged devices go on the map, and only at your own positions.
-                            if (lv >= dev.retrovision.core.analysis.Level.WORTH_A_LOOK && r.visits.any { it.lat != null }) {
+                            if ((r.alert || r.score >= 0.5) && r.visits.any { it.lat != null }) {
                                 OutlinedButton(onClick = { onClose(); MapNav.device.value = r.entityId }) {
                                     Text(Texts.tr("Show all its places on the map", "Mostra tutti i suoi luoghi sulla mappa"))
                                 }
@@ -356,7 +361,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     Expandable(Texts.tr("Tools and online lookups", "Strumenti e ricerche online"), summary = Texts.tr("Find it · WiGLE · BeaconDB", "Trovalo · WiGLE · BeaconDB")) {
                         var findIt by remember { mutableStateOf(false) }
                         OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
-                        if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r)) { findIt = false }
+                        if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
                         Text(
                             Texts.tr("Lookups send only the identifier you tap, to that service.", "Le ricerche inviano solo l'identificativo che tocchi, a quel servizio."),
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,

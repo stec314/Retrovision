@@ -457,7 +457,15 @@ Use: see what is really talking on a network near you, for example devices conne
 - Something moving **with** you keeps a constant signal, so it gets no direction. That is correct, not a bug.
 - Alerting devices are highlighted. Tap a blip for details.
 
-**Find it** turns one device into a warmer/colder meter: −100 dBm reads as cold and −35 dBm as on top of it, with beeps that speed up as the signal grows. Walk slowly, turn around (your body blocks signal), and search where it peaks. It cannot point; it only tells you hotter or colder.
+**Find it** turns one device into a warmer/colder meter. It reads **every raw frame** of that device from any receiver (probe or phone), with no GPS needed, so the reading moves as you move:
+- **The number** is the signal lightly smoothed (two-thirds of the previous value plus one-third of the new frame). −95 dBm reads as cold and −35 dBm as on top of it. The arcs light up with it, and the colour goes from blue to red.
+- **The arrow**: ▲ warmer, ▼ colder, ● steady. It compares the average of the last 3 s with the 3 s before them, with a ±2.5 dB dead band.
+- **The graph** shows each raw reading of the last 60 s as a dot, with the smoothed line on top. Below it: the peak and how long ago it was, readings per second, and the time since the last reading. Few readings per second means the device transmits rarely, so move more slowly.
+- **Sound and vibration** pulse faster and, for vibration, stronger as the signal grows: about 1 s apart when far, 0.1 s when on top of it. Each can be switched off.
+
+It cannot point. Walk slowly, turn around (your body blocks the signal), follow ▲, and search where it peaks: bags, pockets, car seats, wheel arches.
+
+**Device map.** The detail of a device that may follow you (an alert, or a score of 0.5 or more) opens with a map: every place it was heard, from all stored data, over your own track for the same period. It has full screen, zoom and replay, and *Open in Places* to see it next to the other devices.
 
 ## Alerts and notifications
 

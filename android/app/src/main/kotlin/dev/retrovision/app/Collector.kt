@@ -79,6 +79,11 @@ object Collector {
      * Full report for one device trimmed from the result (search "all devices"), computed on
      * demand from the live window. Null while collection is off.
      */
+    /** Entity ids "Find it" is listening for; every raw reading of them goes to [findSamples]. */
+    @Volatile var findTarget: Set<String> = emptySet()
+    /** Raw readings for "Find it": (time, dBm), unsmoothed, from any receiver, GPS not needed. */
+    val findSamples = kotlinx.coroutines.flow.MutableSharedFlow<Pair<Long, Int>>(extraBufferCapacity = 256)
+
     @Volatile var analyzeOne: (suspend (String) -> dev.retrovision.core.analysis.EntityReport?)? = null
 
     /** Mirrors Prefs.probeLedOn; ProbeSession reads it when building the probe config. */

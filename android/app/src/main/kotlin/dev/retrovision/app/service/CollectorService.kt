@@ -324,6 +324,7 @@ class CollectorService : Service() {
             }
         }
         val res = synchronized(resolver) { resolver.resolve(s) }
+        if (s.rssi != 0 && res.entityId in Collector.findTarget) Collector.findSamples.tryEmit(s.timeMs to s.rssi)
         if (s.rssi != 0) {
             val fix = Collector.location.value
             // Radar bearing comes from how RSSI changes as you move: a drifting fix would invent a direction.

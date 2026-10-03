@@ -162,7 +162,9 @@ class MapUiState {
     /** Bumped to recompute the fitted view (period change, "fit all"). Otherwise it stays put while data refreshes. */
     var fitEpoch by mutableIntStateOf(0)
 
-    fun reset() { zoom = 1f; pan = Offset.Zero; follow = false; fitEpoch++ }
+    /** Set by [reset]: the next change of the fitted frame shows the whole frame instead of keeping the view. */
+    var resetPending = false
+    fun reset() { zoom = 1f; pan = Offset.Zero; follow = false; resetPending = true; fitEpoch++ }
     fun focusOn(lat: Double, lon: Double, spanM: Double? = null) { focus = lat to lon; focusSpanM = spanM }
     fun startEdit(e: RoutineEdit) { selection = null; edit = e; focusOn(e.lat, e.lon) }
 }
@@ -285,11 +287,29 @@ fun TrackMap(
             basemap?.second?.info,
         )
     }
-    fun proj(): Proj? {
-        val f = fit ?: return null
+    fun projOf(f: Fit, zoom: Float = state.zoom, pan: Offset = state.pan): Proj? {
         if (viewSize.width == 0) return null
         val base = min(viewSize.width, viewSize.height) / f.spanW
-        return Proj(f.cx, f.cy, base, viewSize.width.toFloat(), viewSize.height.toFloat(), state.zoom, state.pan, f.lat0)
+        return Proj(f.cx, f.cy, base, viewSize.width.toFloat(), viewSize.height.toFloat(), zoom, pan, f.lat0)
+    }
+    fun proj(): Proj? = fit?.let { projOf(it) }
+
+    // The view is stored relative to the fitted frame. When the frame changes (track loaded, period
+    // changed), keep showing the same place at the same scale instead of jumping somewhere empty.
+    var lastFit by remember { mutableStateOf<Fit?>(null) }
+    LaunchedEffect(fit, viewSize) {
+        val old = lastFit
+        val f = fit
+        if (viewSize.width == 0 || f == null) return@LaunchedEffect
+        lastFit = f
+        if (state.resetPending) { state.resetPending = false; return@LaunchedEffect }
+        if (old == null || old === f || state.focus != null) return@LaunchedEffect
+        val po = projOf(old) ?: return@LaunchedEffect
+        val (lat, lon) = po.geo(Offset(viewSize.width / 2f, viewSize.height / 2f))
+        val z = (state.zoom * f.spanW / old.spanW).toFloat().coerceIn(0.25f, 2000f)
+        val pn = projOf(f, z, Offset.Zero) ?: return@LaunchedEffect
+        state.zoom = z
+        state.pan = pn.panToCenter(lat, lon)
     }
     val t0 = sorted.firstOrNull()?.timeMs ?: 0L
     val t1 = sorted.lastOrNull()?.timeMs ?: 0L

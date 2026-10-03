@@ -358,38 +358,6 @@ fun PlacesScreen(modifier: Modifier) {
 
 private val MAP_HEIGHT = 540.dp
 
-/** Your positions while one device was heard; consecutive minutes within 30 m become one point. */
-private suspend fun heardPlaces(ids: List<String>): List<DeviceVisit> {
-    val dao = app.db.dao()
-    val rows = dao.heardBuckets(ids, 60_000L, 20_000)
-    if (rows.isEmpty()) return emptyList()
-    // Fixes for the whole span, one per 15 s; each bucket takes the nearest one within a minute.
-    val fixes = dao.fixesThinned(rows.first().t0 - 60_000L, rows.last().t1 + 60_000L, 15_000L)
-    val times = LongArray(fixes.size) { fixes[it].timeMs }
-    fun nearest(t: Long): FixRow? {
-        if (times.isEmpty()) return null
-        var k = java.util.Arrays.binarySearch(times, t)
-        if (k < 0) k = -k - 1
-        val cand = listOfNotNull(fixes.getOrNull(k - 1), fixes.getOrNull(k))
-        return cand.minByOrNull { kotlin.math.abs(it.timeMs - t) }?.takeIf { kotlin.math.abs(it.timeMs - t) <= 60_000L }
-    }
-    val out = ArrayList<DeviceVisit>()
-    for (r in rows) {
-        val f = nearest(r.t0) ?: continue
-        val lat = f.lat
-        val lon = f.lon
-        val last = out.lastOrNull()
-        if (last != null && r.t0 - last.endMs <= 10 * 60_000L &&
-            dev.retrovision.core.analysis.Geo.distanceM(last.lat!!, last.lon!!, lat, lon) < 30.0
-        ) {
-            out[out.size - 1] = DeviceVisit(-1, last.lat, last.lon, last.startMs, r.t1, last.sightings + r.n, maxOf(last.maxRssi, r.rssi))
-        } else {
-            out += DeviceVisit(-1, lat, lon, r.t0, r.t1, r.n, r.rssi)
-        }
-    }
-    return out
-}
-
 private fun kindText(r: FamiliarRow) =
     if (r.kind == FamiliarPlace.Kind.HOME_LIKE.ordinal) Texts.tr("Home-like", "Tipo casa") else Texts.tr("Frequent", "Frequente")
 
