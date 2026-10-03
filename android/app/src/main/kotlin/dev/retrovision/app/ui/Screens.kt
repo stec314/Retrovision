@@ -281,8 +281,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         when (r.kind) {
             EntityKind.WIFI_AP -> add("BSSID $first" to Query.WifiBssid(first))
             EntityKind.BLE_TRACKER, EntityKind.BLE_DEVICE -> add("BLE $first" to Query.BleAddress(first))
-            // No lookups for the networks a phone asks for: they would place its owner's home on a map.
-            EntityKind.WIFI_CLIENT -> {}
+            EntityKind.WIFI_CLIENT -> r.ssids.take(4).forEach { add("SSID “$it”" to Query.WifiSsid(it)) }
         }
         if (r.kind == EntityKind.WIFI_AP && r.ssids.isNotEmpty()) add("SSID “${r.ssids.first()}”" to Query.WifiSsid(r.ssids.first()))
     }
