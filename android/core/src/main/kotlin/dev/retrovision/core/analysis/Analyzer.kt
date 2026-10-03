@@ -203,13 +203,31 @@ class EntityReport(
     val apUptimeDays: Double? = null,
     /** When it was heard and at which of YOUR places, oldest first (capped to the latest [VisitBuilder.MAX]). */
     val visits: List<DeviceVisit> = emptyList(),
+    /** What each reason added to the score (reasons that add nothing are absent). Display only. */
+    val reasonWeights: Map<Reason, Double> = emptyMap(),
+    /** Score before [caps] were applied. */
+    val rawScore: Double = score,
+    /** Caps that lowered the score, in the order applied. */
+    val caps: List<ScoreCap> = emptyList(),
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
-        memberIds, htProfile, addressLinks, apUptimeDays, visits,
+        memberIds, htProfile, addressLinks, apUptimeDays, visits, reasonWeights, rawScore, caps,
     )
+}
+
+/** Why a score was held down even though the clues added up to more. */
+enum class ScoreCap(val max: Double) {
+    /** Fewer than 2 effective places: a neighbour, not a follower. */
+    FEW_PLACES(0.30),
+    /** Signal fades around one spot: a fixed transmitter. */
+    STAYS_PUT(0.35),
+    /** Access point only ever heard within one area. */
+    ONE_AREA(0.45),
+    /** Learned to belong to your routine places. */
+    RESIDENT(0.25),
 }
 
 /** How an address came to belong to an entity (shown so you can judge the link yourself). */
@@ -368,7 +386,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 r0.sightings, r0.activeMinutes, r0.maxRssi, r0.addresses, r0.ssids, r0.tracker, r0.bleCompanyId, r0.mobileAp,
                 r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
                 r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
-                r0.htProfile, r0.addressLinks, r0.apUptimeDays, r0.visits,
+                r0.htProfile, r0.addressLinks, r0.apUptimeDays, r0.visits, r0.reasonWeights, r0.rawScore, r0.caps,
             ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
@@ -614,12 +632,16 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         }
         for (n in notable) if (n.kind != NotableKind.DRONE) reasons += Reason.Notable(n.name, n.kind)
 
+        val rawScore = score
+        val caps = ArrayList<ScoreCap>()
+        if (effPlaces < 2 && score > 0.3) caps += ScoreCap.FEW_PLACES
         if (effPlaces < 2) score = minOf(score, 0.3)
         // Geometry alone can't tell a follower from a fixed transmitter you keep walking around
         // (several "places" within its range). The signal can: see [stationary].
         val staysPut = if (nPlaces >= 2) stationary(positioned) else null
         if (staysPut != null) {
             reasons += Reason.StaysPut(staysPut.first, staysPut.second)
+            if (score > STAYS_PUT_CAP) caps += ScoreCap.STAYS_PUT
             score = minOf(score, STAYS_PUT_CAP)
         } else if (isAp && nPlaces >= 2) {
             // An access point heard only within one area: a fixed router fits, and nothing shows it
@@ -627,6 +649,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             val extent = extentM(positioned)
             if (extent < AP_ONE_AREA_M) {
                 reasons += Reason.OneAreaOnly(extent)
+                if (score > ONE_AREA_CAP) caps += ScoreCap.ONE_AREA
                 score = minOf(score, ONE_AREA_CAP)
             }
         }
@@ -634,9 +657,30 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         if (uptimeDays != null && uptimeDays >= 1.0) reasons += Reason.ApUptime(uptimeDays)
         if (isResident) {
             reasons += Reason.KnownAtRoutine
+            if (score > 0.25) caps += ScoreCap.RESIDENT
             score = minOf(score, 0.25) // belongs to your routine environment: not a follower
         }
         score = score.coerceIn(0.0, 1.0)
+
+        // How much each reason added: shown so you can see what drove the score (no logic here).
+        val weights = HashMap<Reason, Double>()
+        for (r in reasons) {
+            val w = when (r) {
+                is Reason.SeenAtPlaces -> 0.40 * sPlaces
+                is Reason.PresentInWindows, is Reason.SeenAcrossPeriods -> 0.20 * sWindows
+                is Reason.SeenFor -> 0.15 * sSpan
+                is Reason.TravelledWithYou -> 0.25 * sTravel
+                is Reason.Tracker -> if (effPlaces >= 2 && TrackerClassifier.isTag(r.kind)) (if (r.separatedFromOwner == true) 0.20 else 0.10) else 0.0
+                is Reason.MovingAccessPoint -> if (effPlaces >= 2) 0.10 else 0.0
+                is Reason.MovedWithYou -> 0.15
+                is Reason.ProbesForYourNetwork -> if (ignore.ownFingerprints.isNotEmpty()) 0.10 else 0.0
+                is Reason.JoinedAfterYou -> if (r.stops >= 2) 0.15 else 0.0
+                is Reason.StayedThroughTurns -> if (r.turns >= 3) 0.10 else 0.0
+                is Reason.Drone -> if (effPlaces >= 2) 0.15 else 0.0
+                else -> 0.0
+            }
+            if (w > 0.0) weights[r] = w
+        }
 
         val radio = list.first().sighting.radio
         val kind = when {
@@ -685,6 +729,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             htProfile = htProfile,
             addressLinks = addressLinks(list, mergedVia),
             visits = visits.result(),
+            reasonWeights = weights,
+            rawScore = rawScore,
+            caps = caps,
             apUptimeDays = uptimeDays,
         )
     }

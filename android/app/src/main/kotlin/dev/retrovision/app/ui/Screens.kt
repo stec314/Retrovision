@@ -218,7 +218,10 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     val enrichers = remember { Enrichers(app.prefs, app.db.dao()) }
     var output by remember { mutableStateOf<List<String>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
+    var confirmMine by remember { mutableStateOf(false) }
+    var showRaw by remember { mutableStateOf(false) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
+    val lv = dev.retrovision.core.analysis.Levels.of(r)
 
     val queries: List<Pair<String, Query>> = buildList {
         val first = r.addresses.first()
@@ -230,73 +233,162 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
         if (r.kind == EntityKind.WIFI_AP && r.ssids.isNotEmpty()) add("SSID “${r.ssids.first()}”" to Query.WifiSsid(r.ssids.first()))
     }
 
-    AlertDialog(
+    // Full screen: the evidence needs room, and a stressed tap must not hit "it's mine" by mistake.
+    androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
-        title = { Text(Texts.entityLabel(r)) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val lv = dev.retrovision.core.analysis.Levels.of(r)
-                Text("${Texts.levelIcon(lv)} ${Texts.level(lv)} · ${r.placeIds.size} ${Texts.tr("places", "luoghi")}", style = MaterialTheme.typography.titleSmall)
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(start = 4.dp, top = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onClose) { Text("←") }
+                    Text(Texts.entityLabel(r), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 2)
+                }
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    // 1. The answer, in words.
+                    Text(
+                        "${Texts.levelIcon(lv)} ${Texts.level(lv)}".trim(),
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = when (lv) {
+                            dev.retrovision.core.analysis.Level.STRONG -> MaterialTheme.colorScheme.error
+                            dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> MaterialTheme.colorScheme.tertiary
+                            else -> MaterialTheme.colorScheme.onSurface
+                        },
+                    )
+                    Text(
+                        CategoryUi.icon(r.category) + "  " + CategoryUi.label(r.category) + " · " +
+                            Texts.tr("last heard ", "ultimo ascolto ") + fmt.format(Date(r.lastSeenMs)),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    if (lv == dev.retrovision.core.analysis.Level.STRONG || lv == dev.retrovision.core.analysis.Level.WORTH_A_LOOK) {
+                        WhatToDoBlock()
+                    }
+
+                    // 2. Why: reasons ranked by what they added.
+                    Text(Texts.tr("Why", "Perché"), style = MaterialTheme.typography.titleMedium)
+                    EvidenceBars(r)
+                    r.notable.filter { it.note.isNotBlank() }.forEach {
+                        Text("👁 ${it.name}: ${it.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
+                    }
+
+                    // 3. Verdict, before the long technical part.
+                    FeedbackRowUi(r, onClose)
+                    OutlinedButton(onClick = { confirmMine = true }) { Text(Texts.tr("It's mine (stop showing it)", "È mio (non mostrarlo più)")) }
+
+                    // 4. Evidence detail: when/where, addresses, networks.
+                    Text(Texts.tr("Evidence", "Prove"), style = MaterialTheme.typography.titleMedium)
+                    Text(Texts.tr("First heard ", "Primo ascolto ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
+                    DeviceDetails(r)
+
+                    // 5. Raw data and tools, collapsed.
+                    TextButton(onClick = { showRaw = !showRaw }) {
+                        Text(if (showRaw) Texts.tr("Hide tools and lookups ▴", "Nascondi strumenti e ricerche ▴") else Texts.tr("Tools and online lookups ▾", "Strumenti e ricerche online ▾"))
+                    }
+                    if (showRaw) {
+                        var findIt by remember { mutableStateOf(false) }
+                        OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
+                        if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r)) { findIt = false }
+                        Text(
+                            Texts.tr("Lookups send only the identifier you tap, to that service.", "Le ricerche inviano solo l'identificativo che tocchi, a quel servizio."),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        queries.forEach { (label, q) ->
+                            enrichers.all().filter { it.supports(q) }.forEach { e ->
+                                val ready = enrichers.available(q).any { it.id == e.id }
+                                OutlinedButton(
+                                    enabled = ready && !busy,
+                                    onClick = {
+                                        busy = true
+                                        scope.launch {
+                                            output = try {
+                                                withContext(Dispatchers.IO) { enrichers.lookup(e, q) }.let {
+                                                    listOf("${it.source}${if (it.fromCache) " (cache)" else ""} — $label") + it.lines
+                                                }
+                                            } catch (ex: EnrichException) {
+                                                listOf(ex.message ?: "error")
+                                            } catch (ex: Exception) {
+                                                listOf("${e.label}: ${ex.message ?: ex.javaClass.simpleName}")
+                                            }
+                                            busy = false
+                                        }
+                                    },
+                                ) { Text("${e.label}: $label" + if (!ready) Texts.tr("  (set up in Settings)", "  (configura in Impostazioni)") else "") }
+                            }
+                        }
+                        output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 12.sp) }
+                        val isTarget = r.entityId in app.prefs.targets
+                        OutlinedButton(onClick = {
+                            app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
+                            onClose()
+                        }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
+                    }
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(16.dp))
+                }
+            }
+        }
+    }
+
+    if (confirmMine) {
+        AlertDialog(
+            onDismissRequest = { confirmMine = false },
+            title = { Text(Texts.tr("Is this device yours?", "Questo dispositivo è tuo?")) },
+            text = {
                 Text(
                     Texts.tr(
-                        "Score %.2f: a sum of clues, not a probability. The alert threshold is %.2f.".format(r.score, app.prefs.alertScore),
-                        "Punteggio %.2f: una somma di indizi, non una probabilità. La soglia di allerta è %.2f.".format(r.score, app.prefs.alertScore),
+                        "It will be hidden from alerts and lists until you remove it in Settings → Ignored devices. Only confirm if you are sure: a device planted on you also \"travels with you\".",
+                        "Verrà nascosto da allerte ed elenchi finché non lo togli in Impostazioni → Dispositivi ignorati. Conferma solo se non hai dubbi: anche un dispositivo nascosto addosso a te \"viaggia con te\".",
                     ),
-                    style = MaterialTheme.typography.bodySmall,
                 )
-                Text(Texts.tr("First seen ", "Primo avvistamento ") + fmt.format(Date(r.firstSeenMs)), style = MaterialTheme.typography.bodySmall)
-                Text(Texts.tr("Last seen ", "Ultimo avvistamento ") + fmt.format(Date(r.lastSeenMs)), style = MaterialTheme.typography.bodySmall)
-                r.reasons.forEach { Text("• " + Texts.reason(it), style = MaterialTheme.typography.bodySmall) }
-                r.notable.filter { it.note.isNotBlank() }.forEach {
-                    Text("👁 ${it.name}: ${it.note}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary)
-                }
-                DeviceDetails(r)
-                queries.forEach { (label, q) ->
-                    enrichers.all().filter { it.supports(q) }.forEach { e ->
-                        val ready = enrichers.available(q).any { it.id == e.id }
-                        OutlinedButton(
-                            enabled = ready && !busy,
-                            onClick = {
-                                busy = true
-                                scope.launch {
-                                    output = try {
-                                        withContext(Dispatchers.IO) { enrichers.lookup(e, q) }.let {
-                                            listOf("${it.source}${if (it.fromCache) " (cache)" else ""} — $label") + it.lines
-                                        }
-                                    } catch (ex: EnrichException) {
-                                        listOf(ex.message ?: "error")
-                                    } catch (ex: Exception) {
-                                        listOf("${e.label}: ${ex.message ?: ex.javaClass.simpleName}")
-                                    }
-                                    busy = false
-                                }
-                            },
-                        ) { Text("${e.label}: $label" + if (!ready) Texts.tr("  (set up in Settings)", "  (configura in Impostazioni)") else "") }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        for (m in r.memberIds) app.db.dao().addIgnore(IgnoreRow(m, Texts.entityLabel(r), System.currentTimeMillis()))
+                        Collector.analyzeNow.value = System.nanoTime()
+                        confirmMine = false
+                        onClose()
                     }
+                }) { Text(Texts.tr("Yes, it's mine", "Sì, è mio")) }
+            },
+            dismissButton = { TextButton(onClick = { confirmMine = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
+        )
+    }
+}
+
+/** Reasons ranked by what they added to the score, with a bar each; caps explained underneath. */
+@Composable
+private fun EvidenceBars(r: EntityReport) {
+    val ranked = r.reasons.sortedByDescending { r.reasonWeights[it] ?: 0.0 }
+    val maxW = (r.reasonWeights.values.maxOrNull() ?: 0.0).coerceAtLeast(0.01)
+    ranked.forEach { reason ->
+        val w = r.reasonWeights[reason] ?: 0.0
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(Texts.reason(reason), style = MaterialTheme.typography.bodyMedium)
+            if (w > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(progress = { (w / maxW).toFloat() }, modifier = Modifier.weight(1f))
+                    Text("+%.2f".format(w), style = MaterialTheme.typography.labelMedium)
                 }
-                var findIt by remember { mutableStateOf(false) }
-                OutlinedButton(onClick = { findIt = true }) { Text(Texts.tr("Find it (hot/cold)", "Trovalo (caldo/freddo)")) }
-                if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r)) { findIt = false }
-                val isTarget = r.entityId in app.prefs.targets
-                OutlinedButton(onClick = {
-                    app.prefs.targets = if (isTarget) app.prefs.targets - r.entityId else app.prefs.targets + r.entityId
-                    onClose()
-                }) { Text(if (isTarget) Texts.tr("Unmark as test target", "Togli dai bersagli di prova") else Texts.tr("Mark as field-test target", "Segna come bersaglio di prova")) }
-                FeedbackRowUi(r, onClose)
-                output.forEach { Text(it, fontFamily = FontFamily.Monospace, fontSize = 11.sp) }
             }
-        },
-        confirmButton = { TextButton(onClick = onClose) { Text(Texts.tr("Close", "Chiudi")) } },
-        dismissButton = {
-            TextButton(onClick = {
-                scope.launch {
-                    for (m in r.memberIds) app.db.dao().addIgnore(IgnoreRow(m, Texts.entityLabel(r), System.currentTimeMillis()))
-                    Collector.analyzeNow.value = System.nanoTime()
-                    onClose()
-                }
-            }) { Text(Texts.tr("Ignore (mine)", "Ignora (è mio)")) }
-        },
+        }
+    }
+    Text(
+        Texts.tr(
+            "Score %.2f (alert at %.2f): a sum of clues, not a probability.".format(r.score, app.prefs.alertScore),
+            "Punteggio %.2f (allerta da %.2f): una somma di indizi, non una probabilità.".format(r.score, app.prefs.alertScore),
+        ),
+        style = MaterialTheme.typography.bodySmall,
     )
+    if (r.caps.isNotEmpty()) {
+        Text(
+            Texts.tr("The clues added up to %.2f, held down because: ".format(r.rawScore), "Gli indizi sommavano %.2f, abbassati perché: ".format(r.rawScore)) +
+                r.caps.joinToString("; ") { Texts.cap(it) },
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
 }
 
 // ---------------------------------------------------------------- Probe / flasher
@@ -883,7 +975,7 @@ private fun FeedbackRowUi(r: EntityReport, onClose: () -> Unit) {
         OutlinedButton(onClick = { send(2) }) { Text(Texts.tr("Suspicious", "Sospetto")) }
     }
     Text(
-        Texts.tr("False alarm silences its alerts for 24 h. “Ignore (mine)” below records it as yours.", "Falso allarme silenzia le sue allerte per 24 h. “Ignora (è mio)” qui sotto lo registra come tuo."),
+        Texts.tr("False alarm silences its alerts for 24 h. “It's mine” hides it until you undo it in Settings.", "Falso allarme silenzia le sue allerte per 24 h. “È mio” lo nasconde finché non lo annulli in Impostazioni."),
         style = MaterialTheme.typography.bodySmall,
     )
 }

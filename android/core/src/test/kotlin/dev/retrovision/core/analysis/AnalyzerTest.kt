@@ -168,4 +168,12 @@ class AnalyzerTest {
         assertEquals(201, res.totalEntities)
         assertTrue(res.entities.any { it.entityId == "follower" && it.alert })
     }
+
+    @Test fun reasonWeightsExplainTheScore() {
+        val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min)).entities.single()
+        val places = r.reasons.filterIsInstance<Reason.SeenAtPlaces>().single()
+        assertTrue((r.reasonWeights[places] ?: 0.0) > 0.0)
+        assertTrue(r.reasonWeights.values.sum() <= r.rawScore + 1e-9)
+        assertTrue(r.caps.isEmpty())
+    }
 }

@@ -135,6 +135,13 @@ object Texts {
     /** Shown on the lock screen and in discreet mode: says nothing about what was found. */
     fun publicAlert() = tr("Something to check", "Qualcosa da controllare")
 
+    fun cap(c: dev.retrovision.core.analysis.ScoreCap) = when (c) {
+        dev.retrovision.core.analysis.ScoreCap.FEW_PLACES -> tr("heard at fewer than 2 places of yours (max 0.30)", "sentito in meno di 2 tuoi luoghi (max 0,30)")
+        dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
+        dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
+        dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
+    }
+
     fun level(l: dev.retrovision.core.analysis.Level) = when (l) {
         dev.retrovision.core.analysis.Level.STRONG -> tr("Strong signs", "Segnali forti")
         dev.retrovision.core.analysis.Level.WORTH_A_LOOK -> tr("Worth a look", "Da guardare")

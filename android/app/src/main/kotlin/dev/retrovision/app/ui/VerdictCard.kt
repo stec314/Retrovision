@@ -156,6 +156,12 @@ private fun CoverageLine() {
 fun WhatToDoCard() {
     val v = rememberVerdict()
     if (v.state != Verdict.State.WORTH_A_LOOK && v.state != Verdict.State.STRONG) return
+    WhatToDoBlock()
+}
+
+/** The steps themselves; also shown at the top of a device detail when it alerts. */
+@Composable
+fun WhatToDoBlock() {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),

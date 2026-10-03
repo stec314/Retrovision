@@ -121,6 +121,13 @@ Some OSes reset the sequence counter when they rotate the address, and recent de
 
 **What the HT capabilities tell you.** For a Wi-Fi client, the device details show the decoded 802.11 HT capabilities (e.g. "HT 20MHz · LDPC · SGI20 · 1×RxSTBC") — the PHY/driver features the device advertises. It is a **model-level clue, shared by every identical phone**, shown for transparency, not used to link rotations. Research shows these fields can be *decomposed* into subfields to cluster devices across a whole population (Puig et al., 2026, up to ~90% in a 22-device lab); Retrovision deliberately does not do that — population de-anonymisation is a tracking technique, the opposite of this tool's job, and it cannot tell two same-model phones apart anyway.
 
+**Device detail.** Tapping a device opens a full screen, in this order:
+1. **The answer:** level in words, what it is, when it was last heard. With an alert, *What you can do*.
+2. **Why:** the reasons, ranked by how much each added to the score, with a bar and the amount (+0.27, +0.15…). The score and threshold follow, labelled "a sum of clues, not a probability". If a cap held it down, it says by how much and why (few places, stays put, one area, resident).
+3. **Your verdict:** *False alarm* / *Suspicious*, and *It's mine*, which asks for confirmation (a device planted on you also "travels with you").
+4. **Evidence:** when and where it was heard, linked addresses, networks searched and joined.
+5. **Tools and online lookups**, collapsed: Find it, WiGLE/BeaconDB lookups (only the identifier you tap is sent), field-test target.
+
 **Searching devices.** The search box on *Devices* matches names, network names (its own, the ones it searches for, the ones it joined), vendor, category and addresses in any notation (`aa:bb:cc`, `AA-BB-CC`, `aabbcc`, or a fragment). Case and accents don't matter, and several words must all match. The search combines with the filter chips, whose counts follow the search. With the *Looking for a network* filter on, a row of chips lists every network being searched for by name, with how many devices ask for it. Tap one to see who asks for it. A network many unrelated devices know is a public one (a chain, a station); one that a single device knows says more about that device.
 
 **When and where.** A device's detail lists when it was heard, newest first: date, time span, how many frames, the strongest signal, and **where you were** at the time (a routine place by name, or "place #N", with the distance from where you are now). It is your own GPS position, not the device's: one receiver cannot locate a transmitter. A new line starts when you change place or after 10 minutes of silence. Text only: there is deliberately no per-device map.
