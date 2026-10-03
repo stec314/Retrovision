@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,6 +49,9 @@ import dev.retrovision.core.analysis.EntitySearch
 import dev.retrovision.core.identity.DeviceCategory
 import dev.retrovision.core.identity.MacTrust
 import dev.retrovision.core.model.WifiKind
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
@@ -139,10 +143,27 @@ fun DevicesScreen(modifier: Modifier) {
     var filter by rememberSaveable { mutableStateOf(DeviceFilter.ALL) }
     val all = analysis?.entities.orEmpty()
     var query by rememberSaveable { mutableStateOf("") }
-    // UI-side text (label with vendor, category) is searchable too; computed once per analysis.
-    val extra = remember(all) { all.associate { it.entityId to listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) } }
-    val matched = remember(all, query) { all.filter { EntitySearch.matches(it, query, extra[it.entityId].orEmpty()) } }
-    val list = matched.filter(filter.match)
+    // A city centre yields tens of thousands of devices: indexing, searching, filtering and counting
+    // all run off the UI thread (field report: typing in the search box froze the app).
+    val index by produceState<EntitySearch.Index?>(null, all) {
+        value = withContext(Dispatchers.Default) {
+            EntitySearch.Index(all) { listOf(Texts.entityLabel(it), CategoryUi.label(it.category)) }
+        }
+    }
+    val view by produceState(DevicesView(), index, query, filter) {
+        val idx = index ?: return@produceState
+        delay(150) // typing: wait for a pause; a new key press cancels this
+        value = withContext(Dispatchers.Default) {
+            val matched = idx.search(query)
+            DevicesView(
+                list = matched.filter(filter.match),
+                counts = DeviceFilter.entries.associateWith { f -> matched.count(f.match) },
+                networks = if (filter == DeviceFilter.SEARCHING) EntitySearch.searchedNetworks(all) else emptyList(),
+                ready = true,
+            )
+        }
+    }
+    val list = view.list
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Row(
@@ -167,7 +188,7 @@ fun DevicesScreen(modifier: Modifier) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             DeviceFilter.entries.forEach { f ->
-                val n = matched.count(f.match)
+                val n = view.counts[f] ?: 0
                 if (n == 0 && f != DeviceFilter.ALL && f != filter) return@forEach
                 FilterChip(
                     selected = filter == f,
@@ -177,13 +198,14 @@ fun DevicesScreen(modifier: Modifier) {
             }
         }
         if (all.isEmpty()) Text(Texts.tr("Nothing analysed yet. Start collecting and wait a minute.", "Ancora nulla. Avvia la raccolta e attendi un minuto."))
+        else if (!view.ready) LinearProgressIndicator(Modifier.fillMaxWidth())
         else if (list.isEmpty() && query.isNotBlank()) {
             Text(Texts.tr("No device matches “$query” in the analysed window.", "Nessun dispositivo corrisponde a “$query” nella finestra analizzata."))
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (filter == DeviceFilter.SEARCHING) {
                 item(key = "networks") {
-                    val nets = remember(all) { EntitySearch.searchedNetworks(all) }
+                    val nets = view.networks
                     if (nets.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
@@ -223,6 +245,13 @@ fun DevicesScreen(modifier: Modifier) {
     }
     selected?.let { DeviceDialog(it) { selected = null } }
 }
+
+private class DevicesView(
+    val list: List<EntityReport> = emptyList(),
+    val counts: Map<DeviceFilter, Int> = emptyMap(),
+    val networks: List<Pair<String, Int>> = emptyList(),
+    val ready: Boolean = false,
+)
 
 @Composable
 private fun Badge(text: String, color: Color) {
@@ -316,6 +345,7 @@ fun DeviceDetails(r: EntityReport) {
                 style = MaterialTheme.typography.bodySmall,
             )
         }
+        VisitsSection(r)
         if (r.addressLinks.size > 1) {
             Text("🔗 " + Texts.tr("Linked addresses", "Indirizzi collegati"), style = MaterialTheme.typography.titleSmall, color = LINK)
             Text(
@@ -394,3 +424,54 @@ fun DeviceDetails(r: EntityReport) {
         }
     }
 }
+
+/**
+ * When it was heard and where YOU were at the time (your GPS), newest first. Not the device's
+ * position: one receiver cannot locate a transmitter. Text only, no per-device map.
+ */
+@Composable
+private fun VisitsSection(r: EntityReport) {
+    if (r.visits.isEmpty()) return
+    val routine by remember { dev.retrovision.app.RetrovisionApp.instance.db.dao().familiarPlaces() }.collectAsState(initial = emptyList())
+    val here by Collector.location.collectAsState()
+    val day = remember { java.text.SimpleDateFormat("EEE d MMM", java.util.Locale.getDefault()) }
+    val time = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
+    val today = remember { day.format(Date()) }
+    Text("🕒 " + Texts.tr("When and where you heard it", "Quando e dove l'hai sentito"), style = MaterialTheme.typography.titleSmall)
+    Text(
+        Texts.tr(
+            "Where you were at the time (your GPS), not where the device is. Newest first.",
+            "Dove eri tu in quel momento (il tuo GPS), non dove si trova il dispositivo. Dal più recente.",
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    val confirmed = routine.filter { it.state == dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED.ordinal }
+    r.visits.asReversed().take(30).forEach { v ->
+        val d = day.format(Date(v.startMs))
+        val whenText = (if (d == today) Texts.tr("Today", "Oggi") else d) + " " + time.format(Date(v.startMs)) +
+            (if (v.endMs - v.startMs >= 60_000) "–" + time.format(Date(v.endMs)) else "")
+        val lat = v.lat
+        val lon = v.lon
+        val whereText = when {
+            lat == null || lon == null -> Texts.tr("no GPS at the time", "senza GPS in quel momento")
+            else -> {
+                val rt = confirmed.firstOrNull { dev.retrovision.core.analysis.Geo.distanceM(it.lat, it.lon, lat, lon) <= it.radiusM }
+                val name = rt?.let { it.label.ifEmpty { Texts.tr("routine place", "luogo di routine") } }
+                    ?: (Texts.tr("place ", "luogo ") + "#${v.placeId + 1}")
+                val h = here
+                val dist = h?.let { dev.retrovision.core.analysis.Geo.distanceM(it.lat, it.lon, lat, lon) }
+                name + (dist?.let { " · " + Texts.tr("${fmtDist(it)} from here", "a ${fmtDist(it)} da qui") } ?: "")
+            }
+        }
+        Column(Modifier.padding(start = 4.dp, top = 2.dp)) {
+            Text(whenText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+            Text(
+                "$whereText · ×${v.sightings}" + (if (v.maxRssi != 0) " · ${v.maxRssi} dBm" else ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+    if (r.visits.size > 30) Text(Texts.tr("…and ${r.visits.size - 30} earlier", "…e altri ${r.visits.size - 30} prima"), style = MaterialTheme.typography.bodySmall)
+}
+
+private fun fmtDist(m: Double) = if (m < 1000) "${m.toInt()} m" else "%.1f km".format(m / 1000)

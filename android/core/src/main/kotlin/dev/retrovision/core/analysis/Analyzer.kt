@@ -194,12 +194,14 @@ class EntityReport(
     val addressLinks: List<AddressLink> = emptyList(),
     /** Access points: days since boot from the beacon timestamp, when known. */
     val apUptimeDays: Double? = null,
+    /** When it was heard and at which of YOUR places, oldest first (capped to the latest [VisitBuilder.MAX]). */
+    val visits: List<DeviceVisit> = emptyList(),
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
-        memberIds, htProfile, addressLinks, apUptimeDays,
+        memberIds, htProfile, addressLinks, apUptimeDays, visits,
     )
 }
 
@@ -215,6 +217,56 @@ enum class LinkVia {
     RARE_NETWORKS,
     /** Access point with the same boot moment (beacon uptime) under a new name or address. */
     AP_UPTIME,
+}
+
+/**
+ * One stretch in which a device was heard while you were at one place: when, where YOU were
+ * (the place centre, not the device's position: a single receiver cannot locate it), how often and
+ * how loud. [placeId] is -1 when there was no usable GPS fix.
+ */
+class DeviceVisit(
+    val placeId: Int,
+    val lat: Double?,
+    val lon: Double?,
+    val startMs: Long,
+    val endMs: Long,
+    val sightings: Int,
+    val maxRssi: Int,
+)
+
+/** Groups a device's time-ordered sightings into [DeviceVisit]s: a new one on a new place or a 10-minute gap. */
+class VisitBuilder {
+    private val out = ArrayList<DeviceVisit>()
+    private var place: Place? = null
+    private var placeId = Int.MIN_VALUE
+    private var start = 0L
+    private var end = 0L
+    private var n = 0
+    private var rssi = Int.MIN_VALUE
+
+    fun add(s: dev.retrovision.core.model.Sighting, p: Place?) {
+        val id = p?.id ?: -1
+        if (n > 0 && (id != placeId || s.timeMs - end > GAP_MS)) flush()
+        if (n == 0) { place = p; placeId = id; start = s.timeMs }
+        end = maxOf(end, s.timeMs)
+        n += maxOf(1, s.mergedCount)
+        if (s.rssi != 0) rssi = maxOf(rssi, s.rssi)
+    }
+
+    private fun flush() {
+        out += DeviceVisit(placeId, place?.lat, place?.lon, start, end, n, if (rssi == Int.MIN_VALUE) 0 else rssi)
+        n = 0; rssi = Int.MIN_VALUE; end = 0L
+    }
+
+    fun result(): List<DeviceVisit> {
+        if (n > 0) flush()
+        return if (out.size > MAX) out.subList(out.size - MAX, out.size).toList() else out
+    }
+
+    companion object {
+        const val GAP_MS = 10 * 60_000L
+        const val MAX = 100
+    }
 }
 
 class AddressLink(val address: MacAddress, val via: LinkVia, val firstMs: Long, val lastMs: Long, val sightings: Int)
@@ -304,7 +356,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 r0.sightings, r0.activeMinutes, r0.maxRssi, r0.addresses, r0.ssids, r0.tracker, r0.bleCompanyId, r0.mobileAp,
                 r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
                 r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
-                r0.htProfile, r0.addressLinks, r0.apUptimeDays,
+                r0.htProfile, r0.addressLinks, r0.apUptimeDays, r0.visits,
             ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
@@ -369,6 +421,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         var remoteId = false
         var droneId: String? = null
         val positioned = ArrayList<Triple<GeoFix, Int, String>>() // where you were, RSSI, receiver
+        val visits = VisitBuilder()
         var maxTsfUs = -1L
         fun lower(t: MacTrust) { if (t.ordinal > trust.ordinal) trust = t }
 
@@ -443,9 +496,12 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             notable += f.notable
             f.remoteId?.let { r -> remoteId = true; r.uasId?.let { droneId = it } }
 
-            timeline.nearest(s.timeMs)?.let { fix ->
+            val fixHere = timeline.nearest(s.timeMs)
+            val placeHere = fixHere?.let { placeOfFix[it] }
+            visits.add(s, placeHere)
+            fixHere?.let { fix ->
                 if (s.rssi != 0) positioned += Triple(fix, s.rssi, s.probeId)
-                val p = placeOfFix[fix] ?: return@let
+                val p = placeHere ?: return@let
                 places += p.id
                 if (p.id != lastPlace) {
                     track += s.timeMs to fix
@@ -605,6 +661,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             buckets = list.map { it.sighting.timeMs / 300_000L }.toSet(),
             htProfile = htProfile,
             addressLinks = addressLinks(list, mergedVia),
+            visits = visits.result(),
             apUptimeDays = uptimeDays,
         )
     }
@@ -648,7 +705,13 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
      * person or vehicle. A group survives one member rotating its address, so it's extra evidence.
      */
     private fun groups(reports: MutableList<EntityReport>) {
-        val cand = reports.indices.filter { reports[it].placeIds.size >= 3 && reports[it].reasons.none { r -> r is Reason.KnownAtRoutine || r is Reason.StaysPut } }
+        // Pairwise comparison is quadratic: with tens of thousands of devices in a city centre it took
+        // most of a run. The group bonus (+0.05) can only matter near the alert threshold, so only the
+        // highest-scoring candidates there are compared.
+        val cand = reports.indices.filter {
+            reports[it].placeIds.size >= 3 && reports[it].score >= config.alertScore - GROUP_SCORE_MARGIN &&
+                reports[it].reasons.none { r -> r is Reason.KnownAtRoutine || r is Reason.StaysPut || r is Reason.OneAreaOnly }
+        }.sortedByDescending { reports[it].score }.take(GROUP_MAX_CANDIDATES)
         if (cand.size < 2) return
         val parent = IntArray(reports.size) { it }
         fun find(x: Int): Int { var y = x; while (parent[y] != y) { parent[y] = parent[parent[y]]; y = parent[y] }; return y }
@@ -780,6 +843,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         const val COMOVE_MAX_STD = 7.5
         const val GROUP_PLACES_J = 0.75
         const val GROUP_TIME_J = 0.4
+        const val GROUP_SCORE_MARGIN = 0.3
+        const val GROUP_MAX_CANDIDATES = 400
         const val STAYS_PUT_MIN_SAMPLES = 16
         /** Generous: an outdoor AP can be heard 300+ m away. The fade test does the real work. */
         const val STAYS_PUT_MAX_REACH_M = 450.0

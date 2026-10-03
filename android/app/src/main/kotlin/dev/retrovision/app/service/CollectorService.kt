@@ -576,6 +576,7 @@ class CollectorService : Service() {
                 val t0 = android.os.SystemClock.elapsedRealtime()
                 val r = runCatching { analyzeOnce() }
                 val ms = android.os.SystemClock.elapsedRealtime() - t0
+                r.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it } // service stopping
                 r.onFailure { e ->
                     Diag.update { it.copy(analysisErrors = it.analysisErrors + 1) }
                     Diag.e("analysis", "run failed after $ms ms · ${Diag.heapLine()}", e)

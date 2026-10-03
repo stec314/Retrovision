@@ -41,6 +41,21 @@ class EntitySearchTest {
         assertTrue(EntitySearch.matches(band, "xiaomi", listOf("Xiaomi Communications")))
     }
 
+    /** Field report: 45,000 devices in a city centre; typing in the search box froze the app. */
+    @Test fun indexSearchesFiftyThousandDevicesQuickly() {
+        val many = (0 until 50_000).map { i -> dev("e$i", 0x020000000000L + i, probed = setOf("Net${i % 997}"), name = "Dev $i") }
+        val t0 = System.nanoTime()
+        val idx = EntitySearch.Index(many) { listOf("Vendor ${it.entityId}") }
+        val built = (System.nanoTime() - t0) / 1_000_000
+        val t1 = System.nanoTime()
+        val hits = idx.search("net42 dev")
+        val searched = (System.nanoTime() - t1) / 1_000_000
+        assertTrue(hits.isNotEmpty())
+        assertTrue("build $built ms", built < 3_000)
+        assertTrue("search $searched ms", searched < 500)
+        assertEquals(1, idx.search("02:00:00:00:c3:4f").size) // 0xC34F = 49999
+    }
+
     @Test fun searchedNetworksCountDevices() {
         val other = dev("c", 0x02000000000AL, probed = setOf("Hotel Duomo"))
         assertEquals(listOf("Hotel Duomo" to 2, "Città-WiFi" to 1), EntitySearch.searchedNetworks(listOf(phone, other, band)))

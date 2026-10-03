@@ -143,6 +143,14 @@ class StaysPutTest {
         assertTrue(r.addressLinks.map { it.via } == listOf(LinkVia.ORIGINAL, LinkVia.SEQUENCE))
     }
 
+    @Test fun visitsSayWhenAndAtWhichOfYourPlaces() {
+        val r = analyzer.analyze(now, ap("ap", 200.0, 150.0, Random(1)), fixes).entities.single()
+        assertTrue(r.visits.size >= 3)
+        assertTrue(r.visits.zipWithNext().all { (a, b) -> a.endMs <= b.startMs }) // oldest first, no overlap
+        assertTrue(r.visits.sumOf { it.sightings } == r.sightings)
+        assertTrue(r.visits.all { it.placeId >= 0 && it.lat != null })
+    }
+
     @Test fun tooFewSamplesDecideNothing() {
         val f = fixes.take(10).map { Triple(it, -60, "p") }
         assertNull(analyzer.stationary(f))
