@@ -15,6 +15,7 @@ import dev.retrovision.core.wire.FrameDecoder
 import dev.retrovision.core.wire.Framing
 import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
+import dev.retrovision.proto.v1.ChannelDwell
 import dev.retrovision.proto.v1.Command
 import dev.retrovision.proto.v1.Config
 import dev.retrovision.proto.v1.Envelope
@@ -83,6 +84,8 @@ class ProbeSession(
     private val nowUs: () -> Long = WallClock::nowUs,
     private val ledOn: () -> Boolean = { true },
     private val dataFrames: () -> Boolean = { false },
+    /** Channel plan (see [ChannelPlans]): 0 = the probe's own default. */
+    private val channelPlan: () -> Int = { 0 },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -405,6 +408,7 @@ class ProbeSession(
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
                 .apply { if (data) addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DATA) }
+                .apply { ChannelPlans.hops(channelPlan()).forEach { (ch, ms) -> addHop(ChannelDwell.newBuilder().setChannel(ch).setDwellMs(ms)) } }
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),

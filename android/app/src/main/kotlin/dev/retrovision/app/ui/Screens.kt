@@ -804,6 +804,25 @@ fun SettingsScreen(modifier: Modifier) {
                     FilterChip(selected = bleMode == v, onClick = { bleMode = v; prefs.phoneBleMode = v }, label = { Text(l) })
                 }
             }
+            var plan by remember { mutableIntStateOf(prefs.channelPlan) }
+            Text(Texts.tr("Wi-Fi channels the probe listens to", "Canali Wi-Fi ascoltati dalla sonda"), style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0 to Texts.tr("Focused", "Mirato"), 1 to Texts.tr("Balanced", "Bilanciato"), 2 to Texts.tr("All", "Tutti")).forEach { (v, l) ->
+                    FilterChip(selected = plan == v, onClick = {
+                        plan = v; prefs.channelPlan = v
+                        Collector.session?.resendConfig()
+                    }, label = { Text(l) })
+                }
+            }
+            Text(
+                Texts.tr(
+                    "Cycle about %.1f s on the C5 · %d%% of the time on the channels where phones send probe requests. More channels = more access points heard, fewer phone sightings."
+                        .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
+                    "Ciclo di circa %.1f s sul C5 · %d%% del tempo sui canali dove i telefoni mandano probe request. Più canali = più access point sentiti, meno avvistamenti di telefoni."
+                        .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
+                ),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             var drift by remember { mutableStateOf(prefs.driftGuard) }
             SettingSwitch(
                 Texts.tr("Reject GPS drift while the phone is still", "Scarta la deriva GPS quando il telefono è fermo"),

@@ -107,6 +107,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("devicesShown", 300)
         set(v) = p.edit().putInt("devicesShown", v).apply()
 
+    /** Wi-Fi channel plan sent to the probe: 0 focused (default), 1 balanced, 2 full sweep. */
+    var channelPlan: Int
+        get() = p.getInt("channelPlan", 0)
+        set(v) = p.edit().putInt("channelPlan", v).apply()
+
     /** Devices list as one-line rows instead of cards. */
     var devicesCompact: Boolean
         get() = p.getBoolean("devicesCompact", false)

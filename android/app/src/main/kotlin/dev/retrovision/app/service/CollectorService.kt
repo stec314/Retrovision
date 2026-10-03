@@ -448,7 +448,7 @@ class CollectorService : Service() {
                 port.write(data, 1000)
             }
         }
-        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value })
+        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value }, channelPlan = { prefs.channelPlan })
         Collector.session = session
         val done = CompletableDeferred<Unit>()
         // The USB reader only copies bytes into [inbox]; decoding, identity resolution and the DB
