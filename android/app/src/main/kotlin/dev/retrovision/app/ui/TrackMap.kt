@@ -125,6 +125,7 @@ val DEVICE_COLORS = listOf(
     androidx.compose.ui.graphics.Color(0xFFFF7A59), androidx.compose.ui.graphics.Color(0xFFC792EA),
     androidx.compose.ui.graphics.Color(0xFFF78FB3), androidx.compose.ui.graphics.Color(0xFFFFD166),
     androidx.compose.ui.graphics.Color(0xFF9AD0FF), androidx.compose.ui.graphics.Color(0xFFB8F28B),
+    androidx.compose.ui.graphics.Color(0xFFFF9F1C), androidx.compose.ui.graphics.Color(0xFF80FFDB),
 )
 
 /** A routine place being created or edited: centre, radius and name chosen by the user. */
@@ -154,6 +155,10 @@ class MapUiState {
     /** Only this flagged device's places are drawn, and listed under the map. */
     var deviceFocus by mutableStateOf<String?>(null)
     var showInfo by mutableStateOf(false)
+    /** Flagged devices switched off by the user (chips over the map, checkboxes under it). */
+    var hiddenDevices by mutableStateOf<Set<String>>(emptySet())
+    /** The replay scrubber takes room: shown only on request. */
+    var showReplay by mutableStateOf(false)
     /** Bumped to recompute the fitted view (period change, "fit all"). Otherwise it stays put while data refreshes. */
     var fitEpoch by mutableIntStateOf(0)
 
@@ -314,9 +319,9 @@ fun TrackMap(
         val p = proj() ?: return@LaunchedEffect
         state.pan = p.panToCenter(h.lat, h.lon)
     }
-    val shownDevices = remember(devices, state.deviceFocus, state.showDevices) {
+    val shownDevices = remember(devices, state.deviceFocus, state.showDevices, state.hiddenDevices) {
         if (!state.showDevices) emptyList()
-        else devices.filter { state.deviceFocus == null || it.entityId == state.deviceFocus }
+        else devices.filter { if (state.deviceFocus != null) it.entityId == state.deviceFocus else it.entityId !in state.hiddenDevices }
     }
 
     val labelPaint = remember {
@@ -367,7 +372,7 @@ fun TrackMap(
                                 state.edit = e.copy(lat = lat, lon = lon)
                                 return@detectTapGestures
                             }
-                            val hitPx = 40f
+                            val hitPx = 22.dp.toPx()
                             val stay = if (!state.showStays) null else visits.minByOrNull { (pr.screen(it.lat, it.lon) - p).getDistance() }
                                 ?.takeIf { (pr.screen(it.lat, it.lon) - p).getDistance() < hitPx }
                             val place = if (!state.showRoutine) null else routine.firstOrNull {
@@ -447,39 +452,44 @@ fun TrackMap(
                     }
                     prev = f
                 }
-                val round = Stroke(3f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                val round = Stroke(2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round)
                 drawPath(dim, MapColors.track.copy(alpha = 0.25f), style = round)
-                drawPath(bright, MapColors.trackGlow, style = Stroke(12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                drawPath(bright, MapColors.trackGlow, style = Stroke(8.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
                 drawPath(bright, MapColors.track, style = round)
             }
 
             if (state.showStays) {
                 visits.forEach { v ->
                     val c = pr.screen(v.lat, v.lon)
-                    val r = (5f + (v.durationMs / 600_000f)).coerceAtMost(16f)
-                    drawCircle(MapColors.stay.copy(alpha = 0.25f), radius = r + 4f, center = c)
-                    drawCircle(MapColors.stay, radius = r, center = c, style = Stroke(2.5f))
+                    val r = (4f + (v.durationMs / 900_000f)).coerceAtMost(10f).dp.toPx()
+                    drawCircle(MapColors.stay.copy(alpha = 0.25f), radius = r + 3.dp.toPx(), center = c)
+                    drawCircle(MapColors.stay, radius = r, center = c, style = Stroke(2.dp.toPx()))
                 }
             }
 
-            // Flagged devices: a diamond where each was heard, joined in time order (dashed).
+            // Devices that may follow you: a diamond wherever each was heard (your position then).
+            // Sizes in dp so they stay readable on dense screens. The time-ordered line is drawn only
+            // for the device in focus, to keep the map legible.
+            val dr = 6.dp.toPx()
+            val edge = 1.5.dp.toPx()
             shownDevices.forEach { d ->
-                val pts = d.visits.filter { it.lat != null && it.lon != null }.sortedBy { it.startMs }
-                if (pts.size >= 2) {
+                val pts = d.visits.filter { it.lat != null && it.lon != null }
+                if (state.deviceFocus == d.entityId && pts.size >= 2) {
                     val path = Path()
-                    pts.forEachIndexed { i, v ->
+                    pts.sortedBy { it.startMs }.forEachIndexed { i, v ->
                         val o = pr.screen(v.lat!!, v.lon!!)
                         if (i == 0) path.moveTo(o.x, o.y) else path.lineTo(o.x, o.y)
                     }
-                    drawPath(path, d.color.copy(alpha = 0.55f), style = Stroke(2.5f, pathEffect = dashed))
+                    drawPath(path, d.color.copy(alpha = 0.6f), style = Stroke(2.dp.toPx(), pathEffect = dashed))
                 }
+                val dia = Path()
                 pts.forEach { v ->
                     val o = pr.screen(v.lat!!, v.lon!!)
-                    val r = 9f
-                    val dia = Path().apply { moveTo(o.x, o.y - r); lineTo(o.x + r, o.y); lineTo(o.x, o.y + r); lineTo(o.x - r, o.y); close() }
-                    drawPath(dia, d.color)
-                    drawPath(dia, MapColors.background, style = Stroke(2f))
+                    if (o.x < -dr || o.y < -dr || o.x > size.width + dr || o.y > size.height + dr) return@forEach
+                    dia.moveTo(o.x, o.y - dr); dia.lineTo(o.x + dr, o.y); dia.lineTo(o.x, o.y + dr); dia.lineTo(o.x - dr, o.y); dia.close()
                 }
+                drawPath(dia, MapColors.background, style = Stroke(edge * 2))
+                drawPath(dia, d.color)
             }
 
             here?.let {
@@ -488,8 +498,9 @@ fun TrackMap(
                     val acc = max(20f, pr.radiusPx(it.lat, it.accuracyM.toDouble()))
                     drawCircle(MapColors.me.copy(alpha = 0.08f), radius = acc, center = c)
                 }
-                drawCircle(MapColors.me.copy(alpha = 0.22f), radius = 20f, center = c)
-                drawCircle(MapColors.me, radius = 8f, center = c)
+                drawCircle(MapColors.me.copy(alpha = 0.22f), radius = 14.dp.toPx(), center = c)
+                drawCircle(MapColors.background, radius = 7.dp.toPx(), center = c)
+                drawCircle(MapColors.me, radius = 5.5.dp.toPx(), center = c)
             }
             scrubFix?.let {
                 val c = pr.screen(it.lat, it.lon)
@@ -516,7 +527,7 @@ fun TrackMap(
                     drawLine(MapColors.select, c - Offset(14f, 0f), c + Offset(14f, 0f), 3f)
                     drawLine(MapColors.select, c - Offset(0f, 14f), c + Offset(0f, 14f), 3f)
                 }
-                is MapSel.DevicePlace -> s.visit.lat?.let { la -> drawCircle(MapColors.select, 16f, pr.screen(la, s.visit.lon ?: return@let), style = Stroke(3f)) }
+                is MapSel.DevicePlace -> s.visit.lat?.let { la -> drawCircle(MapColors.select, 12.dp.toPx(), pr.screen(la, s.visit.lon ?: return@let), style = Stroke(2.5.dp.toPx())) }
                 null -> {}
             }
 
@@ -569,11 +580,15 @@ fun TrackMap(
                     MapChip(Texts.tr("Stays", "Soste"), state.showStays) { state.showStays = it }
                     MapChip(Texts.tr("Routine", "Routine"), state.showRoutine) { state.showRoutine = it }
                     if (devices.isNotEmpty()) {
-                        MapChip(Texts.tr("Flagged devices", "Dispositivi segnalati") + " ${devices.size}", state.showDevices) { state.showDevices = it }
+                        MapChip(Texts.tr("Devices", "Dispositivi") + " ${devices.size}", state.showDevices) { state.showDevices = it }
                     }
-                    state.deviceFocus?.let { id ->
-                        val d = devices.firstOrNull { it.entityId == id }
-                        MapChip("✕ " + (d?.label ?: id).take(18), true) { state.deviceFocus = null; state.selection = null }
+                    // One chip per device: tap to show or hide it.
+                    if (state.showDevices) devices.forEach { d ->
+                        val on = if (state.deviceFocus != null) state.deviceFocus == d.entityId else d.entityId !in state.hiddenDevices
+                        MapChip("◆ " + d.label.removePrefix("“").take(14), on, dot = d.color) {
+                            if (state.deviceFocus != null) state.deviceFocus = null
+                            state.hiddenDevices = if (on) state.hiddenDevices + d.entityId else state.hiddenDevices - d.entityId
+                        }
                     }
                 }
             }
@@ -590,7 +605,7 @@ fun TrackMap(
                 MenuCheck(Texts.tr("My track", "Il mio percorso"), state.showTrack) { state.showTrack = it }
                 MenuCheck(Texts.tr("Stays", "Soste"), state.showStays) { state.showStays = it }
                 MenuCheck(Texts.tr("Routine places", "Luoghi di routine"), state.showRoutine) { state.showRoutine = it }
-                MenuCheck(Texts.tr("Flagged devices", "Dispositivi segnalati"), state.showDevices) { state.showDevices = it }
+                MenuCheck(Texts.tr("Devices that may follow you", "Dispositivi che potrebbero seguirti"), state.showDevices) { state.showDevices = it }
                 MenuCheck(Texts.tr("Metric grid (no base map)", "Griglia metrica (senza mappa)"), state.showGrid) { state.showGrid = it }
                 HorizontalDivider()
                 MenuHeader(Texts.tr("Base map", "Mappa di base"))
@@ -631,6 +646,7 @@ fun TrackMap(
             MapButton("+") { state.zoom = (state.zoom * 1.6f).coerceAtMost(2000f); state.pan = state.pan * 1.6f }
             MapButton("−") { state.zoom = (state.zoom / 1.6f).coerceAtLeast(0.25f); state.pan = state.pan / 1.6f }
             MapButton("⤢") { state.reset() }
+            MapButton(if (state.showReplay) "⏹" else "⏵") { state.showReplay = !state.showReplay; if (!state.showReplay) state.scrub = null }
             if (here != null) {
                 FilledTonalIconButton(
                     onClick = {
@@ -673,7 +689,7 @@ fun TrackMap(
                 MapInfoCard(sorted, visits, routine, devices, here, state)
             }
 
-            if (sorted.size >= 2 && state.showTrack && state.edit == null) {
+            if (sorted.size >= 2 && state.showTrack && state.showReplay && state.edit == null) {
                 OverlayCard {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
@@ -733,15 +749,11 @@ fun TrackMap(
                                 }) { Text(Texts.tr("Change area…", "Modifica area…")) }
                             }
                             is MapSel.DevicePlace -> {
-                                Text(sel.device.label, style = MaterialTheme.typography.titleSmall)
+                                Text("◆ " + sel.device.label + " · " + Texts.level(sel.device.level), style = MaterialTheme.typography.titleSmall, color = sel.device.color)
                                 Text(
                                     Texts.tr("Heard here ", "Sentito qui ") + dateTimeFmt.format(Date(sel.visit.startMs)) + "–" + timeFmt.format(Date(sel.visit.endMs)) +
                                         " · ${sel.visit.sightings} " + Texts.tr("sightings", "rilevazioni") + " · max ${sel.visit.maxRssi} dBm",
                                     style = MaterialTheme.typography.bodySmall,
-                                )
-                                Text(
-                                    Texts.tr("The point is where you were when your receivers heard it.", "Il punto è dove eri tu quando i ricevitori l'hanno sentito."),
-                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                                 if (state.deviceFocus != sel.device.entityId) {
                                     OutlinedButton(onClick = { state.deviceFocus = sel.device.entityId; fitDevice(state, sel.device) }) {
@@ -816,8 +828,8 @@ private fun MapInfoCard(sorted: List<GeoFix>, visits: List<Visit>, routine: List
         )
         if (devices.isNotEmpty()) Text(
             Texts.tr(
-                "${devices.size} flagged device(s): places from the analysis window only.",
-                "${devices.size} dispositivi segnalati: luoghi della sola finestra di analisi.",
+                "${devices.size} device(s) that may follow you: ◆ = your position when heard, from all stored data.",
+                "${devices.size} dispositivi che potrebbero seguirti: ◆ = tua posizione quando sentiti, da tutti i dati salvati.",
             ),
             style = MaterialTheme.typography.bodySmall,
         )
@@ -826,16 +838,22 @@ private fun MapInfoCard(sorted: List<GeoFix>, visits: List<Visit>, routine: List
 }
 
 @Composable
-private fun MapChip(label: String, on: Boolean, onChange: (Boolean) -> Unit) {
+private fun MapChip(label: String, on: Boolean, dot: androidx.compose.ui.graphics.Color? = null, onChange: (Boolean) -> Unit) {
     Text(
         label,
         style = MaterialTheme.typography.labelMedium,
-        color = if (on) MaterialTheme.colorScheme.onPrimary else MapColors.label,
+        // A device chip keeps its marker colour so the chip and the ◆ on the map match.
+        color = when {
+            dot != null && on -> MapColors.background
+            dot != null -> dot
+            on -> MaterialTheme.colorScheme.onPrimary
+            else -> MapColors.label
+        },
         maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
-            .background(if (on) MaterialTheme.colorScheme.primary.copy(alpha = 0.92f) else MapColors.background.copy(alpha = 0.85f))
-            .border(1.dp, if (on) MaterialTheme.colorScheme.primary else MapColors.gridMajor, RoundedCornerShape(50))
+            .background(if (on) (dot ?: MaterialTheme.colorScheme.primary).copy(alpha = 0.92f) else MapColors.background.copy(alpha = 0.85f))
+            .border(1.dp, if (on) (dot ?: MaterialTheme.colorScheme.primary) else (dot ?: MapColors.gridMajor), RoundedCornerShape(50))
             .clickable { onChange(!on) }
             .padding(horizontal = 12.dp, vertical = 6.dp),
     )

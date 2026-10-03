@@ -519,7 +519,9 @@ Places and your own track can be drawn on a dark, interactive map. Maps are **of
 
 The map shows **your** places and **your** movement. It opens like a navigation app: centred on your position at street level and **following you** (◎ is highlighted) until you drag it. ⓘ shows distance, time moving, stays and GPS quality for the period. Chips over the map switch layers on and off: track, stays, routine places, flagged devices. *Offline map*, *Routine places* and *Timeline* are collapsible sections under the map; the timeline is grouped by day.
 
-**Flagged devices.** Devices the analysis rates *worth a look* or *strong signs* (at most six, the most relevant) appear as coloured ◆ where your receivers heard them, joined in time order. Tap a ◆ for time, number of sightings and strongest signal, then *All places of this device*; the device detail has *Show all its places on the map*. Each ◆ is **your** position at that moment, from the analysis window only: no other device is ever located, and devices that are not flagged are never drawn.
+**Devices that may follow you.** Devices with an alert or a score of *some signs* or more (at most eight, the most relevant) appear as coloured ◆ **wherever your receivers heard them, over all stored data** (not only the analysis window): your GPS position in each minute the device was heard, merged into one point while you did not move more than 30 m. One chip per device over the map shows or hides it, and the list under the map has a checkbox for each, *Hide all / Show all*, and opens on every place with date and time (the 100 most recent listed, all of them on the map). Tapping a device zooms to all its places and draws them in time order. The device detail has *Show all its places on the map*. Each ◆ is **your** position at that moment: no other device is ever located. Markers are sized in dp so they stay readable; the replay bar is off until you tap ⏵.
+
+If one of these is a device of yours (it is with you everywhere, so it looks exactly like a follower), mark it as yours in *Add my devices*: that is a false alarm, not a tracker.
 
 ## Data, privacy and security
 
