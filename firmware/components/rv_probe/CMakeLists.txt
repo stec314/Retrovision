@@ -8,6 +8,10 @@ if(NOT target STREQUAL "esp32")
     # Native USB-Serial-JTAG link and on-die temperature sensor (not on the classic ESP32).
     list(APPEND reqs esp_driver_usb_serial_jtag esp_driver_tsens)
 endif()
+if(target STREQUAL "esp32c5")
+    # WS2812 status LED over RMT.
+    list(APPEND reqs esp_driver_rmt)
+endif()
 
 idf_component_register(
     SRCS "probe_main.c" "link.c" "session.c" "capture.c" "wifi_sniffer.c"
