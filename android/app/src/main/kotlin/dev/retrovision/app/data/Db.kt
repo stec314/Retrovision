@@ -75,6 +75,12 @@ class BaselineRow(
     val days: Int,
     val lastDay: Long,
     val lastMs: Long,
+    /** First local day it was seen at your routine places (0 = before this was recorded). */
+    @androidx.room.ColumnInfo(defaultValue = "0") val firstDay: Long = 0,
+    /** A line to show it by. */
+    @androidx.room.ColumnInfo(defaultValue = "''") val label: String = "",
+    /** Not a fixed router: something that can come and go (person, car, hotspot, tag). */
+    @androidx.room.ColumnInfo(defaultValue = "1") val mobile: Boolean = true,
 )
 
 /** Devices that seem to be with you everywhere: candidates for "is this yours?". */
@@ -287,6 +293,10 @@ interface AppDao {
     @Query("DELETE FROM baseline")
     suspend fun wipeBaseline()
 
+    /** New near your routine places: first seen there on or after [sinceDay], on at least [minDays] days. */
+    @Query("SELECT * FROM baseline WHERE mobile = 1 AND firstDay >= :sinceDay AND days >= :minDays AND entityId NOT IN (SELECT entityId FROM ignores) ORDER BY lastMs DESC LIMIT 50")
+    fun newAtRoutine(sinceDay: Long, minDays: Int): kotlinx.coroutines.flow.Flow<List<BaselineRow>>
+
     @Query("SELECT * FROM companions WHERE entityId = :id")
     suspend fun companion(id: String): CompanionRow?
 
@@ -336,7 +346,7 @@ interface AppDao {
         SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
         CompanionRow::class, FeedbackRow::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -383,6 +393,14 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `baseline` ADD COLUMN `firstDay` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `baseline` ADD COLUMN `label` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE `baseline` ADD COLUMN `mobile` INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -395,7 +413,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
         }
     }

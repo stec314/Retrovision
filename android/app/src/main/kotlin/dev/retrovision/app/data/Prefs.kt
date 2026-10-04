@@ -112,6 +112,11 @@ class Prefs(ctx: Context) {
         get() = p.getInt("channelPlan", 0)
         set(v) = p.edit().putInt("channelPlan", v).apply()
 
+    /** Local day the routine-place baseline started (0 = not yet). */
+    var baselineStartDay: Long
+        get() = p.getLong("baselineStartDay", 0L)
+        set(v) = p.edit().putLong("baselineStartDay", v).apply()
+
     /** Devices list as one-line rows instead of cards. */
     var devicesCompact: Boolean
         get() = p.getBoolean("devicesCompact", false)

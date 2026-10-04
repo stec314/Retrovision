@@ -757,13 +757,27 @@ class CollectorService : Service() {
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
         val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        // When the baseline started: "new near your places" only means something after a week of it.
+        if (prefs.baselineStartDay == 0L) prefs.baselineStartDay = day
+        val full = result.entities.associateBy { it.entityId }
+        val stubs = result.others.associateBy { it.entityId }
         // Every device confined to routine places, including those trimmed from the result.
         for (id in result.routineOnlyIds) {
             val b = dao.baseline(id)
+            val r = full[id]
+            val st = stubs[id]
+            val label = r?.let { Texts.entityLabel(it) } ?: st?.let { dev.retrovision.app.ui.stubLabel(it) } ?: ""
+            val category = r?.category ?: st?.category
+            val mobile = category != dev.retrovision.core.identity.DeviceCategory.ROUTER
             if (b == null) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now, firstDay = day, label = label, mobile = mobile))
             } else if (b.lastDay != day) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, (b.days + 1).coerceAtMost(30), day, now))
+                dao.putBaseline(
+                    dev.retrovision.app.data.BaselineRow(
+                        id, (b.days + 1).coerceAtMost(30), day, now,
+                        firstDay = b.firstDay, label = label.ifEmpty { b.label }, mobile = mobile,
+                    ),
+                )
             }
         }
     }

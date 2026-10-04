@@ -28,8 +28,17 @@ class CategoryHints {
     var companyId: Int? = null
     var name: String? = null
     val uuids16 = HashSet<Int>()
+    /** Model decoded from the payload (AirPods/Beats, Fast Pair). */
+    var model: String? = null
+    /** Apple Nearby Info: the latest activity, and whether "driving" was ever reported. */
+    var appleActivity: PayloadDecoder.AppleActivity? = null
+    var drivingSeen = false
 
     fun add(info: AdvertisementInfo) {
+        PayloadDecoder.decode(info)?.let { d ->
+            if (model == null) model = d.model
+            d.activity?.let { appleActivity = it; if (it == PayloadDecoder.AppleActivity.DRIVING) drivingSeen = true }
+        }
         if (appearance == null && info.appearance != null && info.appearance != 0) appearance = info.appearance
         if (companyId == null) companyId = info.manufacturerId
         if (name == null && !info.name.isNullOrBlank()) name = info.name

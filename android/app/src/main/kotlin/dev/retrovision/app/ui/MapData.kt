@@ -123,3 +123,61 @@ internal fun DeviceMapPanel(r: dev.retrovision.core.analysis.EntityReport, level
     }
 }
 
+
+/**
+ * Stakeout check: devices that recently started turning up at your routine places (home, work) on
+ * several days. Neighbours change phones and cars too, so this is a list to look at, not an alarm.
+ * Rotating addresses cannot be followed across days, so it sees stable ones: cars, hotspots, tags,
+ * many wearables. Fixed routers are left out.
+ */
+@androidx.compose.runtime.Composable
+internal fun NewAtRoutinePanel(onOpen: ((String) -> Unit)? = null) {
+    val app = RetrovisionApp.instance
+    val today = (System.currentTimeMillis() + java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis())) / 86_400_000L
+    val start = app.prefs.baselineStartDay
+    val learnUntil = if (start == 0L) Long.MAX_VALUE else start + 7
+    val since = maxOf(today - 14, if (start == 0L) today else start + 7)
+    val rows by androidx.compose.runtime.remember(since) { app.db.dao().newAtRoutine(since, 2) }.collectAsState(initial = emptyList())
+    val fmt = androidx.compose.runtime.remember { java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM) }
+    Panel(title = Texts.tr("New near your routine places", "Nuovi vicino ai tuoi luoghi di routine")) {
+        if (today < learnUntil) {
+            androidx.compose.material3.Text(
+                Texts.tr(
+                    "Learning what is normal around your routine places: ready in ${if (start == 0L) 7 else (learnUntil - today)} day(s).",
+                    "Sto imparando cosa è normale attorno ai tuoi luoghi di routine: pronto tra ${if (start == 0L) 7 else (learnUntil - today)} giorni.",
+                ),
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            )
+            return@Panel
+        }
+        if (rows.isEmpty()) {
+            androidx.compose.material3.Text(
+                Texts.tr("Nothing new in the last two weeks.", "Niente di nuovo nelle ultime due settimane."),
+                style = androidx.compose.material3.MaterialTheme.typography.bodySmall,
+            )
+        }
+        rows.forEach { b ->
+            androidx.compose.foundation.layout.Column(
+                androidx.compose.ui.Modifier.fillMaxWidth()
+                    .then(if (onOpen != null) androidx.compose.ui.Modifier.clickable { onOpen(b.entityId) } else androidx.compose.ui.Modifier),
+            ) {
+                androidx.compose.material3.Text(b.label.ifEmpty { b.entityId }, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, maxLines = 1)
+                val first = java.util.Date((b.firstDay * 86_400_000L) - java.util.TimeZone.getDefault().getOffset(b.firstDay * 86_400_000L) + 12 * 3_600_000L)
+                androidx.compose.material3.Text(
+                    Texts.tr("${b.days} days since ", "${b.days} giorni dal ") + fmt.format(first) + " · " +
+                        Texts.tr("last ", "ultimo ") + java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT).format(java.util.Date(b.lastMs)),
+                    style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        androidx.compose.material3.Text(
+            Texts.tr(
+                "Devices first heard at your routine places in the last two weeks and back on at least 2 days. Usually a neighbour's new phone or car; worth a look if it matches when you come and go, or you do not recognise it. Mark yours as mine.",
+                "Dispositivi sentiti per la prima volta nei tuoi luoghi di routine nelle ultime due settimane e tornati in almeno 2 giorni. Di solito il telefono o l'auto nuova di un vicino; vale un'occhiata se coincide con i tuoi orari o non lo riconosci. Segna i tuoi come miei.",
+            ),
+            style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+            color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}

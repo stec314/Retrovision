@@ -445,6 +445,14 @@ Matching uses default names (exact patterns, case-insensitive), vendor prefixes 
 
 Each match shows the catalog's own note in the device details. The 👁 filter in Devices lists them.
 
+
+**Identification (no attention on its own).** The same catalogue (Fieldwatch v90) also names what a device *is*, without marking it notable: vehicles (car infotainment and hotspots such as BMW, Audi, Mercedes, Ford, Tesla, CarPlay, Uconnect; fleet telematics such as Samsara, Motive, PeopleNet; Bluetooth tyre-pressure sensors, which broadcast while the car moves), item finders (AirTag, SmartTag, Tile, Find Hub, Chipolo, Pebblebee, DULT), off-grid mesh radios (Meshtastic, MeshCore, goTenna) and phone hotspots on factory names. A vehicle match sets the category to vehicle, so an alert reads "a BMW follows you" instead of "a device". Most European cars use 433 MHz tyre sensors, which the probe cannot hear; only Bluetooth ones (recent Tesla, aftermarket valve caps) show up.
+
+**What a device says about itself.** Apple earbuds announce their model (AirPods Pro, Beats…), Android accessories in pairing mode their Fast Pair model, and Apple phones what they are doing (screen on, in a call, **driving**). The model becomes the device's name when it has none; an Apple device that reported "driving" gets the reason *it is in a vehicle*. Layouts and model tables adapted from Fieldwatch (MIT).
+
+## New near your routine places (stakeout check)
+
+Places and Alerts list devices that **first** turned up at your routine places in the last two weeks and came back on at least 2 days. Before, such a device would quietly become a "resident" (counted for less) after 3 days: exactly what a device parked near your home would look like. It starts after a week of learning what is normal there. Fixed routers are left out; rotating addresses cannot be followed across days, so it sees stable ones: cars, hotspots, tags, many wearables. It is a list to look at, not an alarm: neighbours change phones and cars too.
 ## Associated clients (data frames)
 
 When *Capture data frames* is on, the probe also forwards Wi-Fi data-frame headers, **addresses only**: nothing of the content is captured, and most traffic is encrypted anyway. The app lists which client addresses are actually connected to which access points.

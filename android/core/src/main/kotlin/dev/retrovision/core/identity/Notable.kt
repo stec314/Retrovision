@@ -21,7 +21,20 @@ import dev.retrovision.core.model.WifiKind
  *
  * The signature data is a subset of the Fieldwatch catalog (MIT, see the resource header).
  */
-enum class NotableKind { HACKING, SURVEILLANCE, LAW_ENFORCEMENT, GLASSES, RECORDER, DRONE }
+enum class NotableKind(
+    /** Worth your attention in itself (shown as notable). The others only say what a device is. */
+    val attention: Boolean,
+) {
+    HACKING(true), SURVEILLANCE(true), LAW_ENFORCEMENT(true), GLASSES(true), RECORDER(true), DRONE(true),
+    /** Car infotainment / hotspot, fleet telematics, BLE tyre-pressure sensor: it is (in) a vehicle. */
+    VEHICLE(false),
+    /** Item finder tag (AirTag, SmartTag, Tile, Find Hub…), by its own advertisement. */
+    FINDER(false),
+    /** Off-grid mesh radio (Meshtastic, MeshCore, goTenna). */
+    MESH(false),
+    /** Phone personal hotspot on a factory name. */
+    HOTSPOT(false),
+}
 
 class NotableSignature(
     val id: String,

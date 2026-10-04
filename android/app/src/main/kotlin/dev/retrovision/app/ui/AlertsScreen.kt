@@ -123,6 +123,10 @@ fun AlertsScreen(onClose: () -> Unit) {
                         Tile("🛸", d.label, Texts.drone(d), if (d.remoteId) "RID" else "", d.lastMs, DRONE, verdicts["drone:${d.key}"]) { drone = d }
                     }
                 }
+                // Stakeout check: new devices at your routine places (information, not an alert).
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    androidx.compose.foundation.layout.Box(Modifier.padding(top = 8.dp)) { NewAtRoutinePanel() }
+                }
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
                         Texts.tr(
