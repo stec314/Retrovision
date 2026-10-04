@@ -34,6 +34,10 @@ void rv_link_init(rv_link_rx_cb_t on_envelope);
 // Encode, frame and write one envelope. Assigns Envelope.seq. Thread-safe.
 bool rv_link_send(retrovision_v1_Envelope *env, TickType_t timeout);
 bool rv_link_send_to(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout);
+// Same, without the 'host connected' check: for Hellos on a cable nobody has talked on yet.
+bool rv_link_send_to_unchecked(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout);
+// A cable is physically there (USB-JTAG sees the host; a UART bridge cannot tell: always true).
+bool rv_link_usb_present(void);
 
 void rv_link_set_active(rv_transport_t t);
 rv_transport_t rv_link_active(void);

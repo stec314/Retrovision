@@ -66,10 +66,22 @@ void rv_link_init(rv_link_rx_cb_t on_envelope)
     // and only when the stored link mode is BLE.
 }
 
+static bool send_impl(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout, bool check);
+
 bool rv_link_send_to(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout)
 {
+    return send_impl(t, env, timeout, true);
+}
+
+bool rv_link_send_to_unchecked(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout)
+{
+    return send_impl(t, env, timeout, false);
+}
+
+static bool send_impl(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout, bool check)
+{
     const rv_transport_ops_t *ops = s_ops[t];
-    if (!ops || !ops->connected()) {
+    if (!ops || (check && !ops->connected())) {
         return false;
     }
     if (xSemaphoreTake(s_tx_lock, timeout) != pdTRUE) {

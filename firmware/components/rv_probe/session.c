@@ -170,6 +170,16 @@ static void send_hello(void)
          i++) {
         h->supported_wifi_channels[h->supported_wifi_channels_count++] = rv_cfg_5ghz_channels[i];
     }
+    if (s_link == RV_T_USB && !rv_link_connected(RV_T_USB)) {
+        // Nobody has talked on the cable yet (a probe set up for BLE does not assume a host at
+        // boot). Announce anyway, or a phone plugged in now would wait for a Hello forever while
+        // we wait for it to speak: on a classic ESP32 every "reboot" kick from the app restarted
+        // that wait.
+        if (rv_link_usb_present()) {
+            rv_link_send_to_unchecked(RV_T_USB, e, pdMS_TO_TICKS(20));
+        }
+        return;
+    }
     rv_link_send_to(s_link, e, pdMS_TO_TICKS(50));
 }
 

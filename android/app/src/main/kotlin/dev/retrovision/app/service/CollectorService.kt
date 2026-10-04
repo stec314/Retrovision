@@ -140,7 +140,6 @@ class CollectorService : Service() {
         SessionRecorder.stop()
         Diag.i("service", "collection stopped")
         Collector.running.value = false
-        Collector.session = null
         Collector.usbSession = null
         Collector.links.value = emptyMap()
         Collector.reconfigureAll = { Collector.allSessions().forEach { it.resendConfig() } }
@@ -498,7 +497,9 @@ class CollectorService : Service() {
                 if (pairs.isEmpty()) { failures = 0; bleWait(2000); continue }
 
                 // The cable wins for the probe on it; while its Hello is pending, hold off (it may be one of ours).
-                if (Collector.usbConnected && Collector.usbSession?.state?.value?.info == null) { bleWait(1000); continue }
+                // Only briefly: a probe that never says Hello on the cable must not block the others.
+                if (Collector.usbConnected && Collector.usbSession?.state?.value?.info == null &&
+                    System.currentTimeMillis() - Collector.usbSinceMs < 8_000L) { bleWait(1000); continue }
                 val onCable = if (Collector.usbConnected) usbProbeName() else ""
                 names.forEach { n -> if (n == onCable) bleUi(n) { it.copy(stage = BleStage.CABLE) } }
                 if (!hasBlePermissions()) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.NO_PERMISSION) } }; bleWait(5000); continue }
@@ -748,7 +749,7 @@ class CollectorService : Service() {
             var dropped = 0L
             while (isActive) {
                 val st = session.state.value
-                Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
+                if (Collector.session === session) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
                 if (st.phase != phase) {
                     phase = st.phase
                     Diag.i("probe", "phase ${st.phase}" + (st.info?.let { " · fw ${it.firmware} · proto ${it.protocol}" } ?: "") +

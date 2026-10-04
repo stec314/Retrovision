@@ -61,6 +61,15 @@ static bool usb_connected(void)
 #endif
 }
 
+bool rv_link_usb_present(void)
+{
+#if CONFIG_IDF_TARGET_ESP32
+    return true;
+#else
+    return usb_serial_jtag_is_connected();
+#endif
+}
+
 static void usb_flush(TickType_t timeout)
 {
 #if CONFIG_IDF_TARGET_ESP32
