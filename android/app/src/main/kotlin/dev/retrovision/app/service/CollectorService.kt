@@ -976,7 +976,8 @@ class CollectorService : Service() {
         if (prefs.alertsEnabled && !inQuietHours(now) && !atFamiliar) {
             val cooldownMs = if (prefs.alertOncePerDevice) Long.MAX_VALUE else prefs.alertCooldownMin * 60_000L
             val fresh = ArrayList<dev.retrovision.core.analysis.EntityReport>()
-            for (a in result.alerts) {
+            val shown = result.alerts.filter { !dev.retrovision.app.data.Mutes.isMuted(it, prefs, now) }
+            for (a in shown) {
                 // Merged entities: snooze, cooldown and last score follow every member id.
                 if (a.memberIds.any { it in snoozed }) continue
                 val last = a.memberIds.mapNotNull { notifiedAt[it] }.maxOrNull()
@@ -991,7 +992,7 @@ class CollectorService : Service() {
                 }
             }
             // One summary notification per analysis, not one per device (field: five in a few minutes).
-            if (fresh.isNotEmpty()) notifySummary(result.alerts, fresh)
+            if (fresh.isNotEmpty()) notifySummary(shown, fresh)
         }
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L

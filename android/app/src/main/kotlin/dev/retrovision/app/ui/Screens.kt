@@ -223,7 +223,8 @@ private fun OverviewPanel() {
     Panel(title = Texts.tr("Overview", "Panoramica"), onClick = { AlertsNav.open.value = true }) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Stat("${a?.totalEntities ?: 0}", Texts.tr("devices", "dispositivi"), Modifier.weight(1f))
-            Stat("${a?.alerts?.size ?: 0}", Texts.tr("alerts", "allerte"), Modifier.weight(1f), if ((a?.alerts?.size ?: 0) > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            val nAlerts = a?.alerts.orEmpty().count { !dev.retrovision.app.data.Mutes.isMuted(it, app.prefs) }
+            Stat("$nAlerts", Texts.tr("alerts", "allerte"), Modifier.weight(1f), if (nAlerts > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
             Stat("$trackers", Texts.tr("trackers", "tracker"), Modifier.weight(1f))
             Stat("${threats.size}", Texts.tr("attacks", "attacchi"), Modifier.weight(1f), if (threats.isNotEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
         }
@@ -281,6 +282,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     var output by remember { mutableStateOf<List<String>>(emptyList()) }
     var busy by remember { mutableStateOf(false) }
     var confirmMine by remember { mutableStateOf(false) }
+    var muteType by remember { mutableStateOf(false) }
     var showRaw by remember { mutableStateOf(false) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
     val lv = dev.retrovision.core.analysis.Levels.of(r)
@@ -367,6 +369,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Warning, null) }, Texts.tr("Suspicious", "Sospetto"), tint = MaterialTheme.colorScheme.error) { verdict(2) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
+                        if (dev.retrovision.app.data.Mutes.typeKey(r) != null) add(
+                            ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Notifications, null) }, Texts.tr("Mute type", "Silenzia tipo")) { muteType = true },
+                        )
                         add(
                             ActionTileSpec(
                                 { androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Star, null) },
@@ -452,6 +457,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     }
     if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
 
+    if (muteType) MuteTypeDialog(r, onClose = { muteType = false }, onDone = { muteType = false; onClose() })
+
     if (confirmMine) {
         AlertDialog(
             onDismissRequest = { confirmMine = false },
@@ -461,7 +468,10 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     Texts.tr(
                         "It will be hidden from alerts and lists until you remove it in Settings → Ignored devices. Only confirm if you are sure: a device planted on you also \"travels with you\".",
                         "Verrà nascosto da allerte ed elenchi finché non lo togli in Impostazioni → Dispositivi ignorati. Conferma solo se non hai dubbi: anche un dispositivo nascosto addosso a te \"viaggia con te\".",
-                    ),
+                    ) + if (r.macTrust != dev.retrovision.core.identity.MacTrust.STABLE) Texts.tr(
+                        "\n\nIts address rotates: this covers only the addresses seen so far, and it will come back under a new one. For your own phone, watch or earbuds that keep reappearing, use “Mute type” instead.",
+                        "\n\nIl suo indirizzo cambia: questo copre solo gli indirizzi visti finora e tornerà con uno nuovo. Per telefono, orologio o auricolari tuoi che ricompaiono, usa invece “Silenzia tipo”.",
+                    ) else "",
                 )
             },
             confirmButton = {
@@ -477,6 +487,46 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
             dismissButton = { TextButton(onClick = { confirmMine = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
     }
+}
+
+@Composable
+private fun MuteTypeDialog(r: EntityReport, onClose: () -> Unit, onDone: () -> Unit) {
+    val key = dev.retrovision.app.data.Mutes.typeKey(r) ?: return
+    val label = dev.retrovision.app.data.Mutes.typeLabel(r)
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text(Texts.tr("Mute every “$label”?", "Silenziare ogni “$label”?")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    Texts.tr(
+                        "For your own devices whose address keeps changing (phone, watch, earbuds in a finding network). No alerts or notifications for this type for the time you pick; they stay listed in Devices, and you can undo it in Alerts.",
+                        "Per i tuoi dispositivi il cui indirizzo continua a cambiare (telefono, orologio, auricolari in una rete di localizzazione). Niente allerte né notifiche per questo tipo per il tempo che scegli; restano nell'elenco Dispositivi e puoi annullare da Allerte.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    Texts.tr(
+                        "The cost: a real $label planted on you would be silenced too for that time. Prefer the shortest time that does the job.",
+                        "Il prezzo: anche un vero $label nascosto addosso a te verrebbe silenziato per quel tempo. Scegli il tempo più breve che basta.",
+                    ),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error,
+                )
+            }
+        },
+        confirmButton = {
+            Column {
+                listOf(8 to Texts.tr("8 hours", "8 ore"), 24 to Texts.tr("24 hours", "24 ore"), 24 * 7 to Texts.tr("7 days", "7 giorni")).forEach { (h, l) ->
+                    TextButton(onClick = {
+                        dev.retrovision.app.data.Mutes.mute(app.prefs, key, label, System.currentTimeMillis() + h * 3_600_000L)
+                        Collector.analyzeNow.value = System.nanoTime()
+                        onDone()
+                    }) { Text(Texts.tr("Mute for ", "Silenzia per ") + l) }
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text(Texts.tr("Cancel", "Annulla")) } },
+    )
 }
 
 /** Reasons ranked by what they added to the score, with a bar each; caps explained underneath. */

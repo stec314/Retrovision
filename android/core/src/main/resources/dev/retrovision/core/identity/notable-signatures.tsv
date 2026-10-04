@@ -26,7 +26,6 @@ R	OUI	WIFI	CC:93:4A	0
 F	fleet-airtag	Apple AirTags	FINDER	Apple AirTag or Find My accessory. iPhones also send Find My so they can be located — that stays on Apple Device unless the name is AirTag. Addresses rotate.
 R	NAME_CONTAINS	*	AirTag	0	
 R	NAME_CONTAINS	*	Find My	0	
-R	MANUFACTURER_DATA	*		76	12
 R	SERVICE_UUID	*	FD44	0	
 F	fleet-audi-mmi	Audi MMI	VEHICLE	Audi in-car MMI hotspot. Factory name from the car, not a dealer.
 R	MANUFACTURER_ID	*		270	
@@ -237,8 +236,6 @@ R	NAME_GLOB	WIFI	CHEVROLET*	0
 F	fleet-goodyear	Goodyear TPMS	VEHICLE	Goodyear intelligent-tire BLE, not the 315/433 MHz valve-stem TPMS in most cars. Pattern match, not that car.
 R	MANUFACTURER_ID	*		2969	
 F	fleet-find-hub	Google Find Hub	FINDER	Google Find Hub / Find My Device network tag (Chipolo, Pebblebee, moto tag, and other partners). Nearby vs separated frames. Separated mode can hold a MAC about a day. Addresses otherwise rotate. Pattern match, not that bag.
-R	SERVICE_DATA	BLE	FEAA	0	40
-R	SERVICE_DATA	BLE	FEAA	0	41
 F	fleet-gotenna	goTenna	MESH	goTenna Mesh or Pro companion radio. Pairs over BLE; the mesh itself is UHF and Fieldwatch cannot hear it. Pro is sold to agencies. Pattern match, not that operator.
 R	SERVICE_UUID	*	1276aaee-df5e-11e6-bf01-fe55135034f3	0	
 R	SERVICE_UUID	*	f0abaaee-ebfa-f96f-28da-076c35a521db	0	
@@ -491,7 +488,6 @@ R	NAME_CONTAINS	*	SmartTag	0
 R	NAME_CONTAINS	*	Smart Tag	0	
 R	NAME_CONTAINS	*	Galaxy SmartTag	0	
 R	SERVICE_UUID	*	FD5A	0	
-R	MANUFACTURER_ID	*		117	
 F	fleet-schrader	Schrader TPMS	VEHICLE	Schrader aftermarket BLE TPMS (AirCheck, trailer, RV). Not the 315/433 MHz factory stems.
 R	MANUFACTURER_ID	*		1537	
 F	fleet-skydio	Skydio	DRONE	Skydio drone (common in US public-safety / enterprise). In-flight Remote ID is often Wi-Fi and easy to miss — the Remote ID row is the license plate.

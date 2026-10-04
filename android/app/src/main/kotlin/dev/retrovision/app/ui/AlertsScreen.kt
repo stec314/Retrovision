@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -67,12 +69,28 @@ private val DRONE = Color(0xFF9FA8FF)
 fun AlertsScreen(onClose: () -> Unit) {
     BackHandler { onClose() }
     val analysis by Collector.analysis.collectAsState()
-    val threats by Collector.threats.collectAsState()
-    val drones by Collector.drones.collectAsState()
+    val threatsAll by Collector.threats.collectAsState()
+    val dronesAll by Collector.drones.collectAsState()
     val feedback by remember { RetrovisionApp.instance.db.dao().feedback() }.collectAsState(initial = emptyList())
     // Latest verdict per key (entity id, threat key, drone key).
     val verdicts = remember(feedback) { feedback.groupBy { it.entityId }.mapValues { it.value.maxBy { f -> f.timeMs }.label } }
-    val alerts = analysis?.alerts.orEmpty()
+    val prefs = RetrovisionApp.instance.prefs
+    var show by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("all") }
+    var strongOnly by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var muteTick by remember { mutableStateOf(0) }
+    val mutes = remember(muteTick, analysis) { dev.retrovision.app.data.Mutes.active(prefs) }
+    val (mutedAlerts, liveAlerts) = remember(muteTick, analysis) {
+        analysis?.alerts.orEmpty().partition { dev.retrovision.app.data.Mutes.isMuted(it, prefs) }
+    }
+    val alerts = liveAlerts.filter { r ->
+        (!strongOnly || Levels.of(r) == Level.STRONG) && when (show) {
+            "all", "follow" -> true
+            "tracker" -> r.tracker != null || r.category == dev.retrovision.core.identity.DeviceCategory.TRACKER
+            else -> false
+        }
+    }
+    val threats = threatsAll.filter { (show == "all" || show == "attack") && (!strongOnly || Levels.of(it) == Level.STRONG) }
+    val drones = dronesAll.filter { (show == "all" || show == "drone") && !strongOnly }
     var entity by remember { mutableStateOf<EntityReport?>(null) }
     var threat by remember { mutableStateOf<WifiThreats.Threat?>(null) }
     var drone by remember { mutableStateOf<Drones.Drone?>(null) }
@@ -92,9 +110,30 @@ fun AlertsScreen(onClose: () -> Unit) {
                 fun header(text: String) = item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(text, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 8.dp))
                 }
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        listOf(
+                            "all" to Texts.tr("All", "Tutte"),
+                            "follow" to Texts.tr("Following", "Ti seguono"),
+                            "tracker" to Texts.tr("Trackers", "Tracker"),
+                            "attack" to Texts.tr("Attacks", "Attacchi"),
+                            "drone" to Texts.tr("Drones", "Droni"),
+                        ).forEach { (k, l) ->
+                            FilterChip(selected = show == k, onClick = { show = k }, label = { Text(l) })
+                        }
+                        FilterChip(selected = strongOnly, onClick = { strongOnly = !strongOnly }, label = { Text(Texts.tr("Strong only", "Solo forti")) })
+                    }
+                }
                 if (alerts.isEmpty() && threats.isEmpty() && drones.isEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) {
-                        Text(Texts.tr("No alerts right now.", "Nessuna allerta al momento."), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (show == "all" && !strongOnly) Texts.tr("No alerts right now.", "Nessuna allerta al momento.")
+                            else Texts.tr("Nothing matches these filters.", "Niente corrisponde a questi filtri."),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
                 if (threats.isNotEmpty()) {
@@ -107,7 +146,7 @@ fun AlertsScreen(onClose: () -> Unit) {
                     }
                 }
                 if (alerts.isNotEmpty()) {
-                    header(Texts.tr("Possibly following you", "Forse ti segue"))
+                    header(if (show == "tracker") Texts.tr("Trackers", "Tracker") else Texts.tr("Possibly following you", "Forse ti segue"))
                     items(alerts, key = { "e" + it.entityId }) { r ->
                         Tile(
                             CategoryUi.icon(r.category), Texts.entityLabel(r),
@@ -121,6 +160,31 @@ fun AlertsScreen(onClose: () -> Unit) {
                     header(Texts.tr("Drones", "Droni"))
                     items(drones, key = { "d" + it.key }) { d ->
                         Tile("🛸", d.label, Texts.drone(d), if (d.remoteId) "RID" else "", d.lastMs, DRONE, verdicts["drone:${d.key}"]) { drone = d }
+                    }
+                }
+                if (mutes.isNotEmpty()) {
+                    header(Texts.tr("Muted types", "Tipi silenziati"))
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            val fmt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                            mutes.forEach { m ->
+                                val n = mutedAlerts.count { dev.retrovision.app.data.Mutes.typeKey(it) == m.key }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "${m.label} · " + Texts.tr("until ", "fino a ") + fmt.format(Date(m.untilMs)) +
+                                            if (n > 0) Texts.tr(" · $n hidden", " · $n nascosti") else "",
+                                        style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+                                    )
+                                    TextButton(onClick = { dev.retrovision.app.data.Mutes.unmute(prefs, m.key); muteTick++; Collector.analyzeNow.value = System.nanoTime() }) {
+                                        Text(Texts.tr("Unmute", "Riattiva"))
+                                    }
+                                }
+                            }
+                            Text(
+                                Texts.tr("A real tag of a muted type is silenced too while the mute lasts.", "Finché dura, anche un vero tag di un tipo silenziato non dà allerte."),
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
                 // Stakeout check: new devices at your routine places (information, not an alert).

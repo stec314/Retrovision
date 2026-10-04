@@ -61,6 +61,17 @@ class NotableAndDroneTest {
         assertTrue(NotableCatalog.match(beacon(0x00_11_22_33_44_55L, "HomeWifi")).isEmpty())
     }
 
+    @Test fun brandPhonesAreNotItemFinders() {
+        // A Galaxy phone/watch advert (Samsung company id 0x0075) and an iPhone's Find My frame
+        // (Apple 0x004C, type 0x12) must not be labelled as SmartTag / AirTag.
+        val samsung = ad(0xFF, 0x75, 0x00, 0x42, 0x09, 0x81, 0x02)
+        val iphoneFindMy = ad(0xFF, 0x4C, 0x00, 0x12, 0x19, 0x10, 0x00, 0x00)
+        assertTrue(NotableCatalog.match(ble(0x02_11_22_33_44_55L, samsung)).none { it.kind == NotableKind.FINDER })
+        assertTrue(NotableCatalog.match(ble(0x02_11_22_33_44_66L, iphoneFindMy)).none { it.kind == NotableKind.FINDER })
+        // A tag by name still matches.
+        assertTrue(NotableCatalog.match(ble(0x02_11_22_33_44_77L, name("Galaxy SmartTag2"))).any { it.name == "Samsung SmartTags" })
+    }
+
     @Test fun pwnagotchiByBssidAndPineappleBySsid() {
         assertTrue(NotableCatalog.match(beacon(0xDE_AD_BE_EF_DE_ADL, "x")).any { it.name == "Pwnagotchi" })
         assertTrue(NotableCatalog.match(beacon(0x02_00_00_00_00_01L, "Pineapple_1A2B")).any { it.name == "Hak5 Pineapple" })

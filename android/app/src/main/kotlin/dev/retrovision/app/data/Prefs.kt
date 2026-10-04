@@ -143,6 +143,11 @@ class Prefs(ctx: Context) {
         setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
     }
 
+    /** Device types whose alerts are silenced for a while: "key|untilMs|label" (see Mutes). */
+    var mutedTypes: Set<String>
+        get() = p.getStringSet("mutedTypes", emptySet()) ?: emptySet()
+        set(v) = p.edit().putStringSet("mutedTypes", v).apply()
+
     /** Split the Wi-Fi channels between probes when several stream at once. */
     var splitChannels: Boolean
         get() = p.getBoolean("splitChannels", true)

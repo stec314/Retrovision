@@ -18,6 +18,11 @@ KEEP = {"HACKING", "SURVEILLANCE", "LAW_ENFORCEMENT", "GLASSES", "DRONE",
 RENAME = {"PHONE": "HOTSPOT"}
 # Kept kinds that are too broad: every iPhone/Android/Windows device, fixed LoRaWAN gateways.
 SKIP = {"Apple Device", "Fast Pair", "Google", "Microsoft Device", "Helium", "RAK WisGate", "SenseCAP"}
+# Rules that match a whole brand's phones, watches and earbuds, not just its tags: Samsung's company
+# id (every Galaxy device), Apple's Find My frame (every iPhone also sends it), Google's Find Hub frame
+# (phones too). Tags of those networks are recognised by BleTrackers, which tells tags from phones.
+DROP_RULES = {("fleet-smarttag", "MANUFACTURER_ID", "117", ""), ("fleet-airtag", "MANUFACTURER_DATA", "76", "12"),
+              ("fleet-find-hub", "SERVICE_DATA", "0", "40"), ("fleet-find-hub", "SERVICE_DATA", "0", "41")}
 RECORDERS = {"Bee Pendant", "Fieldy", "Friend Pendant", "Limitless Pendant", "Omi", "Plaud Note"}
 RULES = {"NAME_GLOB", "NAME_CONTAINS", "OUI", "SERVICE_UUID", "MANUFACTURER_ID",
          "MANUFACTURER_DATA", "SERVICE_DATA", "VENDOR_IE_OUI", "MAC_PREFIX"}
@@ -44,6 +49,8 @@ def main(src):
             continue
         out.append("\t".join(["F", f["id"], f["name"], RENAME.get(kind, kind), clean(f.get("attentionNote") or f.get("notes"))]))
         for r in f["rules"]:
+            if (f["id"], r["kind"], str(r["companyId"]), r["dataPrefixHex"] or "") in DROP_RULES:
+                continue
             if r.get("enabled", True) and r["kind"] in RULES:
                 out.append("\t".join(["R", r["kind"], r["radio"] or "*", clean(r["text"]), str(r["companyId"]), r["dataPrefixHex"]]))
     open(OUT, "w").write("\n".join(out) + "\n")

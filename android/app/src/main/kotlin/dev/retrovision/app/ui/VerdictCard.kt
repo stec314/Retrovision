@@ -72,7 +72,7 @@ internal fun rememberVerdict(): Verdict.Result {
     val prefs = RetrovisionApp.instance.prefs
     val a = analysis
     val lookbackMs = prefs.lookbackMin * 60_000L
-    val entityLevels = remember(a) { a?.alerts.orEmpty().map { Levels.of(it) } }
+    val entityLevels = remember(a) { a?.alerts.orEmpty().filter { !dev.retrovision.app.data.Mutes.isMuted(it, dev.retrovision.app.RetrovisionApp.instance.prefs) }.map { Levels.of(it) } }
     val threatLevels = remember(threats) { threats.map { Levels.of(it) } }
     return Verdict.of(
         Verdict.Inputs(
@@ -113,7 +113,7 @@ fun VerdictCard() {
         Text(Texts.verdictLine(v), style = MaterialTheme.typography.bodyMedium)
 
         // The findings, in words (no percentages here).
-        val alerts = remember(analysis) { analysis?.alerts.orEmpty().sortedByDescending { Levels.of(it).ordinal } }
+        val alerts = remember(analysis) { analysis?.alerts.orEmpty().filter { !dev.retrovision.app.data.Mutes.isMuted(it, dev.retrovision.app.RetrovisionApp.instance.prefs) }.sortedByDescending { Levels.of(it).ordinal } }
         if (alerts.isNotEmpty()) {
             androidx.compose.material3.HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             alerts.take(4).forEach { r ->
