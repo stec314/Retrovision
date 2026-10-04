@@ -5,6 +5,8 @@
 #include <string.h>
 
 #include "capture.h"
+#include "link.h"
+#include "link_cfg.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "host/ble_gap.h"
@@ -170,6 +172,11 @@ static int gap_cb(struct ble_gap_event *ev, void *arg)
 static void on_sync(void)
 {
     s_synced = true;
+    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+        // The Bluetooth radio carries the host link: advertise the GATT service, do not scan.
+        rv_link_ble_on_sync();
+        return;
+    }
     if (s_want) {
         start_scan();
     }
@@ -192,6 +199,9 @@ void rv_ble_scanner_init(void)
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
+    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+        rv_link_ble_register_gatt(); // GATT services must be added before the host starts
+    }
     nimble_port_freertos_init(host_task);
 }
 

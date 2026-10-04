@@ -13,6 +13,7 @@
 #include "capture.h"
 #include "esp_log.h"
 #include "link.h"
+#include "link_cfg.h"
 #include "log_forward.h"
 #include "nvs_flash.h"
 #include "session.h"
@@ -29,6 +30,7 @@ void rv_probe_start(void)
     }
     ESP_ERROR_CHECK(err);
 
+    rv_link_cfg_load();
     rv_link_init(rv_session_on_envelope);
     rv_log_forward_init();
     rv_capture_init();   // radios initialised but idle until the handshake

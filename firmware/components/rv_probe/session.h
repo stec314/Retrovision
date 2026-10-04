@@ -3,6 +3,8 @@
 // Protocol session: handshake, commands, time sync, status (docs/protocol.md §5-§8).
 #pragma once
 
+#include "link.h"
+
 #include "retrovision.pb.h"
 
 #define RV_PROTOCOL_MAJOR 1
@@ -19,5 +21,5 @@
 
 void rv_session_init(void);
 
-// Link RX callback (runs on the link RX task).
-void rv_session_on_envelope(const retrovision_v1_Envelope *env);
+// Link RX callback (runs on a link RX task). 'from' is the transport it arrived on.
+void rv_session_on_envelope(const retrovision_v1_Envelope *env, rv_transport_t from);
