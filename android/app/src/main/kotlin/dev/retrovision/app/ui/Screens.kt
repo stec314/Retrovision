@@ -2,6 +2,7 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
+import dev.retrovision.proto.v1.LinkKind
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Place
@@ -1574,7 +1575,7 @@ private fun WirelessLinkSection() {
             enabled = usbUp,
             onClick = {
                 val key = prefs.blePairKey() ?: ByteArray(0)
-                Collector.session?.setLink(dev.retrovision.proto.v1.LinkKind.LINK_KIND_USB, prefs.blePairName, key)
+                Collector.session?.setLink(LinkKind.LINK_KIND_USB, prefs.blePairName, key)
                 prefs.clearBlePair(); paired = false
                 note = Texts.tr("Wireless off. The probe is rebooting to USB-only.", "Wireless disattivato. La sonda si riavvia in modalità solo USB.")
             },
@@ -1588,7 +1589,7 @@ private fun WirelessLinkSection() {
                 val key = java.security.SecureRandom().generateSeed(24)
                 val mac = Collector.session?.state?.value?.info?.hardwareId?.takeLast(4) ?: "%04x".format((System.nanoTime() and 0xffff))
                 val name = "probe-$mac"
-                Collector.session?.setLink(dev.retrovision.proto.v1.LinkKind.LINK_KIND_BLE, name, key)
+                Collector.session?.setLink(LinkKind.LINK_KIND_BLE, name, key)
                 prefs.setBlePair(name, key); paired = true
                 note = Texts.tr("Pairing sent. The probe is rebooting; it will appear over Bluetooth as “RV-$name”. On first connect, accept the Bluetooth pairing prompt.", "Abbinamento inviato. La sonda si riavvia e comparirà via Bluetooth come “RV-$name”. Alla prima connessione accetta la richiesta di abbinamento Bluetooth.")
             },
