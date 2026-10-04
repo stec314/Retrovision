@@ -16,6 +16,7 @@ import dev.retrovision.core.wire.Framing
 import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
 import dev.retrovision.proto.v1.ChannelDwell
+import dev.retrovision.proto.v1.AckResult
 import dev.retrovision.proto.v1.Capability
 import dev.retrovision.proto.v1.LinkKind
 import dev.retrovision.proto.v1.SetLink
@@ -231,7 +232,7 @@ class ProbeSession(
                 if (t3 - it.hostT1Us in 0..5_000_000L) clock.addSample(it.hostT1Us, it.probeT2Us, t3)
             }
             Envelope.PayloadCase.COMMAND_ACK -> env.commandAck.let { a ->
-                val ok = a.result == dev.retrovision.proto.v1.AckResult.ACK_RESULT_OK
+                val ok = a.result == AckResult.ACK_RESULT_OK
                 val info = AckInfo(a.commandSeq, ok, a.result.name.removePrefix("ACK_RESULT_"), a.message, System.currentTimeMillis())
                 // A wireless probe that rejects our MAC says so: the keys on the two sides differ.
                 if (!ok && a.message.startsWith("auth failed")) {
