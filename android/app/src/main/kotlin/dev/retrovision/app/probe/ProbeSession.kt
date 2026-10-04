@@ -426,7 +426,7 @@ class ProbeSession(
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 1
+        const val PROTOCOL_MINOR = 2
         private const val KICK_EVERY_MS = 12_000L
         private const val DEAD_AFTER_MS = 45_000L
     }

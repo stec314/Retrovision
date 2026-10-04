@@ -9,6 +9,15 @@ retrovision.v1.Hello.capabilities              max_count:16
 retrovision.v1.Hello.supported_wifi_channels   max_count:64
 retrovision.v1.Hello.custom_schema_ids         max_count:4
 retrovision.v1.Hello.custom_schema_ids         max_size:48
+retrovision.v1.Hello.auth_nonce                max_size:16
+retrovision.v1.Hello.name                      max_size:24
+
+retrovision.v1.HelloAck.auth_mac               max_size:32
+
+retrovision.v1.SetLink.name                    max_size:24
+retrovision.v1.SetLink.key                     max_size:32
+retrovision.v1.SetLink.wifi_ssid               max_size:32
+retrovision.v1.SetLink.wifi_password           max_size:64
 
 retrovision.v1.HelloAck.reject_reason          max_size:96
 

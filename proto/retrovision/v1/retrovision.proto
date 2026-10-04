@@ -22,7 +22,9 @@ package retrovision.v1;
 option java_package = "dev.retrovision.proto.v1";
 option java_multiple_files = true;
 
-// Wire protocol version implemented by this file: 1.0
+// Wire protocol version implemented by this file: 1.2
+// 1.2: wireless links (LinkKind, SetLink, HMAC challenge in Hello/HelloAck).
+//      (1.1 was burned by an abandoned branch; this is the next free minor.)
 // (proto3 has no constants; the canonical value lives in proto/VERSION and
 // is exchanged in Hello/HelloAck.)
 // MAJOR mismatch: host refuses the probe. MINOR mismatch: both sides proceed
@@ -67,6 +69,8 @@ enum Capability {
   CAPABILITY_BLE_EXT_ADV = 11;     // BLE 5 extended advertising
   CAPABILITY_BLE_ACTIVE_SCAN = 12; // can send SCAN_REQ to get scan responses
   CAPABILITY_GNSS = 20;            // probe has its own GNSS receiver
+  CAPABILITY_LINK_BLE = 30;        // can talk to the host over a BLE GATT link (1.2)
+  CAPABILITY_LINK_WIFI = 31;       // can talk to the host over Wi-Fi/TCP (1.2)
   CAPABILITY_CUSTOM = 100;         // emits CustomObservation, see schema_ids
 }
 
@@ -97,6 +101,27 @@ message Hello {
 
   // For CAPABILITY_CUSTOM: schema ids this probe may emit.
   repeated string custom_schema_ids = 10;
+
+  // 1.2 — transport this Hello travels on.
+  LinkKind link = 11;
+  // 1.2 — random per-Hello challenge (16 bytes). Present on wireless links:
+  // the probe streams nothing until a HelloAck carries a valid auth_mac.
+  bytes auth_nonce = 12;
+  // 1.2 — user-given probe name (set with SetLink), max 24 bytes.
+  string name = 13;
+  // 1.2 — wireless mode stored on the probe. A probe in BLE link mode does not
+  // scan BLE (its Bluetooth radio carries the link); in WIFI mode it does not
+  // sniff Wi-Fi. USB = wireless off.
+  LinkKind configured_link = 14;
+}
+
+// How the probe and the host talk. USB is always available; one wireless
+// transport can be configured (with SetLink, over USB) at a time.
+enum LinkKind {
+  LINK_KIND_UNSPECIFIED = 0;
+  LINK_KIND_USB = 1;    // cable (USB-Serial-JTAG or USB-UART bridge); also "wireless off"
+  LINK_KIND_BLE = 2;    // GATT, Nordic UART Service layout
+  LINK_KIND_WIFI = 3;   // TCP over Wi-Fi (usually the phone's hotspot)
 }
 
 message HelloAck {
@@ -111,6 +136,11 @@ message HelloAck {
 
   // Optional initial configuration; equivalent to an immediate SetConfig.
   Config config = 6;
+
+  // 1.2 — HMAC-SHA256(key, "RVAUTH1" || Hello.auth_nonce || boot_id as 4 bytes LE),
+  // truncated is NOT allowed (full 32 bytes). key is the pairing key set with
+  // SetLink. Required on wireless links; ignored over USB.
+  bytes auth_mac = 7;
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +303,19 @@ message Command {
     TimeSyncRequest time_sync = 2;
     GetStatus get_status = 3;
     Reboot reboot = 4;
+    SetLink set_link = 5;          // 1.2, accepted only over USB
   }
+}
+
+// Stores the wireless link settings in the probe and reboots it.
+// Only accepted on the USB link: pairing requires physical access to the probe.
+message SetLink {
+  LinkKind mode = 1;               // USB = wireless off
+  string name = 2;                 // shown in the app and in the BLE advertised name
+  bytes key = 3;                   // pairing key, 16..32 bytes; required for BLE and WIFI
+  string wifi_ssid = 4;            // WIFI: network to join (e.g. the phone's hotspot)
+  string wifi_password = 5;
+  uint32 host_port = 6;            // WIFI: TCP port of the app, default 7878
 }
 
 message GetStatus {}
@@ -399,6 +441,8 @@ message Status {
   // the host is not draining fast enough or the dedup windows are too small.
   uint64 obs_dropped = 14;
   uint64 rx_frames_bad = 15;       // host->probe frames that failed COBS/CRC/decode
+  LinkKind link = 16;              // 1.2 — transport of this session
+  sint32 link_rssi = 17;           // 1.2 — WIFI: RSSI of the joined AP (dBm), 0 if n/a
 }
 
 enum LogLevel {
