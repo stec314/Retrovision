@@ -244,7 +244,7 @@ static void on_hello_ack(uint32_t seq, const retrovision_v1_HelloAck *a, rv_tran
     // Wireless links must authenticate: the host answers the Hello challenge with
     // HMAC-SHA256(pairing key, ...). Without a valid MAC the probe streams nothing.
     if (s_link != RV_T_USB && a->accepted) {
-        if (!a->has_auth_mac || !rv_link_auth_check(s_nonce, s_boot_id, a->auth_mac.bytes, a->auth_mac.size)) {
+        if (a->auth_mac.size != 32 || !rv_link_auth_check(s_nonce, s_boot_id, a->auth_mac.bytes, a->auth_mac.size)) {
             ESP_LOGW(TAG, "wireless auth failed; not starting session");
             go_idle(ST_HELLO); // retry with a fresh challenge
             return;
