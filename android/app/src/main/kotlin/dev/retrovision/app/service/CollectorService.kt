@@ -382,13 +382,13 @@ class CollectorService : Service() {
         if (s.rssi != 0 && res.entityId in Collector.findTarget) Collector.findSamples.tryEmit(s.timeMs to s.rssi)
         if (s.rssi != 0) {
             val fix = Collector.location.value
-            // Radar bearing comes from how RSSI changes as you move: a drifting fix would invent a direction.
-            if (fix != null && fix.accuracyM <= prefs.maxFixAccuracyM && System.currentTimeMillis() - fix.timeMs < 15_000L) {
-                synchronized(radarLock) {
-                    val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
-                    dq.addLast(RSample(fix.lat, fix.lon, s.rssi, s.timeMs, s.probeId))
-                    while (dq.size > 60) dq.removeFirst()
-                }
+            // Distance (signal) needs no GPS. The bearing comes from how RSSI changes as you move, so
+            // only samples with a good, fresh fix carry a position: a drifting fix would invent a direction.
+            val good = fix != null && fix.accuracyM <= prefs.maxFixAccuracyM && System.currentTimeMillis() - fix.timeMs < 15_000L
+            synchronized(radarLock) {
+                val dq = radarBuf.getOrPut(res.entityId) { ArrayDeque() }
+                dq.addLast(RSample(if (good) fix!!.lat else Double.NaN, if (good) fix!!.lon else Double.NaN, s.rssi, s.timeMs, s.probeId))
+                while (dq.size > 60) dq.removeFirst()
             }
         }
         val es = dev.retrovision.core.analysis.EntitySighting(res.entityId, s)
@@ -428,14 +428,14 @@ class CollectorService : Service() {
                     val sm = BearingEstimator.ewma(smooth[id], recent.last().rssi).also { smooth[id] = it }
 
                     // bearing from the last ~90 s of movement
-                    val win = mine.filter { now - it.ms <= 90_000L }
+                    val win = mine.filter { now - it.ms <= 90_000L && !it.lat.isNaN() }
                     val lat0 = win.map { it.lat }.average()
                     val lon0 = win.map { it.lon }.average()
                     val cosL = Math.cos(Math.toRadians(lat0))
                     val samples = win.map {
                         BearingEstimator.Sample((it.lon - lon0) * cosL * 111_320.0, (it.lat - lat0) * 111_320.0, it.rssi, it.ms)
                     }
-                    val est = BearingEstimator.estimate(samples)
+                    val est = if (samples.size >= 2) BearingEstimator.estimate(samples) else null
                     val spreadE = samples.maxOfOrNull { it.east }?.minus(samples.minOfOrNull { it.east } ?: 0.0) ?: 0.0
                     val spreadN = samples.maxOfOrNull { it.north }?.minus(samples.minOfOrNull { it.north } ?: 0.0) ?: 0.0
                     movedM = maxOf(movedM, Math.hypot(spreadE, spreadN))
