@@ -101,6 +101,18 @@ If none of this helps, the probe is probably not running Retrovision firmware (f
 
 **Temperature.** Continuous Wi-Fi and BLE make the chip warm. 60–75 °C on the internal sensor is normal for a small board in a pocket. The sensor reads the die, not the case.
 
+## Wireless link (experimental)
+
+By default the probe talks to the phone over the USB cable. It can instead talk over **Bluetooth LE**, so the phone's USB-C port stays free (plug in a charger, keep the probe on a small USB power bank).
+
+**The trade-off.** In BLE link mode the probe's Bluetooth radio carries the link, so **the probe stops hearing Bluetooth devices** (trackers, BLE drones, notable BLE gear). Wi-Fi keeps working, and the phone's own Bluetooth can partly cover BLE. The probe still needs its own power. The cable is always preferred: plug it in and the probe switches back to USB.
+
+**Pairing (needs the cable).** Settings → Receivers → *Wireless link* → *Pair for Bluetooth*, with the probe connected by USB. The app generates a random 24-byte key, sends it to the probe over USB (the firmware refuses this over a wireless link, so pairing needs physical access), and the probe reboots advertising as `RV-<name>`. On the first BLE connection, accept the phone's Bluetooth pairing prompt. *Turn wireless off* (also over USB) clears it.
+
+**Security.** The BLE link is encrypted by LE Secure Connections bonding (against passive sniffing). On top of that, the probe challenges the phone in every handshake: it sends a random nonce and streams nothing until the phone answers with `HMAC-SHA256(pairing key, "RVAUTH1" || nonce || boot id)`. So a different bonded phone cannot inject fake observations or reconfigure the probe. Settings that store the key (`SetLink`) are accepted only over USB.
+
+**Status.** This whole path is implemented but **not yet tested on real hardware**: BLE pairing, bonding and MTU behaviour vary by phone. Report what happens on yours.
+
 ## Identity: from MAC addresses to entities
 
 The core problem: modern phones **randomise** their MAC addresses. A Wi-Fi probe request from an iPhone uses a different address every few minutes, and BLE phones rotate their address about every 15 minutes. Counting addresses would turn one phone into dozens of short-lived "devices", none of which ever looks like it follows you.
