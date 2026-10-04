@@ -370,7 +370,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
                         if (dev.retrovision.app.data.Mutes.typeKey(r) != null) add(
-                            ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Notifications, null) }, Texts.tr("Mute type", "Silenzia tipo")) { muteType = true },
+                            ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Lock, null) }, Texts.tr("Mute type", "Silenzia tipo")) { muteType = true },
                         )
                         add(
                             ActionTileSpec(
