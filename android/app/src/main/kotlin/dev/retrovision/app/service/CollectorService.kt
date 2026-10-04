@@ -38,6 +38,7 @@ import dev.retrovision.app.data.toModel
 import dev.retrovision.app.data.FamiliarRow
 import dev.retrovision.app.data.toRow
 import dev.retrovision.app.data.toSighting
+import dev.retrovision.app.probe.BleChannel
 import dev.retrovision.app.probe.ProbeSession
 import dev.retrovision.app.probe.ProbeTransport
 import dev.retrovision.app.probe.UsbAccess
@@ -118,6 +119,7 @@ class CollectorService : Service() {
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
         scope.launch { phoneLoop() }
+        scope.launch { bleConnectionLoop() }
         return START_NOT_STICKY
     }
 
@@ -402,6 +404,90 @@ class CollectorService : Service() {
         }
     }
 
+    /**
+     * Wireless link: when the probe is paired for BLE and no cable is connected, find it over BLE
+     * and run the same session on top. USB always wins; this loop stands down whenever the cable is up.
+     * Unverified on hardware; BLE pairing/bonding/MTU vary by phone.
+     */
+    private suspend fun bleConnectionLoop() {
+        val channel = BleChannel(this) // reused only for scanning; each session opens a fresh one
+        while (scope.isActive) {
+            val key = prefs.blePairKey()
+            if (key == null || Collector.usbConnected) { delay(1500); continue }
+            if (!hasBlePermissions()) { delay(5000); continue }
+            val dev = channel.scan(prefs.blePairName)
+            if (dev == null) { delay(2000); continue }
+            if (Collector.usbConnected) { delay(1000); continue }
+            Collector.connection.value = ConnectionUi(Link.CONNECTING, "BLE: ${prefs.blePairName}")
+            val fresh = BleChannel(this)
+            if (!fresh.open(dev)) {
+                Diag.w("ble", "open failed")
+                fresh.close()
+                delay(3000)
+                continue
+            }
+            runBleSession(fresh)
+            fresh.close()
+            delay(1500)
+        }
+    }
+
+    private fun hasBlePermissions(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 31) return true
+        return androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    private suspend fun runBleSession(channel: BleChannel) {
+        val name = "BLE: ${prefs.blePairName}"
+        val transport = object : ProbeTransport {
+            override fun write(data: ByteArray) { channel.write(data) }
+        }
+        val session = ProbeSession(
+            transport, scope, ::onSighting,
+            ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value },
+            channelPlan = { prefs.channelPlan }, pairingKey = { prefs.blePairKey() },
+        )
+        // Notifications arrive on a binder thread: hop onto a worker so decoding never blocks BLE.
+        val inbox = java.util.concurrent.ArrayBlockingQueue<ByteArray>(INBOX_CHUNKS)
+        channel.onData = { if (!inbox.offer(it)) Diag.update { d -> d.copy(inboxDrops = d.inboxDrops + 1) } }
+        Collector.session = session
+        val worker = Thread({
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val chunk = inbox.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                    runCatching { session.onBytes(chunk) }.onFailure { Diag.e("decode", "ble frame handling failed", it) }
+                }
+            } catch (_: InterruptedException) {}
+        }, "rv-ble-decode")
+        worker.start()
+        val writer = scope.launch { runCatching { channel.writerLoop() } }
+        session.start()
+        Diag.i("ble", "connected: $name")
+        val watcher = scope.launch {
+            while (isActive) {
+                Collector.connection.value = ConnectionUi(Link.CONNECTED, name, session.state.value)
+                delay(400)
+            }
+        }
+        try {
+            while (channel.connected && !Collector.usbConnected && scope.isActive) {
+                delay(500)
+                when (session.tick()) {
+                    ProbeSession.Health.DEAD -> { Diag.w("ble", "no data for 45 s: reconnecting"); break }
+                    else -> Unit
+                }
+            }
+        } finally {
+            watcher.cancel()
+            writer.cancel()
+            session.stop()
+            Collector.session = null
+            worker.interrupt()
+            Diag.i("ble", "session ended")
+        }
+    }
+
     private suspend fun connectionLoop() {
         val usb = UsbAccess(this)
         while (scope.isActive) {
@@ -450,6 +536,7 @@ class CollectorService : Service() {
         }
         val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value }, channelPlan = { prefs.channelPlan })
         Collector.session = session
+        Collector.usbConnected = true
         val done = CompletableDeferred<Unit>()
         // The USB reader only copies bytes into [inbox]; decoding, identity resolution and the DB
         // queue run on a separate thread. A GC pause or a busy core then delays processing instead of
@@ -523,6 +610,7 @@ class CollectorService : Service() {
             watcher.cancel()
             session.stop()
             Collector.session = null
+            Collector.usbConnected = false
             runCatching { io.stop() }
             worker.interrupt()
             runCatching { port.close() }

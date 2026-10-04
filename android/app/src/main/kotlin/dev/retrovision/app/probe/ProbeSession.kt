@@ -17,6 +17,9 @@ import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
 import dev.retrovision.proto.v1.ChannelDwell
 import dev.retrovision.proto.v1.Capability
+import dev.retrovision.proto.v1.LinkKind
+import dev.retrovision.proto.v1.SetLink
+import dev.retrovision.core.wire.LinkAuth
 import dev.retrovision.proto.v1.Command
 import dev.retrovision.proto.v1.Config
 import dev.retrovision.proto.v1.Envelope
@@ -87,6 +90,8 @@ class ProbeSession(
     private val dataFrames: () -> Boolean = { false },
     /** Channel plan (see [ChannelPlans]): 0 = the probe's own default. */
     private val channelPlan: () -> Int = { 0 },
+    /** Pairing key for a wireless link, or null (USB, or not paired). */
+    private val pairingKey: () -> ByteArray? = { null },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -252,12 +257,29 @@ class ProbeSession(
         }
         bootId = h.bootId
         probeId = h.hardwareId.toByteArray().joinToString("") { "%02x".format(it) }
-        send(
-            Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
-                HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
-                    .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig()),
-            ).build(),
-        )
+        // A wireless probe challenges us: prove we hold the pairing key, or it streams nothing.
+        if (h.link == LinkKind.LINK_KIND_BLE) {
+            val key = pairingKey()
+            if (key == null || h.authNonce.size() != 16) {
+                update { it.copy(phase = Phase.REJECTED, rejectReason = "Not paired with this probe") }
+                return
+            }
+            val mac = LinkAuth.authMac(key, h.authNonce.toByteArray(), h.bootId)
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                    HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                        .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig())
+                        .setAuthMac(com.google.protobuf.ByteString.copyFrom(mac)),
+                ).build(),
+            )
+        } else {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                    HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                        .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig()),
+                ).build(),
+            )
+        }
         update {
             it.copy(
                 phase = Phase.SYNCING,
@@ -393,6 +415,24 @@ class ProbeSession(
     }
 
     fun setLedEnabled(on: Boolean) = resendConfig()
+
+    /**
+     * Pairing, sent over USB only (the firmware refuses it on a wireless link): store the mode,
+     * a name and the pairing key on the probe, which then reboots into that mode.
+     * [key] is 16..32 random bytes. [mode] USB turns wireless off.
+     */
+    fun setLink(mode: LinkKind, name: String, key: ByteArray) {
+        synchronized(lock) {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                    Command.newBuilder().setSetLink(
+                        SetLink.newBuilder().setMode(mode).setName(name)
+                            .setKey(com.google.protobuf.ByteString.copyFrom(key)),
+                    ),
+                ).build(),
+            )
+        }
+    }
 
     /** Set from the probe's Hello: it can tune 5 GHz (ESP32-C5). */
     @Volatile private var dualBand = false

@@ -107,6 +107,28 @@ class Prefs(ctx: Context) {
         get() = p.getInt("devicesShown", 300)
         set(v) = p.edit().putInt("devicesShown", v).apply()
 
+    /** BLE wireless link: the probe's name and the pairing key (16..32 bytes), stored encrypted. */
+    var blePairName: String
+        get() = p.getString("blePairName", "") ?: ""
+        set(v) = p.edit().putString("blePairName", v).apply()
+
+    private var blePairKeyB64: String
+        get() = secret("blePairKey")
+        set(v) = setSecret("blePairKey", v)
+
+    fun blePairKey(): ByteArray? =
+        blePairKeyB64.takeIf { it.isNotEmpty() }?.let { runCatching { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }.getOrNull() }
+
+    fun setBlePair(name: String, key: ByteArray) {
+        blePairName = name
+        blePairKeyB64 = android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)
+    }
+
+    fun clearBlePair() {
+        blePairName = ""
+        blePairKeyB64 = ""
+    }
+
     /** Wi-Fi channel plan sent to the probe: 0 focused (default), 1 balanced, 2 full sweep. */
     var channelPlan: Int
         get() = p.getInt("channelPlan", 0)

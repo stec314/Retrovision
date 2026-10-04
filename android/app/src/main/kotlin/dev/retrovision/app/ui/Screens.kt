@@ -845,6 +845,12 @@ fun SettingsScreen(modifier: Modifier) {
         }
 
         Expandable(
+            title = Texts.tr("Wireless link (experimental)", "Collegamento wireless (sperimentale)"),
+            summary = if (prefs.blePairName.isNotEmpty()) Texts.tr("Paired over BLE: ${prefs.blePairName}", "Abbinato via BLE: ${prefs.blePairName}")
+                      else Texts.tr("USB cable only", "Solo cavo USB"),
+        ) { WirelessLinkSection() }
+
+        Expandable(
             title = Texts.tr("Online lookups", "Ricerche online"),
             summary = listOfNotNull(
                 "WiGLE " + if (prefs.wigleToken.isNotBlank()) Texts.tr("set", "configurato") else Texts.tr("not set", "non configurato"),
@@ -1525,4 +1531,73 @@ internal fun ActionGrid(tiles: List<ActionTileSpec>) {
             }
         }
     }
+}
+
+
+/**
+ * Pair the probe for a BLE link, or switch it back to USB. Pairing needs the cable connected: the
+ * key is set over USB, so it requires physical access to the probe. In BLE mode the probe's Bluetooth
+ * radio carries the link, so it stops hearing Bluetooth devices; Wi-Fi keeps working.
+ */
+@Composable
+private fun WirelessLinkSection() {
+    val ctx = LocalContext.current
+    val prefs = app.prefs
+    val conn by Collector.connection.collectAsState()
+    var paired by remember { mutableStateOf(prefs.blePairName.isNotEmpty()) }
+    var note by remember { mutableStateOf<String?>(null) }
+    val usbUp = Collector.usbConnected && conn.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+
+    val perms = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
+    ) {}
+    fun ensurePerms() {
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            perms.launch(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT, android.Manifest.permission.BLUETOOTH_SCAN))
+        }
+    }
+
+    Text(
+        Texts.tr(
+            "Let the probe talk to the phone over Bluetooth instead of the cable. Trade-offs: the probe stops hearing Bluetooth devices (trackers, BLE drones) because its radio carries the link — Wi-Fi keeps working, and the phone's own Bluetooth can partly cover BLE; the probe still needs its own power (a small USB power bank). Not yet tested on hardware.",
+            "Fai parlare la sonda col telefono via Bluetooth invece che col cavo. Compromessi: la sonda smette di sentire i dispositivi Bluetooth (tracker, droni BLE) perché la sua radio porta il collegamento — il Wi-Fi resta attivo e il Bluetooth del telefono copre in parte il BLE; la sonda ha comunque bisogno di alimentazione (un piccolo power bank USB). Non ancora provato su hardware.",
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    if (paired) {
+        Text(Texts.tr("Paired over BLE as “RV-${prefs.blePairName}”.", "Abbinato via BLE come “RV-${prefs.blePairName}”."), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            Texts.tr("The probe connects over Bluetooth when no cable is plugged in. Plug the cable to switch back to USB at any time.", "La sonda si collega via Bluetooth quando non c'è il cavo. Collega il cavo per tornare all'USB in qualsiasi momento."),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            enabled = usbUp,
+            onClick = {
+                val key = prefs.blePairKey() ?: ByteArray(0)
+                Collector.session?.setLink(dev.retrovision.proto.v1.LinkKind.LINK_KIND_USB, prefs.blePairName, key)
+                prefs.clearBlePair(); paired = false
+                note = Texts.tr("Wireless off. The probe is rebooting to USB-only.", "Wireless disattivato. La sonda si riavvia in modalità solo USB.")
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(Texts.tr("Turn wireless off (needs the cable)", "Disattiva il wireless (serve il cavo)")) }
+    } else {
+        Button(
+            enabled = usbUp,
+            onClick = {
+                ensurePerms()
+                val key = java.security.SecureRandom().generateSeed(24)
+                val mac = Collector.session?.state?.value?.info?.hardwareId?.takeLast(4) ?: "%04x".format((System.nanoTime() and 0xffff))
+                val name = "probe-$mac"
+                Collector.session?.setLink(dev.retrovision.proto.v1.LinkKind.LINK_KIND_BLE, name, key)
+                prefs.setBlePair(name, key); paired = true
+                note = Texts.tr("Pairing sent. The probe is rebooting; it will appear over Bluetooth as “RV-$name”. On first connect, accept the Bluetooth pairing prompt.", "Abbinamento inviato. La sonda si riavvia e comparirà via Bluetooth come “RV-$name”. Alla prima connessione accetta la richiesta di abbinamento Bluetooth.")
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(Texts.tr("Pair for Bluetooth (needs the cable)", "Abbina per il Bluetooth (serve il cavo)")) }
+        if (!usbUp) Text(
+            Texts.tr("Connect the probe with the cable first: pairing sets the key over USB.", "Collega prima la sonda col cavo: l'abbinamento imposta la chiave via USB."),
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    note?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall) }
 }

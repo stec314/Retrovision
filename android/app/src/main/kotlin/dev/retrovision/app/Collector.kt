@@ -68,6 +68,8 @@ object Collector {
 
     /** The live probe session, if any (used to reboot the probe into its bootloader). */
     @Volatile var session: ProbeSession? = null
+    /** True while a USB probe session is up: the BLE link stands down (cable is preferred). */
+    @Volatile var usbConnected = false
 
     /** Set while the flasher owns the USB port. */
     val usbPaused = AtomicBoolean(false)
