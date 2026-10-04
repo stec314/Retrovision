@@ -131,7 +131,7 @@ object Diag {
         appendLine("[probe] link ${c.link} · phase ${s?.phase} · fw ${s?.info?.firmware} · proto ${s?.info?.protocol}")
         if (s != null) {
             appendLine("  wifi ${s.wifiObs} (5 GHz ${s.wifi5Obs}) · ble ${s.bleObs} · seq gaps ${s.lostFrames} · probe queue drops ${s.probeDropped} · crc ${s.badFrames} · no clock ${s.droppedNoClock}")
-            appendLine("  probe heap ${s.freeHeap / 1024} KiB · ${"%.0f".format(s.chipTempC)} °C · clock ±${s.clockUncertaintyUs} µs")
+            appendLine("  probe heap ${s.freeHeap / 1024} KiB (lowest ${s.minFreeHeap / 1024}) · ${"%.0f".format(s.chipTempC)} °C · clock ±${s.clockUncertaintyUs} µs")
             if (s.lastLog.isNotEmpty()) appendLine("  last probe log: ${s.lastLog}")
         }
         appendLine("[usb] connections ${m.connections} · errors ${m.usbErrors} · inbox backlog ${m.inboxBacklog} · inbox drops ${m.inboxDrops}")

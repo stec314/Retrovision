@@ -15,6 +15,12 @@ import dev.retrovision.core.wire.FrameDecoder
 import dev.retrovision.core.wire.Framing
 import dev.retrovision.proto.v1.BleAddressType
 import dev.retrovision.proto.v1.BleConfig
+import dev.retrovision.proto.v1.ChannelDwell
+import dev.retrovision.proto.v1.AckResult
+import dev.retrovision.proto.v1.Capability
+import dev.retrovision.proto.v1.LinkKind
+import dev.retrovision.proto.v1.SetLink
+import dev.retrovision.core.wire.LinkAuth
 import dev.retrovision.proto.v1.Command
 import dev.retrovision.proto.v1.Config
 import dev.retrovision.proto.v1.Envelope
@@ -49,7 +55,17 @@ class ProbeInfo(
     val hardwareId: String,
     val bootId: Int,
     val protocol: String,
+    /** Transport this session runs on, and the one the probe is set up for (pairing). */
+    val link: LinkKind = LinkKind.LINK_KIND_USB,
+    val configuredLink: LinkKind = LinkKind.LINK_KIND_USB,
+    /** Name the probe advertises over BLE ("RV-<name>"), empty if never paired. */
+    val linkName: String = "",
+    /** Firmware can carry the session over BLE. */
+    val bleLinkCapable: Boolean = false,
 )
+
+/** Last CommandAck from the probe. */
+data class AckInfo(val commandSeq: Int, val ok: Boolean, val result: String, val message: String, val atMs: Long)
 
 data class SessionState(
     val phase: Phase = Phase.WAITING_HELLO,
@@ -64,10 +80,18 @@ data class SessionState(
     val badFrames: Long = 0,
     val probeDropped: Long = 0,
     val freeHeap: Int = 0,
+    /** Lowest free heap since the probe booted: the real margin. */
+    val minFreeHeap: Int = 0,
     val chipTempC: Float = 0f,
     val channel: Int = 0,
     val lastLog: String = "",
     val rejectReason: String = "",
+    /** BLE link: the probe's view of our signal (dBm), 0 if unknown. */
+    val linkRssi: Int = 0,
+    val lastAck: AckInfo? = null,
+    /** BLE-link self-report the probe sends over the cable ("st=adv rc=0 name=… heap=a/b/c"). */
+    val bleReport: String = "",
+    val bleReportMs: Long = 0,
 )
 
 /**
@@ -83,6 +107,10 @@ class ProbeSession(
     private val nowUs: () -> Long = WallClock::nowUs,
     private val ledOn: () -> Boolean = { true },
     private val dataFrames: () -> Boolean = { false },
+    /** Channel plan (see [ChannelPlans]): 0 = the probe's own default. */
+    private val channelPlan: () -> Int = { 0 },
+    /** Pairing key for the probe named in its Hello (wireless link), or null if not paired. */
+    private val pairingKey: (String) -> ByteArray? = { null },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -197,18 +225,31 @@ class ProbeSession(
             Envelope.PayloadCase.STATUS -> env.status.let { s ->
                 update {
                     it.copy(
-                        probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes,
-                        chipTempC = s.chipTempC, channel = s.currentWifiChannel,
+                        probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes, minFreeHeap = s.minFreeHeapBytes,
+                        chipTempC = s.chipTempC, channel = s.currentWifiChannel, linkRssi = s.linkRssi,
                     )
                 }
             }
-            Envelope.PayloadCase.LOG -> update { it.copy(lastLog = "${env.log.tag}: ${env.log.text}") }
+            Envelope.PayloadCase.LOG -> update {
+                if (env.log.tag == "blelink") it.copy(bleReport = env.log.text, bleReportMs = System.currentTimeMillis())
+                else it.copy(lastLog = "${env.log.tag}: ${env.log.text}")
+            }
             Envelope.PayloadCase.TIME_SYNC_RESPONSE -> env.timeSyncResponse.let {
                 val t3 = nowUs()
                 // Ignore absurd round trips (stale echo after a reconnect).
                 if (t3 - it.hostT1Us in 0..5_000_000L) clock.addSample(it.hostT1Us, it.probeT2Us, t3)
             }
-            else -> Unit // CommandAck: nothing to do in v1
+            Envelope.PayloadCase.COMMAND_ACK -> env.commandAck.let { a ->
+                val ok = a.result == AckResult.ACK_RESULT_OK
+                val info = AckInfo(a.commandSeq, ok, a.result.name.removePrefix("ACK_RESULT_"), a.message, System.currentTimeMillis())
+                // A wireless probe that rejects our MAC says so: the keys on the two sides differ.
+                if (!ok && a.message.startsWith("auth failed")) {
+                    update { it.copy(lastAck = info, phase = Phase.REJECTED, rejectReason = "Pairing key mismatch: pair again with the cable") }
+                } else {
+                    update { it.copy(lastAck = info) }
+                }
+            }
+            else -> Unit
         }
     }
 
@@ -225,6 +266,7 @@ class ProbeSession(
     }
 
     private fun onHello(h: Hello) {
+        dualBand = h.capabilitiesList.contains(Capability.CAPABILITY_WIFI_5GHZ)
         if (h.protocolMajor != PROTOCOL_MAJOR) {
             send(
                 Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
@@ -247,12 +289,29 @@ class ProbeSession(
         }
         bootId = h.bootId
         probeId = h.hardwareId.toByteArray().joinToString("") { "%02x".format(it) }
-        send(
-            Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
-                HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
-                    .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig()),
-            ).build(),
-        )
+        // A wireless probe challenges us: prove we hold the pairing key, or it streams nothing.
+        if (h.link == LinkKind.LINK_KIND_BLE) {
+            val key = pairingKey(h.name)
+            if (key == null || h.authNonce.size() != 16) {
+                update { it.copy(phase = Phase.REJECTED, rejectReason = "This phone has no pairing key for this probe: pair again with the cable") }
+                return
+            }
+            val mac = LinkAuth.authMac(key, h.authNonce.toByteArray(), h.bootId)
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                    HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                        .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig())
+                        .setAuthMac(com.google.protobuf.ByteString.copyFrom(mac)),
+                ).build(),
+            )
+        } else {
+            send(
+                Envelope.newBuilder().setSeq(nextSeq()).setHelloAck(
+                    HelloAck.newBuilder().setProtocolMajor(PROTOCOL_MAJOR).setProtocolMinor(PROTOCOL_MINOR)
+                        .setBootId(h.bootId).setAccepted(true).setConfig(defaultConfig()),
+                ).build(),
+            )
+        }
         update {
             it.copy(
                 phase = Phase.SYNCING,
@@ -260,6 +319,8 @@ class ProbeSession(
                 info = ProbeInfo(
                     h.probeType, h.firmwareVersion, probeId, h.bootId,
                     "${h.protocolMajor}.${h.protocolMinor}",
+                    link = h.link, configuredLink = h.configuredLink, linkName = h.name,
+                    bleLinkCapable = h.capabilitiesList.contains(Capability.CAPABILITY_LINK_BLE),
                 ),
             )
         }
@@ -389,9 +450,36 @@ class ProbeSession(
 
     fun setLedEnabled(on: Boolean) = resendConfig()
 
+    /**
+     * Pairing, sent over USB only (the firmware refuses it on a wireless link): store the mode,
+     * a name and the pairing key on the probe, which then reboots into that mode.
+     * [key] is 16..32 random bytes. [mode] USB turns wireless off.
+     */
+    fun setLink(mode: LinkKind, name: String, key: ByteArray): Int {
+        synchronized(lock) {
+            val seq = nextSeq()
+            send(
+                Envelope.newBuilder().setSeq(seq).setCommand(
+                    Command.newBuilder().setSetLink(
+                        SetLink.newBuilder().setMode(mode).setName(name)
+                            .setKey(com.google.protobuf.ByteString.copyFrom(key)),
+                    ),
+                ).build(),
+            )
+            return seq
+        }
+    }
+
+    /** Set from the probe's Hello: it can tune 5 GHz (ESP32-C5). */
+    @Volatile var dualBand = false
+        private set
+
+    /** Channels assigned by the multi-probe split (null = the plan's full list). Call [resendConfig] after changing. */
+    @Volatile var assignedHops: List<Pair<Int, Int>>? = null
+
     private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
 
-    private fun configWith(led: Boolean, data: Boolean): Config = Config.newBuilder()
+    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = assignedHops ?: ChannelPlans.hops(channelPlan(), dualBand)): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
@@ -405,6 +493,7 @@ class ProbeSession(
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DEAUTH)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DISASSOC)
                 .apply { if (data) addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_DATA) }
+                .apply { hops.forEach { (ch, ms) -> addHop(ChannelDwell.newBuilder().setChannel(ch).setDwellMs(ms)) } }
                 .setForwardRawIes(true)
                 .setProbeReqDedupMs(0)
                 .setBeaconDedupMs(30_000),
@@ -417,7 +506,7 @@ class ProbeSession(
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 1
+        const val PROTOCOL_MINOR = 2
         private const val KICK_EVERY_MS = 12_000L
         private const val DEAD_AFTER_MS = 45_000L
     }

@@ -57,6 +57,26 @@ data class RadarBlip(
 
 data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Double = 0.0, val ts: Long = 0L)
 
+/** Where the wireless (BLE) probe link stands, for the Settings status card. */
+enum class BleStage { OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT }
+
+data class BleLinkUi(
+    val stage: BleStage = BleStage.OFF,
+    /** Last failure, human readable ("" = none). Kept across retries so it stays visible. */
+    val lastError: String = "",
+    /** Phone-side RSSI: from the scan, then from the open connection. */
+    val rssi: Int = 0,
+    /** Other Retrovision probes heard while scanning (name -> dBm): paired with another phone or key. */
+    val others: Map<String, Int> = emptyMap(),
+    val attempts: Int = 0,
+    val mtu: Int = 0,
+    val connectedSinceMs: Long = 0,
+    val sinceMs: Long = System.currentTimeMillis(),
+)
+
+/** One live probe link. [label] is what the UI shows ("USB JTAG…", "BLE: probe-ab12cd"). */
+class ProbeLinkInfo(val key: String, val label: String, val session: ProbeSession, val usb: Boolean, val sinceMs: Long = System.currentTimeMillis())
+
 /** Process-wide state shared between the service and the UI. */
 object Collector {
     val connection = MutableStateFlow(ConnectionUi())
@@ -66,8 +86,40 @@ object Collector {
     val flash = MutableStateFlow(FlashUi())
     val running = MutableStateFlow(false)
 
-    /** The live probe session, if any (used to reboot the probe into its bootloader). */
+    /**
+     * The primary probe session: the one on the cable, else the first wireless one. Pairing and
+     * flashing use the cable session ([usbSession]); settings go to every session ([allSessions]).
+     */
     @Volatile var session: ProbeSession? = null
+    @Volatile var usbSession: ProbeSession? = null
+    /** True while a USB probe session is up. That probe's own BLE link stands down (cable is preferred). */
+    @Volatile var usbConnected = false
+
+    /** Every live probe link (key "usb" or "ble:<name>"), for multi-probe setups. */
+    val links = MutableStateFlow<Map<String, ProbeLinkInfo>>(emptyMap())
+
+    fun allSessions(): List<ProbeSession> = links.value.values.map { it.session }
+
+    /** Per paired wireless probe (by name): where its link stands. */
+    val bleLinks = MutableStateFlow<Map<String, BleLinkUi>>(emptyMap())
+    /** Bumped by the UI ("Retry now") to cut the wait between attempts. */
+    val bleKick = MutableStateFlow(0L)
+
+    /** Re-splits the channels between probes and resends every probe's config. Set by the service. */
+    @Volatile var reconfigureAll: () -> Unit = { allSessions().forEach { it.resendConfig() } }
+
+    @Synchronized fun addLink(l: ProbeLinkInfo) {
+        links.value = links.value + (l.key to l)
+        session = links.value["usb"]?.session ?: links.value.values.first().session
+        if (l.usb) usbSession = l.session
+    }
+
+    @Synchronized fun removeLink(key: String) {
+        val l = links.value[key] ?: return
+        links.value = links.value - key
+        if (l.usb && usbSession === l.session) usbSession = null
+        session = links.value["usb"]?.session ?: links.value.values.firstOrNull()?.session
+    }
 
     /** Set while the flasher owns the USB port. */
     val usbPaused = AtomicBoolean(false)

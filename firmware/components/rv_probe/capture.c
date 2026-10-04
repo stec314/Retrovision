@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 #include "capture.h"
+#include "link_cfg.h"
 
 #include <string.h>
 
@@ -17,12 +18,15 @@
 
 static const char *TAG = "capture";
 
+// Each slot is ~530 bytes, allocated up front. The C5 (two bands of traffic) gets a deeper queue,
+// but not too deep: it has 384 KB of SRAM and no PSRAM, and 96 slots (~50 KB) left ~15 KB free with
+// the BLE link up. In BLE link mode the link, not the queue, limits throughput: 48 slots suffice.
 #if CONFIG_IDF_TARGET_ESP32C5
-// More RAM and two bands of traffic: a deeper queue rides out bursts (busy 5 GHz beacons).
-#define QUEUE_DEPTH 96
+#define QUEUE_DEPTH 64
 #else
 #define QUEUE_DEPTH 48
 #endif
+#define QUEUE_DEPTH_BLE_LINK 48
 
 volatile uint32_t g_rv_wifi_seen;
 volatile uint32_t g_rv_ble_seen;
@@ -205,7 +209,8 @@ static void pipeline_task(void *arg)
 
 void rv_capture_init(void)
 {
-    s_queue = xQueueCreate(QUEUE_DEPTH, sizeof(rv_raw_item_t));
+    const bool ble_link = rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE;
+    s_queue = xQueueCreate(ble_link ? QUEUE_DEPTH_BLE_LINK : QUEUE_DEPTH, sizeof(rv_raw_item_t));
     configASSERT(s_queue);
     rv_dedup_init(&s_dedup);
     rv_cfg_defaults(&s_cfg);

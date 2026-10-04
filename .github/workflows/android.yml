@@ -173,6 +173,8 @@ jobs:
           for a in $(gh release view dev-latest --json assets -q '.assets[].name'); do
             gh release delete-asset dev-latest "$a" -y
           done
+          # Same APK under a fixed name too, so a shared link keeps working after the next build.
+          cp Retrovision-*.apk Retrovision-latest.apk
           gh release upload dev-latest Retrovision-*.apk retrovision-esp32*.bin SHA256SUMS --clobber
           gh release edit dev-latest --prerelease --notes "Automatic build of ${SHA::7} (${BRANCH}). Signed with the public development key: fine for sideloading, not a trust anchor. Checksums in SHA256SUMS."
 

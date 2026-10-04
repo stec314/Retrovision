@@ -23,6 +23,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "link.h"
+#include "link_cfg.h"
 #include "rv_framing.h"
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32S2
 #include "soc/rtc_cntl_reg.h"
@@ -97,6 +98,11 @@ typedef enum { ST_HELLO, ST_REJECTED, ST_ACTIVE } state_t;
 
 static volatile state_t s_state = ST_HELLO;
 static uint32_t s_boot_id;
+// Transport the current handshake/session runs on. USB is preferred whenever the cable is
+// connected; BLE is used only when configured and no cable is present.
+static rv_transport_t s_link = RV_T_USB;
+// Challenge sent in the last wireless Hello; a wireless HelloAck must answer it with a valid MAC.
+static uint8_t s_nonce[16];
 static SemaphoreHandle_t s_lock;       // serialises state changes (rx task vs session task)
 static rv_cfg_t s_cfg;
 #if SOC_TEMP_SENSOR_SUPPORTED
@@ -139,10 +145,23 @@ static void send_hello(void)
 #ifdef RV_HAS_5GHZ
         retrovision_v1_Capability_CAPABILITY_WIFI_5GHZ,
 #endif
+#if CONFIG_BT_NIMBLE_ENABLED
+        retrovision_v1_Capability_CAPABILITY_LINK_BLE,
+#endif
     };
     h->capabilities_count = sizeof caps / sizeof caps[0];
     memcpy(h->capabilities, caps, sizeof caps);
     h->max_rx_frame = RV_MAX_DECODED_FRAME;
+    h->link = rv_link_kind(s_link);
+    h->configured_link = rv_link_cfg()->mode;
+    strlcpy(h->name, rv_link_cfg()->name, sizeof h->name);
+    // On a wireless link the probe streams nothing until the host proves it knows the pairing
+    // key: a fresh random challenge goes out with every Hello.
+    if (s_link != RV_T_USB) {
+        esp_fill_random(s_nonce, sizeof s_nonce);
+        h->auth_nonce.size = sizeof s_nonce;
+        memcpy(h->auth_nonce.bytes, s_nonce, sizeof s_nonce);
+    }
     for (uint32_t ch = RV_CFG_MIN_CHANNEL; ch <= RV_CFG_MAX_CHANNEL; ch++) {
         h->supported_wifi_channels[h->supported_wifi_channels_count++] = ch;
     }
@@ -151,7 +170,7 @@ static void send_hello(void)
          i++) {
         h->supported_wifi_channels[h->supported_wifi_channels_count++] = rv_cfg_5ghz_channels[i];
     }
-    rv_link_send(e, pdMS_TO_TICKS(50));
+    rv_link_send_to(s_link, e, pdMS_TO_TICKS(50));
 }
 
 static void fill_status(retrovision_v1_Envelope *e)
@@ -177,6 +196,10 @@ static void fill_status(retrovision_v1_Envelope *e)
     s->ble_obs_sent = st.ble_sent;
     s->obs_dropped = st.dropped;
     s->rx_frames_bad = rv_link_rx_bad();
+    s->link = rv_link_kind(s_link);
+    if (s_link == RV_T_BLE) {
+        s->link_rssi = rv_link_ble_rssi();
+    }
 }
 
 static void send_ack(uint32_t command_seq, retrovision_v1_AckResult res, const char *msg)
@@ -204,16 +227,33 @@ static retrovision_v1_AckResult apply_config(const retrovision_v1_Config *pb, ch
 {
     rv_cfg_t next;
     retrovision_v1_AckResult r = rv_cfg_from_pb(pb, &next, msg, cap);
+    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+        next.ble_enabled = false; // the Bluetooth radio carries the link, it cannot also scan
+    }
     s_cfg = next;
     rv_capture_start(&s_cfg);
     return r;
 }
 
-static void on_hello_ack(uint32_t seq, const retrovision_v1_HelloAck *a)
+static void on_hello_ack(uint32_t seq, const retrovision_v1_HelloAck *a, rv_transport_t from)
 {
+    if (from != s_link) {
+        return; // ack for a transport we are not handshaking on
+    }
     if (a->boot_id != s_boot_id) {
         ESP_LOGW(TAG, "stale HelloAck (boot_id %08lx)", (unsigned long)a->boot_id);
         return;
+    }
+    // Wireless links must authenticate: the host answers the Hello challenge with
+    // HMAC-SHA256(pairing key, ...). Without a valid MAC the probe streams nothing.
+    if (s_link != RV_T_USB && a->accepted) {
+        if (a->auth_mac.size != 32 || !rv_link_auth_check(s_nonce, s_boot_id, a->auth_mac.bytes, a->auth_mac.size)) {
+            ESP_LOGW(TAG, "wireless auth failed; not starting session");
+            // Tell the host why, so it can ask for a re-pair instead of retrying blindly.
+            send_ack(seq, retrovision_v1_AckResult_ACK_RESULT_INVALID, "auth failed: pairing key mismatch");
+            go_idle(ST_HELLO); // retry with a fresh challenge
+            return;
+        }
     }
     if (!a->accepted) {
         ESP_LOGW(TAG, "rejected by host: %s", a->reject_reason);
@@ -256,10 +296,24 @@ static void reboot(bool into_bootloader)
     esp_restart();
 }
 
-static void on_command(uint32_t seq, const retrovision_v1_Command *c)
+static void on_command(uint32_t seq, const retrovision_v1_Command *c, rv_transport_t from)
 {
     char msg[96] = "";
     switch (c->which_kind) {
+    case retrovision_v1_Command_set_link_tag: {
+        // Pairing stores the key and the mode; it requires physical access, so USB only.
+        if (from != RV_T_USB) {
+            send_ack(seq, retrovision_v1_AckResult_ACK_RESULT_INVALID, "SetLink only over USB");
+            break;
+        }
+        if (!rv_link_cfg_save(&c->kind.set_link, msg, sizeof msg)) {
+            send_ack(seq, retrovision_v1_AckResult_ACK_RESULT_INVALID, msg[0] ? msg : "invalid link");
+            break;
+        }
+        send_ack(seq, retrovision_v1_AckResult_ACK_RESULT_OK, "rebooting to apply link");
+        reboot(false);
+        break;
+    }
     case retrovision_v1_Command_set_config_tag: {
         retrovision_v1_AckResult r = apply_config(&c->kind.set_config, msg, sizeof msg);
         send_ack(seq, r, msg[0] ? msg : NULL);
@@ -289,7 +343,7 @@ static void on_command(uint32_t seq, const retrovision_v1_Command *c)
     }
 }
 
-void rv_session_on_envelope(const retrovision_v1_Envelope *env)
+void rv_session_on_envelope(const retrovision_v1_Envelope *env, rv_transport_t from)
 {
     if (s_lock == NULL) {
         return; // frame arrived before rv_session_init()
@@ -297,16 +351,16 @@ void rv_session_on_envelope(const retrovision_v1_Envelope *env)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     switch (env->which_payload) {
     case retrovision_v1_Envelope_hello_ack_tag:
-        on_hello_ack(env->seq, &env->payload.hello_ack);
+        on_hello_ack(env->seq, &env->payload.hello_ack, from);
         break;
     case retrovision_v1_Envelope_command_tag:
         if (s_state == ST_ACTIVE) {
-            on_command(env->seq, &env->payload.command);
+            on_command(env->seq, &env->payload.command, from);
         } else if (env->payload.command.which_kind == retrovision_v1_Command_time_sync_tag ||
                    env->payload.command.which_kind == retrovision_v1_Command_reboot_tag) {
             // Allowed before the handshake: lets a flasher reboot a probe
             // whose protocol the host does not speak.
-            on_command(env->seq, &env->payload.command);
+            on_command(env->seq, &env->payload.command, from);
         } else {
             send_ack(env->seq, retrovision_v1_AckResult_ACK_RESULT_ERROR, "no session");
         }
@@ -325,6 +379,9 @@ static void session_task(void *arg)
     int64_t last_hello = -HELLO_REJECTED_PERIOD_MS * 1000LL;
     int64_t last_status = 0;
     int64_t usb_gone_since = 0;
+    int64_t last_ble_tick = 0;
+    int64_t last_ble_report = 0;
+    bool was_active = false;
     bool led = false;
 
     for (;;) {
@@ -333,17 +390,31 @@ static void session_task(void *arg)
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
 
-        // Host detached: stop capturing and restart the handshake on return.
-        if (!rv_link_host_connected()) {
+        // Pick the transport: the cable wins whenever it is connected, else BLE if it is.
+        // Plugging or unplugging the cable restarts the handshake on the new transport.
+        const bool usb = rv_link_connected(RV_T_USB);
+        const bool ble = rv_link_connected(RV_T_BLE);
+        // With no host anywhere, fall back to the cable: Hellos then reach a phone that plugs in
+        // later (a dropped BLE host has to reconnect and handshake again anyway).
+        const rv_transport_t want = usb ? RV_T_USB : (ble ? RV_T_BLE : RV_T_USB);
+        if (want != s_link && (usb || ble || s_link != RV_T_USB)) {
+            ESP_LOGI(TAG, "link switch %d -> %d", s_link, want);
+            s_link = want;
+            rv_link_set_active(want);
+            go_idle(ST_HELLO);
+            usb_gone_since = 0;
+        } else if (!usb && !ble) {
+            // Host detached on every transport: restart the handshake after a short grace.
             if (usb_gone_since == 0) {
                 usb_gone_since = now;
             } else if (s_state != ST_HELLO && now - usb_gone_since > USB_GONE_MS * 1000LL) {
-                ESP_LOGI(TAG, "USB host gone, back to handshake");
+                ESP_LOGI(TAG, "host gone, back to handshake");
                 go_idle(ST_HELLO);
             }
         } else {
             usb_gone_since = 0;
         }
+        rv_link_set_active(s_link);
 
         switch (s_state) {
         case ST_HELLO:
@@ -368,7 +439,25 @@ static void session_task(void *arg)
             led = true;
             break;
         }
+        const bool active_now = s_state == ST_ACTIVE;
         xSemaphoreGive(s_lock);
+
+        // BLE link mode: keep advertising alive, and tell the host over the cable how the
+        // Bluetooth side is doing (it cannot see it otherwise when the phone does not find us).
+        if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+            if (now - last_ble_tick >= 5000000LL) {
+                last_ble_tick = now;
+                rv_link_ble_tick();
+            }
+            if (active_now && s_link == RV_T_USB &&
+                (!was_active || now - last_ble_report >= 30000000LL)) {
+                last_ble_report = now;
+                char line[160];
+                rv_link_ble_report(line, sizeof line);
+                ESP_LOGW("blelink", "%s", line);
+            }
+        }
+        was_active = active_now;
 #if defined(LED_WS2812_GPIO)
         ws2812_set(led && !s_cfg.led_off, s_state != ST_ACTIVE);
 #elif !defined(LED_NONE)

@@ -121,7 +121,7 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     SEARCHING("🔍", "Looking for a network", "Cercano una rete", { it.probedSsids.isNotEmpty() || it.joinAttempts.isNotEmpty() }),
     TRACKERS("🏷", "Trackers", "Tracker", { it.category == DeviceCategory.TRACKER }),
     DRONES("🛸", "Drones", "Droni", { it.isDrone }),
-    NOTABLE("👁", "Notable", "Notevoli", { it.notable.isNotEmpty() }),
+    NOTABLE("👁", "Notable", "Notevoli", { r -> r.notable.any { it.kind.attention } }),
     PHONES("📱", "Phones & PCs", "Telefoni e PC", {
         it.category in setOf(DeviceCategory.PHONE, DeviceCategory.COMPUTER, DeviceCategory.WIFI_CLIENT)
     }),
@@ -444,6 +444,9 @@ fun IdentityPart(r: EntityReport) {
     val fmt = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(CategoryUi.icon(r.category) + "  " + CategoryUi.label(r.category) + (r.bleName?.let { " · “$it”" } ?: ""))
+        r.model?.let { Text(Texts.tr("Model: ", "Modello: ") + it, style = MaterialTheme.typography.bodySmall) }
+        r.appleActivity?.let { Text(Texts.tr("Apple device, last state: ", "Dispositivo Apple, ultimo stato: ") + Texts.appleActivity(it), style = MaterialTheme.typography.bodySmall) }
+        r.notable.filter { !it.kind.attention }.forEach { Text(Texts.tr("Identified as: ", "Identificato come: ") + it.name + " (" + Texts.notableKind(it.kind) + ")", style = MaterialTheme.typography.bodySmall) }
         Text(
             "⚠ ".takeIf { r.macTrust != MacTrust.STABLE }.orEmpty() + trustLabel(r.macTrust),
             color = if (r.macTrust == MacTrust.STABLE) MaterialTheme.colorScheme.onSurface else WARN,

@@ -118,6 +118,18 @@ object Texts {
 
     private fun dist(m: Double) = if (m < 1000) "${m.toInt()} m" else "%.1f km".format(m / 1000)
 
+    fun appleActivity(a: dev.retrovision.core.identity.PayloadDecoder.AppleActivity) = when (a) {
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.LOCKED -> tr("idle, screen locked", "inattivo, schermo bloccato")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.AUDIO -> tr("playing audio, screen locked", "audio in riproduzione, schermo bloccato")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.SCREEN_ON -> tr("screen on, in use", "schermo acceso, in uso")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.VIDEO -> tr("playing video", "video in riproduzione")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.WATCH_ON_WRIST -> tr("Watch on wrist", "Watch al polso")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.RECENT -> tr("used a moment ago", "usato da poco")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.DRIVING -> tr("driving", "alla guida")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.CALL -> tr("in a call", "in chiamata")
+        dev.retrovision.core.identity.PayloadDecoder.AppleActivity.OTHER -> tr("other", "altro")
+    }
+
     fun notableKind(k: dev.retrovision.core.identity.NotableKind) = when (k) {
         dev.retrovision.core.identity.NotableKind.HACKING -> tr("pentest tool", "strumento di pentest")
         dev.retrovision.core.identity.NotableKind.SURVEILLANCE -> tr("surveillance / plate camera", "videosorveglianza / lettura targhe")
@@ -125,6 +137,10 @@ object Texts {
         dev.retrovision.core.identity.NotableKind.GLASSES -> tr("camera glasses", "occhiali con fotocamera")
         dev.retrovision.core.identity.NotableKind.RECORDER -> tr("recording pendant", "registratore indossabile")
         dev.retrovision.core.identity.NotableKind.DRONE -> tr("drone", "drone")
+        dev.retrovision.core.identity.NotableKind.VEHICLE -> tr("vehicle", "veicolo")
+        dev.retrovision.core.identity.NotableKind.FINDER -> tr("item finder tag", "tag localizzatore")
+        dev.retrovision.core.identity.NotableKind.MESH -> tr("off-grid mesh radio", "radio mesh fuori rete")
+        dev.retrovision.core.identity.NotableKind.HOTSPOT -> tr("phone hotspot", "hotspot di un telefono")
     }
 
     fun channelAlertsSilent() = tr("Alerts (silent)", "Avvisi (silenziosi)")
@@ -205,11 +221,17 @@ object Texts {
             EntityKind.WIFI_AP -> (r.ssids.firstOrNull() ?: tr("(hidden network)", "(rete nascosta)")) + " · $addr$v"
             EntityKind.WIFI_CLIENT -> tr("Wi-Fi device", "Dispositivo Wi-Fi") + " $addr$v"
             EntityKind.BLE_TRACKER -> (r.tracker?.label ?: "Tracker") + " · $addr"
-            EntityKind.BLE_DEVICE -> (r.bleName?.let { "“${shorten(it)}”" } ?: tr("Bluetooth device", "Dispositivo Bluetooth")) + " $addr$v"
+            EntityKind.BLE_DEVICE -> (r.bleName?.let { "“${shorten(it)}”" } ?: r.model ?: tr("Bluetooth device", "Dispositivo Bluetooth")) + " $addr$v"
         }
         return when {
             r.isDrone -> "🛸 " + (r.droneId ?: r.notable.firstOrNull()?.name ?: tr("Drone", "Drone")) + " · $addr"
-            r.notable.isNotEmpty() -> "👁 " + r.notable.first().name + " · " + base
+            r.notable.any { it.kind.attention } -> "👁 " + r.notable.first { it.kind.attention }.name + " · " + base
+            r.notable.isNotEmpty() -> when (r.notable.first().kind) {
+                dev.retrovision.core.identity.NotableKind.VEHICLE -> "🚗 "
+                dev.retrovision.core.identity.NotableKind.FINDER -> "🏷 "
+                dev.retrovision.core.identity.NotableKind.MESH -> "📻 "
+                else -> "📱 "
+            } + r.notable.first().name + " · " + base
             else -> base
         }
     }
@@ -292,6 +314,7 @@ object Texts {
             "Moves together with ${r.size - 1} other device(s): same places, same times",
             "Si muove insieme ad altri ${r.size - 1} dispositivi: stessi luoghi, stessi orari",
         )
+        is Reason.ReportsDriving -> tr("Its Apple device said its owner was driving: it is in a vehicle", "Il suo dispositivo Apple ha detto che il proprietario stava guidando: è in un veicolo")
         is Reason.Notable -> tr(
             "Looks like: ${r.name} (${notableKind(r.kind)}) — a pattern match, not proof",
             "Sembra: ${r.name} (${notableKind(r.kind)}) — somiglianza, non prova",

@@ -275,6 +275,8 @@ fun PlacesScreen(modifier: Modifier) {
             }
         }
 
+        if (routinePlaces.isNotEmpty()) NewAtRoutinePanel()
+
         val suggestions = rows.filter { it.state == FamiliarPlace.State.SUGGESTED.ordinal }
         if (suggestions.isNotEmpty()) {
             Panel(title = Texts.tr("Suggested", "Suggeriti") + " (${suggestions.size})") {

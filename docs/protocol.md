@@ -165,7 +165,7 @@ The experimental branch `wip/wireless-links` once used "1.1" for its own additio
 ## 11. Security notes
 
 - **USB (v1)**: physical access equals trust. There is no authentication, and that is deliberate.
-- **Wireless transports (future)**: frames must be wrapped in an authenticated, encrypted channel (e.g. Noise XX with a key pinned during a USB pairing step) *before* BLE or Wi-Fi transports ship. Otherwise anyone nearby can spoof observations or reconfigure the probe. For a counter-surveillance tool, spoofed input is the attack that matters.
+- **Wireless transports**: a BLE GATT link shipped in protocol 1.2. It is wrapped in an authenticated, encrypted channel: LE Secure Connections bonding for confidentiality, plus an HMAC-SHA256 challenge (`Hello.auth_nonce` / `HelloAck.auth_mac`) keyed by a pairing key set over USB (`SetLink`, USB-only). The probe streams nothing until the host answers the challenge, so a nearby attacker cannot spoof observations or reconfigure the probe. A Wi-Fi/TCP transport remains reserved (`LINK_KIND_WIFI`) but is not implemented.
 - The probe is receive-only by default. Only an explicit `BleConfig.active_scan` makes it transmit anything other than its USB traffic.
 - Observations contain third-party identifiers (MAC addresses, SSIDs). The host should store them encrypted at rest and apply a retention period (see the app design).
 

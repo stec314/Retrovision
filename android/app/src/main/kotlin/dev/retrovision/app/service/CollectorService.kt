@@ -38,7 +38,14 @@ import dev.retrovision.app.data.toModel
 import dev.retrovision.app.data.FamiliarRow
 import dev.retrovision.app.data.toRow
 import dev.retrovision.app.data.toSighting
+import dev.retrovision.app.probe.BleChannel
+import dev.retrovision.app.BleLinkUi
+import dev.retrovision.app.BleStage
+import kotlinx.coroutines.flow.first
 import dev.retrovision.app.probe.ProbeSession
+import dev.retrovision.app.probe.Phase
+import dev.retrovision.app.ProbeLinkInfo
+import dev.retrovision.proto.v1.LinkKind
 import dev.retrovision.app.probe.ProbeTransport
 import dev.retrovision.app.probe.UsbAccess
 import dev.retrovision.app.ui.MainActivity
@@ -118,6 +125,14 @@ class CollectorService : Service() {
         scope.launch { radarLoop() }
         scope.launch { probeWatchLoop() }
         scope.launch { phoneLoop() }
+        Collector.reconfigureAll = ::reconfigureAll
+        scope.launch { bleConnectionLoop() }
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            while (isActive) {
+                delay(3_600_000L)
+                runCatching { dev.retrovision.app.data.Backup.runIfDue(this@CollectorService) }
+            }
+        }
         return START_NOT_STICKY
     }
 
@@ -126,6 +141,9 @@ class CollectorService : Service() {
         Diag.i("service", "collection stopped")
         Collector.running.value = false
         Collector.session = null
+        Collector.usbSession = null
+        Collector.links.value = emptyMap()
+        Collector.reconfigureAll = { Collector.allSessions().forEach { it.resendConfig() } }
         Collector.analyzeOne = null
         Collector.connection.value = ConnectionUi(Link.STOPPED)
         runCatching { locationManager?.removeUpdates(locationListener) }
@@ -268,7 +286,12 @@ class CollectorService : Service() {
         scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
         var probeGoneSince = 0L
         while (scope.isActive) {
-            val streaming = Collector.connection.value.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            // A probe on a BLE link does not scan Bluetooth (its radio carries the link): only a probe
+            // that does lets the phone's own scanner rest.
+            val streaming = Collector.allSessions().any {
+                val st = it.state.value
+                st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
+            }
             val nowMs = System.currentTimeMillis()
             probeGoneSince = if (streaming) 0L else if (probeGoneSince == 0L) nowMs else probeGoneSince
             val permitted = if (Build.VERSION.SDK_INT >= 31) hasPerm(Manifest.permission.BLUETOOTH_SCAN) else true
@@ -311,7 +334,40 @@ class CollectorService : Service() {
         }
     }
 
+    /** frame key -> (probe, arrival) for frames heard by several probes at once. */
+    private val crossHeard = HashMap<Long, Pair<String, Long>>()
+    private var crossPrune = 0L
+
+    /**
+     * True if another probe already delivered this very frame (same address and 802.11 sequence
+     * number, or same BLE advert bytes) in the last 2 s. Two probes in range of the same device would
+     * otherwise double its frames and, worse, break the sequence-number continuity used to link a
+     * randomised address to its previous one.
+     */
+    private fun duplicateAcrossProbes(s: Sighting): Boolean {
+        if (Collector.links.value.size < 2 || s.probeId == dev.retrovision.app.phone.PHONE_SOURCE) return false
+        val w = s.wifi
+        val b = s.ble
+        val key = when {
+            w != null -> s.address.bits * 1_000_003L + w.seq * 31L + w.kind.ordinal
+            b != null -> s.address.bits * 1_000_003L + b.advData.contentHashCode()
+            else -> return false
+        }
+        val now = android.os.SystemClock.elapsedRealtime()
+        synchronized(crossHeard) {
+            if (now - crossPrune > 10_000L) {
+                crossPrune = now
+                crossHeard.values.removeAll { now - it.second > 5_000L }
+            }
+            val prev = crossHeard[key]
+            if (prev != null && prev.first != s.probeId && now - prev.second <= 2_000L) return true
+            crossHeard[key] = s.probeId to now
+            return false
+        }
+    }
+
     private fun onSighting(s: Sighting) {
+        if (duplicateAcrossProbes(s)) return
         if (duplicateOfProbe(s)) return
         SessionRecorder.write(s)
         // "Identify my phone": a scan was just triggered; this phone's probe requests are the loudest.
@@ -402,6 +458,201 @@ class CollectorService : Service() {
         }
     }
 
+    /**
+     * Wireless link: when the probe is paired for BLE and no cable is connected, find it over BLE
+     * and run the same session on top. USB always wins; this loop stands down whenever the cable is up.
+     * Unverified on hardware; BLE pairing/bonding/MTU vary by phone.
+     */
+    private fun bleUi(name: String, f: (BleLinkUi) -> BleLinkUi) {
+        synchronized(Collector.bleLinks) {
+            val m = Collector.bleLinks.value
+            val old = m[name] ?: BleLinkUi()
+            val n = f(old)
+            Collector.bleLinks.value = m + (name to if (n.stage != old.stage) n.copy(sinceMs = System.currentTimeMillis()) else n)
+        }
+    }
+
+    /** Waits [ms], or less if the UI asks to retry now. */
+    private suspend fun bleWait(ms: Long) {
+        val k = Collector.bleKick.value
+        kotlinx.coroutines.withTimeoutOrNull(ms) { Collector.bleKick.first { it != k } }
+    }
+
+    /** Name the probe on the cable is paired under (its BLE link stands down), "" if none. */
+    private fun usbProbeName(): String = Collector.usbSession?.state?.value?.info?.linkName.orEmpty()
+
+    /**
+     * Wireless links: every paired probe that is not on the cable is looked for with one shared scan
+     * and run in its own session, in parallel. Each runs the same protocol as over USB.
+     */
+    private suspend fun bleConnectionLoop() {
+        val running = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+        var failures = 0
+        try {
+            while (scope.isActive) {
+                val pairs = prefs.blePairs()
+                val names = pairs.map { it.name }.toSet()
+                // Forgotten pairings: drop their state and stop their sessions.
+                synchronized(Collector.bleLinks) { Collector.bleLinks.value = Collector.bleLinks.value.filterKeys { it in names } }
+                running.keys.filter { it !in names }.forEach { running.remove(it)?.cancel() }
+                if (pairs.isEmpty()) { failures = 0; bleWait(2000); continue }
+
+                // The cable wins for the probe on it; while its Hello is pending, hold off (it may be one of ours).
+                if (Collector.usbConnected && Collector.usbSession?.state?.value?.info == null) { bleWait(1000); continue }
+                val onCable = if (Collector.usbConnected) usbProbeName() else ""
+                names.forEach { n -> if (n == onCable) bleUi(n) { it.copy(stage = BleStage.CABLE) } }
+                if (!hasBlePermissions()) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.NO_PERMISSION) } }; bleWait(5000); continue }
+                val ad = (getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+                if (ad?.isEnabled != true) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.BT_OFF) } }; bleWait(3000); continue }
+
+                val missing = names.filter { it != onCable && !running.containsKey(it) }.toSet()
+                if (missing.isEmpty()) { bleWait(2000); continue }
+                missing.forEach { n -> bleUi(n) { it.copy(stage = BleStage.SCANNING, attempts = it.attempts + 1) } }
+                val scanner = BleChannel(this)
+                val hit = scanner.scanMany(missing)
+                for (n in missing) {
+                    val found = hit.found[n]
+                    if (found == null) {
+                        bleUi(n) { it.copy(stage = BleStage.RETRY_WAIT, lastError = scanner.lastError.ifEmpty { "“RV-$n” not heard" }, others = hit.others, rssi = 0) }
+                        continue
+                    }
+                    bleUi(n) { it.copy(stage = BleStage.CONNECTING, rssi = found.second, others = hit.others) }
+                    running[n] = scope.launch {
+                        try { connectBle(n, found.first) } finally { running.remove(n) }
+                    }
+                }
+                failures = if (hit.found.isEmpty()) failures + 1 else 0
+                // Back off while the probes are away, so a forgotten one does not drain the battery.
+                bleWait(if (failures < 5) 2000 else 15_000)
+            }
+        } finally {
+            running.values.forEach { it.cancel() }
+            Collector.bleLinks.value = prefs.blePairs().associate { it.name to BleLinkUi(BleStage.STOPPED) }
+        }
+    }
+
+    private suspend fun connectBle(name: String, dev: android.bluetooth.BluetoothDevice) {
+        val fresh = BleChannel(this)
+        fresh.onStage = { st -> bleUi(name) { it.copy(stage = if (st == "bonding") BleStage.BONDING else BleStage.CONNECTING) } }
+        try {
+            if (!fresh.open(dev)) {
+                Diag.w("ble", "$name: open failed: ${fresh.lastError}")
+                bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = fresh.lastError) }
+                delay(3000)
+                return
+            }
+            bleUi(name) { it.copy(stage = BleStage.HANDSHAKE, mtu = fresh.currentMtu, lastError = "") }
+            runBleSession(name, fresh)
+            if (fresh.lastError.isNotEmpty()) bleUi(name) { it.copy(lastError = fresh.lastError) }
+        } finally {
+            fresh.close()
+            bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, connectedSinceMs = 0) }
+        }
+    }
+
+    private fun hasBlePermissions(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 31) return true
+        return androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_CONNECT) == android.content.pm.PackageManager.PERMISSION_GRANTED &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    private suspend fun runBleSession(pairName: String, channel: BleChannel) {
+        val name = "BLE: $pairName"
+        val key = "ble:$pairName"
+        val transport = object : ProbeTransport {
+            override fun write(data: ByteArray) { channel.write(data) }
+        }
+        val session = ProbeSession(
+            transport, scope, ::onSighting,
+            ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value },
+            channelPlan = { prefs.channelPlan }, pairingKey = { n -> prefs.blePairKey(n) },
+        )
+        // Notifications arrive on a binder thread: hop onto a worker so decoding never blocks BLE.
+        val inbox = java.util.concurrent.ArrayBlockingQueue<ByteArray>(INBOX_CHUNKS)
+        channel.onData = { if (!inbox.offer(it)) Diag.update { d -> d.copy(inboxDrops = d.inboxDrops + 1) } }
+        Collector.addLink(ProbeLinkInfo(key, name, session, usb = false))
+        val worker = Thread({
+            try {
+                while (!Thread.currentThread().isInterrupted) {
+                    val chunk = inbox.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
+                    runCatching { session.onBytes(chunk) }.onFailure { Diag.e("decode", "ble frame handling failed", it) }
+                }
+            } catch (_: InterruptedException) {}
+        }, "rv-ble-decode-$pairName")
+        worker.start()
+        val writer = scope.launch { runCatching { channel.writerLoop() } }
+        session.start()
+        Diag.i("ble", "connected: $name")
+        val watcher = scope.launch {
+            val started = System.currentTimeMillis()
+            var phase: dev.retrovision.app.probe.Phase? = null
+            var n = 0
+            while (isActive) {
+                val st = session.state.value
+                if (Collector.session === session) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
+                if (st.phase != phase) {
+                    phase = st.phase
+                    Diag.i("ble", "$pairName: phase ${st.phase}" + (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
+                    if (st.phase == dev.retrovision.app.probe.Phase.STREAMING) Collector.reconfigureAll()
+                }
+                if (n++ % 5 == 0) channel.readRssi()
+                val stage = when (st.phase) {
+                    dev.retrovision.app.probe.Phase.STREAMING -> BleStage.STREAMING
+                    dev.retrovision.app.probe.Phase.REJECTED -> BleStage.REJECTED
+                    else -> BleStage.HANDSHAKE
+                }
+                val err = when {
+                    st.phase == dev.retrovision.app.probe.Phase.REJECTED -> st.rejectReason
+                    stage == BleStage.HANDSHAKE && System.currentTimeMillis() - started > 15_000 ->
+                        "Connected, but no handshake after 15 s: the probe may run old firmware or be set up for another phone"
+                    else -> null
+                }
+                bleUi(pairName) {
+                    it.copy(
+                        stage = stage, rssi = channel.rssi.takeIf { r -> r != 0 } ?: it.rssi, mtu = channel.currentMtu,
+                        connectedSinceMs = if (stage == BleStage.STREAMING && it.connectedSinceMs == 0L) System.currentTimeMillis() else it.connectedSinceMs,
+                        lastError = err ?: if (stage == BleStage.STREAMING) "" else it.lastError,
+                    )
+                }
+                delay(400)
+            }
+        }
+        try {
+            // Ends when the link drops, the probe goes onto the cable, or it is forgotten.
+            while (channel.connected && scope.isActive && usbProbeName() != pairName && prefs.blePairKey(pairName) != null) {
+                delay(500)
+                when (session.tick()) {
+                    ProbeSession.Health.DEAD -> { Diag.w("ble", "$pairName: no data for 45 s: reconnecting"); break }
+                    else -> Unit
+                }
+            }
+        } finally {
+            watcher.cancel()
+            writer.cancel()
+            session.stop()
+            Collector.removeLink(key)
+            worker.interrupt()
+            Diag.i("ble", "$pairName: session ended")
+            Collector.reconfigureAll()
+        }
+    }
+
+    /**
+     * Gives each streaming probe its channels: the whole plan when it is alone (or the split is off),
+     * a share of it when several listen at once.
+     */
+    private fun reconfigureAll() {
+        val live = Collector.links.value.values.map { it.session }
+            .filter { it.state.value.phase == dev.retrovision.app.probe.Phase.STREAMING || it.state.value.phase == dev.retrovision.app.probe.Phase.SYNCING }
+        if (live.size > 1 && prefs.splitChannels) {
+            val parts = dev.retrovision.app.probe.ChannelPlans.split(prefs.channelPlan, live.map { it.dualBand })
+            live.forEachIndexed { i, sess -> sess.assignedHops = parts[i] }
+        } else {
+            live.forEach { it.assignedHops = null }
+        }
+        Collector.allSessions().forEach { it.resendConfig() }
+    }
+
     private suspend fun connectionLoop() {
         val usb = UsbAccess(this)
         while (scope.isActive) {
@@ -412,7 +663,8 @@ class CollectorService : Service() {
             }
             val dev = usb.findProbe()
             if (dev == null) {
-                Collector.connection.value = ConnectionUi(Link.NO_DEVICE)
+                // A BLE session (or its attempt) owns the connection line while no cable is plugged.
+                if (Collector.links.value.isEmpty() && Collector.bleLinks.value.values.none { it.stage in BLE_BUSY }) Collector.connection.value = ConnectionUi(Link.NO_DEVICE)
                 delay(1000)
                 continue
             }
@@ -448,8 +700,9 @@ class CollectorService : Service() {
                 port.write(data, 1000)
             }
         }
-        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value })
-        Collector.session = session
+        val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value }, channelPlan = { prefs.channelPlan })
+        Collector.addLink(ProbeLinkInfo("usb", name, session, usb = true))
+        Collector.usbConnected = true
         val done = CompletableDeferred<Unit>()
         // The USB reader only copies bytes into [inbox]; decoding, identity resolution and the DB
         // queue run on a separate thread. A GC pause or a busy core then delays processing instead of
@@ -500,6 +753,7 @@ class CollectorService : Service() {
                     phase = st.phase
                     Diag.i("probe", "phase ${st.phase}" + (st.info?.let { " · fw ${it.firmware} · proto ${it.protocol}" } ?: "") +
                         (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
+                    if (st.phase == Phase.STREAMING) reconfigureAll()
                 }
                 if (st.probeDropped > dropped + 500) {
                     dropped = st.probeDropped
@@ -522,7 +776,9 @@ class CollectorService : Service() {
         } finally {
             watcher.cancel()
             session.stop()
-            Collector.session = null
+            Collector.removeLink("usb")
+            Collector.usbConnected = false
+            reconfigureAll()
             runCatching { io.stop() }
             worker.interrupt()
             runCatching { port.close() }
@@ -757,13 +1013,27 @@ class CollectorService : Service() {
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
         val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        // When the baseline started: "new near your places" only means something after a week of it.
+        if (prefs.baselineStartDay == 0L) prefs.baselineStartDay = day
+        val full = result.entities.associateBy { it.entityId }
+        val stubs = result.others.associateBy { it.entityId }
         // Every device confined to routine places, including those trimmed from the result.
         for (id in result.routineOnlyIds) {
             val b = dao.baseline(id)
+            val r = full[id]
+            val st = stubs[id]
+            val label = r?.let { Texts.entityLabel(it) } ?: st?.let { dev.retrovision.app.ui.stubLabel(it) } ?: ""
+            val category = r?.category ?: st?.category
+            val mobile = category != dev.retrovision.core.identity.DeviceCategory.ROUTER
             if (b == null) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now))
+                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now, firstDay = day, label = label, mobile = mobile))
             } else if (b.lastDay != day) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, (b.days + 1).coerceAtMost(30), day, now))
+                dao.putBaseline(
+                    dev.retrovision.app.data.BaselineRow(
+                        id, (b.days + 1).coerceAtMost(30), day, now,
+                        firstDay = b.firstDay, label = label.ifEmpty { b.label }, mobile = mobile,
+                    ),
+                )
             }
         }
     }
@@ -898,8 +1168,8 @@ class CollectorService : Service() {
         while (scope.isActive) {
             delay(2000)
             if (Collector.usbPaused.get()) { lostSince = 0; continue }
-            val c = Collector.connection.value
-            val streaming = c.link == Link.CONNECTED && c.session?.phase == dev.retrovision.app.probe.Phase.STREAMING
+            // With several probes, one walking out of range (the car's) is normal: alert when none streams.
+            val streaming = Collector.allSessions().any { it.state.value.phase == dev.retrovision.app.probe.Phase.STREAMING }
             val now = System.currentTimeMillis()
             if (streaming) {
                 wasStreaming = true; lostSince = 0
@@ -1026,6 +1296,8 @@ class CollectorService : Service() {
     )
 
     companion object {
+        /** BLE stages during which the BLE loop owns the connection line. */
+        private val BLE_BUSY = setOf(BleStage.CONNECTING, BleStage.BONDING, BleStage.HANDSHAKE, BleStage.STREAMING)
         const val ACTION_STOP = "dev.retrovision.app.STOP"
         private const val CH_ONGOING = "ongoing"
         private const val CH_ALERTS = "alerts"

@@ -107,6 +107,85 @@ class Prefs(ctx: Context) {
         get() = p.getInt("devicesShown", 300)
         set(v) = p.edit().putInt("devicesShown", v).apply()
 
+    /** BLE wireless link: the probe's name and the pairing key (16..32 bytes), stored encrypted. */
+    /** A probe paired for the wireless link: its advertised name ("RV-<name>") and the pairing key. */
+    class BlePair(val name: String, val key: ByteArray)
+
+    /** Paired wireless probes, kept Keystore-sealed as "name:base64key" lines. */
+    fun blePairs(): List<BlePair> {
+        // One pairing stored by r104-r109 (before multi-probe): carry it over once.
+        val oldName = p.getString("blePairName", "") ?: ""
+        if (oldName.isNotEmpty()) {
+            val oldKey = secret("blePairKey")
+            p.edit().remove("blePairName").apply()
+            setSecret("blePairKey", "")
+            if (oldKey.isNotEmpty()) setSecret("blePairs", (secret("blePairs").split('\n').filter { it.isNotBlank() } + "$oldName:$oldKey").joinToString("\n"))
+        }
+        return secret("blePairs").split('\n').mapNotNull { line ->
+            val i = line.indexOf(':')
+            if (i <= 0) return@mapNotNull null
+            val key = runCatching { android.util.Base64.decode(line.substring(i + 1), android.util.Base64.NO_WRAP) }.getOrNull() ?: return@mapNotNull null
+            BlePair(line.substring(0, i), key)
+        }
+    }
+
+    fun blePairKey(name: String): ByteArray? = blePairs().firstOrNull { it.name == name }?.key
+
+    /** Adds or replaces the pairing for [name]. */
+    fun putBlePair(name: String, key: ByteArray) {
+        val rest = blePairs().filter { it.name != name }
+        val all = rest + BlePair(name, key)
+        setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
+    }
+
+    fun removeBlePair(name: String) {
+        val all = blePairs().filter { it.name != name }
+        setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
+    }
+
+    /** Split the Wi-Fi channels between probes when several stream at once. */
+    var splitChannels: Boolean
+        get() = p.getBoolean("splitChannels", true)
+        set(v) = p.edit().putBoolean("splitChannels", v).apply()
+
+    // ---- automatic backup to a folder outside the app (survives an uninstall) ----
+    /** Folder picked by the user (SAF tree URI), "" = automatic backup off. */
+    var autoBackupTree: String
+        get() = p.getString("autoBackupTree", "") ?: ""
+        set(v) = p.edit().putString("autoBackupTree", v).apply()
+
+    /** Password the automatic backups are sealed with (kept Keystore-sealed here). */
+    var autoBackupPassword: String
+        get() = secret("autoBackupPassword")
+        set(v) = setSecret("autoBackupPassword", v)
+
+    /** Days between automatic backups (1 or 7). */
+    var autoBackupDays: Int
+        get() = p.getInt("autoBackupDays", 1)
+        set(v) = p.edit().putInt("autoBackupDays", v).apply()
+
+    var autoBackupMaps: Boolean
+        get() = p.getBoolean("autoBackupMaps", false)
+        set(v) = p.edit().putBoolean("autoBackupMaps", v).apply()
+
+    var lastAutoBackupMs: Long
+        get() = p.getLong("lastAutoBackupMs", 0L)
+        set(v) = p.edit().putLong("lastAutoBackupMs", v).apply()
+
+    var lastAutoBackupError: String
+        get() = p.getString("lastAutoBackupError", "") ?: ""
+        set(v) = p.edit().putString("lastAutoBackupError", v).apply()
+
+    /** Wi-Fi channel plan sent to the probe: 0 focused (default), 1 balanced, 2 full sweep. */
+    var channelPlan: Int
+        get() = p.getInt("channelPlan", 0)
+        set(v) = p.edit().putInt("channelPlan", v).apply()
+
+    /** Local day the routine-place baseline started (0 = not yet). */
+    var baselineStartDay: Long
+        get() = p.getLong("baselineStartDay", 0L)
+        set(v) = p.edit().putLong("baselineStartDay", v).apply()
+
     /** Devices list as one-line rows instead of cards. */
     var devicesCompact: Boolean
         get() = p.getBoolean("devicesCompact", false)

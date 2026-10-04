@@ -21,8 +21,19 @@ typedef enum _retrovision_v1_Capability {
     retrovision_v1_Capability_CAPABILITY_BLE_EXT_ADV = 11, /* BLE 5 extended advertising */
     retrovision_v1_Capability_CAPABILITY_BLE_ACTIVE_SCAN = 12, /* can send SCAN_REQ to get scan responses */
     retrovision_v1_Capability_CAPABILITY_GNSS = 20, /* probe has its own GNSS receiver */
+    retrovision_v1_Capability_CAPABILITY_LINK_BLE = 30, /* can talk to the host over a BLE GATT link (1.2) */
+    retrovision_v1_Capability_CAPABILITY_LINK_WIFI = 31, /* can talk to the host over Wi-Fi/TCP (1.2) */
     retrovision_v1_Capability_CAPABILITY_CUSTOM = 100 /* emits CustomObservation, see schema_ids */
 } retrovision_v1_Capability;
+
+/* How the probe and the host talk. USB is always available; one wireless
+ transport can be configured (with SetLink, over USB) at a time. */
+typedef enum _retrovision_v1_LinkKind {
+    retrovision_v1_LinkKind_LINK_KIND_UNSPECIFIED = 0,
+    retrovision_v1_LinkKind_LINK_KIND_USB = 1, /* cable (USB-Serial-JTAG or USB-UART bridge); also "wireless off" */
+    retrovision_v1_LinkKind_LINK_KIND_BLE = 2, /* GATT, Nordic UART Service layout */
+    retrovision_v1_LinkKind_LINK_KIND_WIFI = 3 /* TCP over Wi-Fi (usually the phone's hotspot) */
+} retrovision_v1_LinkKind;
 
 typedef enum _retrovision_v1_Sensor {
     retrovision_v1_Sensor_SENSOR_UNSPECIFIED = 0,
@@ -97,6 +108,7 @@ typedef enum _retrovision_v1_LogLevel {
 
 /* Struct definitions */
 typedef PB_BYTES_ARRAY_T(8) retrovision_v1_Hello_hardware_id_t;
+typedef PB_BYTES_ARRAY_T(16) retrovision_v1_Hello_auth_nonce_t;
 /* First frame the probe sends after the transport opens, and again every
  2 s until it receives a HelloAck. */
 typedef struct _retrovision_v1_Hello {
@@ -120,6 +132,17 @@ typedef struct _retrovision_v1_Hello {
     /* For CAPABILITY_CUSTOM: schema ids this probe may emit. */
     pb_size_t custom_schema_ids_count;
     char custom_schema_ids[4][48];
+    /* 1.2 — transport this Hello travels on. */
+    retrovision_v1_LinkKind link;
+    /* 1.2 — random per-Hello challenge (16 bytes). Present on wireless links:
+ the probe streams nothing until a HelloAck carries a valid auth_mac. */
+    retrovision_v1_Hello_auth_nonce_t auth_nonce;
+    /* 1.2 — user-given probe name (set with SetLink), max 24 bytes. */
+    char name[24];
+    /* 1.2 — wireless mode stored on the probe. A probe in BLE link mode does not
+ scan BLE (its Bluetooth radio carries the link); in WIFI mode it does not
+ sniff Wi-Fi. USB = wireless off. */
+    retrovision_v1_LinkKind configured_link;
 } retrovision_v1_Hello;
 
 typedef struct _retrovision_v1_TimeSyncRequest {
@@ -222,6 +245,18 @@ typedef struct _retrovision_v1_Observation {
     } detail;
 } retrovision_v1_Observation;
 
+typedef PB_BYTES_ARRAY_T(32) retrovision_v1_SetLink_key_t;
+/* Stores the wireless link settings in the probe and reboots it.
+ Only accepted on the USB link: pairing requires physical access to the probe. */
+typedef struct _retrovision_v1_SetLink {
+    retrovision_v1_LinkKind mode; /* USB = wireless off */
+    char name[24]; /* shown in the app and in the BLE advertised name */
+    retrovision_v1_SetLink_key_t key; /* pairing key, 16..32 bytes; required for BLE and WIFI */
+    char wifi_ssid[32]; /* WIFI: network to join (e.g. the phone's hotspot) */
+    char wifi_password[64];
+    uint32_t host_port; /* WIFI: TCP port of the app, default 7878 */
+} retrovision_v1_SetLink;
+
 typedef struct _retrovision_v1_GetStatus {
     char dummy_field;
 } retrovision_v1_GetStatus;
@@ -301,6 +336,7 @@ typedef struct _retrovision_v1_Config {
     retrovision_v1_LedMode led;
 } retrovision_v1_Config;
 
+typedef PB_BYTES_ARRAY_T(32) retrovision_v1_HelloAck_auth_mac_t;
 typedef struct _retrovision_v1_HelloAck {
     uint32_t protocol_major;
     uint32_t protocol_minor;
@@ -311,6 +347,10 @@ typedef struct _retrovision_v1_HelloAck {
     /* Optional initial configuration; equivalent to an immediate SetConfig. */
     bool has_config;
     retrovision_v1_Config config;
+    /* 1.2 — HMAC-SHA256(key, "RVAUTH1" || Hello.auth_nonce || boot_id as 4 bytes LE),
+ truncated is NOT allowed (full 32 bytes). key is the pairing key set with
+ SetLink. Required on wireless links; ignored over USB. */
+    retrovision_v1_HelloAck_auth_mac_t auth_mac;
 } retrovision_v1_HelloAck;
 
 typedef struct _retrovision_v1_Command {
@@ -320,6 +360,7 @@ typedef struct _retrovision_v1_Command {
         retrovision_v1_TimeSyncRequest time_sync;
         retrovision_v1_GetStatus get_status;
         retrovision_v1_Reboot reboot;
+        retrovision_v1_SetLink set_link; /* 1.2, accepted only over USB */
     } kind;
 } retrovision_v1_Command;
 
@@ -338,6 +379,8 @@ typedef struct _retrovision_v1_Status {
  the host is not draining fast enough or the dedup windows are too small. */
     uint64_t obs_dropped;
     uint64_t rx_frames_bad; /* host->probe frames that failed COBS/CRC/decode */
+    retrovision_v1_LinkKind link; /* 1.2 — transport of this session */
+    int32_t link_rssi; /* 1.2 — WIFI: RSSI of the joined AP (dBm), 0 if n/a */
 } retrovision_v1_Status;
 
 typedef struct _retrovision_v1_Log {
@@ -376,6 +419,10 @@ extern "C" {
 #define _retrovision_v1_Capability_MAX retrovision_v1_Capability_CAPABILITY_CUSTOM
 #define _retrovision_v1_Capability_ARRAYSIZE ((retrovision_v1_Capability)(retrovision_v1_Capability_CAPABILITY_CUSTOM+1))
 
+#define _retrovision_v1_LinkKind_MIN retrovision_v1_LinkKind_LINK_KIND_UNSPECIFIED
+#define _retrovision_v1_LinkKind_MAX retrovision_v1_LinkKind_LINK_KIND_WIFI
+#define _retrovision_v1_LinkKind_ARRAYSIZE ((retrovision_v1_LinkKind)(retrovision_v1_LinkKind_LINK_KIND_WIFI+1))
+
 #define _retrovision_v1_Sensor_MIN retrovision_v1_Sensor_SENSOR_UNSPECIFIED
 #define _retrovision_v1_Sensor_MAX retrovision_v1_Sensor_SENSOR_CUSTOM
 #define _retrovision_v1_Sensor_ARRAYSIZE ((retrovision_v1_Sensor)(retrovision_v1_Sensor_SENSOR_CUSTOM+1))
@@ -410,6 +457,8 @@ extern "C" {
 
 
 #define retrovision_v1_Hello_capabilities_ENUMTYPE retrovision_v1_Capability
+#define retrovision_v1_Hello_link_ENUMTYPE retrovision_v1_LinkKind
+#define retrovision_v1_Hello_configured_link_ENUMTYPE retrovision_v1_LinkKind
 
 
 
@@ -424,6 +473,8 @@ extern "C" {
 
 
 
+#define retrovision_v1_SetLink_mode_ENUMTYPE retrovision_v1_LinkKind
+
 
 
 #define retrovision_v1_CommandAck_result_ENUMTYPE retrovision_v1_AckResult
@@ -436,14 +487,15 @@ extern "C" {
 
 #define retrovision_v1_RadioSchedule_mode_ENUMTYPE retrovision_v1_RadioMode
 
+#define retrovision_v1_Status_link_ENUMTYPE retrovision_v1_LinkKind
 
 #define retrovision_v1_Log_level_ENUMTYPE retrovision_v1_LogLevel
 
 
 /* Initializer values for message structs */
 #define retrovision_v1_Envelope_init_default     {0, 0, {retrovision_v1_Hello_init_default}}
-#define retrovision_v1_Hello_init_default        {0, 0, "", "", {0, {0}}, 0, 0, {_retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN}, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {"", "", "", ""}}
-#define retrovision_v1_HelloAck_init_default     {0, 0, 0, 0, "", false, retrovision_v1_Config_init_default}
+#define retrovision_v1_Hello_init_default        {0, 0, "", "", {0, {0}}, 0, 0, {_retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN}, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {"", "", "", ""}, _retrovision_v1_LinkKind_MIN, {0, {0}}, "", _retrovision_v1_LinkKind_MIN}
+#define retrovision_v1_HelloAck_init_default     {0, 0, 0, 0, "", false, retrovision_v1_Config_init_default, {0, {0}}}
 #define retrovision_v1_TimeSyncRequest_init_default {0}
 #define retrovision_v1_TimeSyncResponse_init_default {0, 0}
 #define retrovision_v1_Observation_init_default  {0, _retrovision_v1_Sensor_MIN, 0, 0, 0, {retrovision_v1_WifiFrame_init_default}}
@@ -452,6 +504,7 @@ extern "C" {
 #define retrovision_v1_GnssFix_init_default      {0, 0, 0, 0, 0, 0}
 #define retrovision_v1_CustomObservation_init_default {"", {0, {0}}}
 #define retrovision_v1_Command_init_default      {0, {retrovision_v1_Config_init_default}}
+#define retrovision_v1_SetLink_init_default      {_retrovision_v1_LinkKind_MIN, "", {0, {0}}, "", "", 0}
 #define retrovision_v1_GetStatus_init_default    {0}
 #define retrovision_v1_Reboot_init_default       {0}
 #define retrovision_v1_CommandAck_init_default   {0, _retrovision_v1_AckResult_MIN, ""}
@@ -460,11 +513,11 @@ extern "C" {
 #define retrovision_v1_WifiConfig_init_default   {0, 0, {retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default, retrovision_v1_ChannelDwell_init_default}, 0, {_retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN}, 0, 0, 0, 0}
 #define retrovision_v1_BleConfig_init_default    {0, 0, 0, 0, 0, 0, 0}
 #define retrovision_v1_RadioSchedule_init_default {_retrovision_v1_RadioMode_MIN, 0, 0}
-#define retrovision_v1_Status_init_default       {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define retrovision_v1_Status_init_default       {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, _retrovision_v1_LinkKind_MIN, 0}
 #define retrovision_v1_Log_init_default          {0, _retrovision_v1_LogLevel_MIN, "", ""}
 #define retrovision_v1_Envelope_init_zero        {0, 0, {retrovision_v1_Hello_init_zero}}
-#define retrovision_v1_Hello_init_zero           {0, 0, "", "", {0, {0}}, 0, 0, {_retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN}, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {"", "", "", ""}}
-#define retrovision_v1_HelloAck_init_zero        {0, 0, 0, 0, "", false, retrovision_v1_Config_init_zero}
+#define retrovision_v1_Hello_init_zero           {0, 0, "", "", {0, {0}}, 0, 0, {_retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN, _retrovision_v1_Capability_MIN}, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {"", "", "", ""}, _retrovision_v1_LinkKind_MIN, {0, {0}}, "", _retrovision_v1_LinkKind_MIN}
+#define retrovision_v1_HelloAck_init_zero        {0, 0, 0, 0, "", false, retrovision_v1_Config_init_zero, {0, {0}}}
 #define retrovision_v1_TimeSyncRequest_init_zero {0}
 #define retrovision_v1_TimeSyncResponse_init_zero {0, 0}
 #define retrovision_v1_Observation_init_zero     {0, _retrovision_v1_Sensor_MIN, 0, 0, 0, {retrovision_v1_WifiFrame_init_zero}}
@@ -473,6 +526,7 @@ extern "C" {
 #define retrovision_v1_GnssFix_init_zero         {0, 0, 0, 0, 0, 0}
 #define retrovision_v1_CustomObservation_init_zero {"", {0, {0}}}
 #define retrovision_v1_Command_init_zero         {0, {retrovision_v1_Config_init_zero}}
+#define retrovision_v1_SetLink_init_zero         {_retrovision_v1_LinkKind_MIN, "", {0, {0}}, "", "", 0}
 #define retrovision_v1_GetStatus_init_zero       {0}
 #define retrovision_v1_Reboot_init_zero          {0}
 #define retrovision_v1_CommandAck_init_zero      {0, _retrovision_v1_AckResult_MIN, ""}
@@ -481,7 +535,7 @@ extern "C" {
 #define retrovision_v1_WifiConfig_init_zero      {0, 0, {retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero, retrovision_v1_ChannelDwell_init_zero}, 0, {_retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN, _retrovision_v1_WifiFrameType_MIN}, 0, 0, 0, 0}
 #define retrovision_v1_BleConfig_init_zero       {0, 0, 0, 0, 0, 0, 0}
 #define retrovision_v1_RadioSchedule_init_zero   {_retrovision_v1_RadioMode_MIN, 0, 0}
-#define retrovision_v1_Status_init_zero          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define retrovision_v1_Status_init_zero          {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, _retrovision_v1_LinkKind_MIN, 0}
 #define retrovision_v1_Log_init_zero             {0, _retrovision_v1_LogLevel_MIN, "", ""}
 
 /* Field tags (for use in manual encoding/decoding) */
@@ -495,6 +549,10 @@ extern "C" {
 #define retrovision_v1_Hello_max_rx_frame_tag    8
 #define retrovision_v1_Hello_supported_wifi_channels_tag 9
 #define retrovision_v1_Hello_custom_schema_ids_tag 10
+#define retrovision_v1_Hello_link_tag            11
+#define retrovision_v1_Hello_auth_nonce_tag      12
+#define retrovision_v1_Hello_name_tag            13
+#define retrovision_v1_Hello_configured_link_tag 14
 #define retrovision_v1_TimeSyncRequest_host_t1_us_tag 1
 #define retrovision_v1_TimeSyncResponse_host_t1_us_tag 1
 #define retrovision_v1_TimeSyncResponse_probe_t2_us_tag 2
@@ -532,6 +590,12 @@ extern "C" {
 #define retrovision_v1_Observation_ble_tag       11
 #define retrovision_v1_Observation_gnss_tag      12
 #define retrovision_v1_Observation_custom_tag    100
+#define retrovision_v1_SetLink_mode_tag          1
+#define retrovision_v1_SetLink_name_tag          2
+#define retrovision_v1_SetLink_key_tag           3
+#define retrovision_v1_SetLink_wifi_ssid_tag     4
+#define retrovision_v1_SetLink_wifi_password_tag 5
+#define retrovision_v1_SetLink_host_port_tag     6
 #define retrovision_v1_Reboot_into_bootloader_tag 1
 #define retrovision_v1_CommandAck_command_seq_tag 1
 #define retrovision_v1_CommandAck_result_tag     2
@@ -566,10 +630,12 @@ extern "C" {
 #define retrovision_v1_HelloAck_accepted_tag     4
 #define retrovision_v1_HelloAck_reject_reason_tag 5
 #define retrovision_v1_HelloAck_config_tag       6
+#define retrovision_v1_HelloAck_auth_mac_tag     7
 #define retrovision_v1_Command_set_config_tag    1
 #define retrovision_v1_Command_time_sync_tag     2
 #define retrovision_v1_Command_get_status_tag    3
 #define retrovision_v1_Command_reboot_tag        4
+#define retrovision_v1_Command_set_link_tag      5
 #define retrovision_v1_Status_probe_ts_us_tag    1
 #define retrovision_v1_Status_free_heap_bytes_tag 2
 #define retrovision_v1_Status_min_free_heap_bytes_tag 3
@@ -581,6 +647,8 @@ extern "C" {
 #define retrovision_v1_Status_ble_obs_sent_tag   13
 #define retrovision_v1_Status_obs_dropped_tag    14
 #define retrovision_v1_Status_rx_frames_bad_tag  15
+#define retrovision_v1_Status_link_tag           16
+#define retrovision_v1_Status_link_rssi_tag      17
 #define retrovision_v1_Log_probe_ts_us_tag       1
 #define retrovision_v1_Log_level_tag             2
 #define retrovision_v1_Log_tag_tag               3
@@ -627,7 +695,11 @@ X(a, STATIC,   SINGULAR, FIXED32,  boot_id,           6) \
 X(a, STATIC,   REPEATED, UENUM,    capabilities,      7) \
 X(a, STATIC,   SINGULAR, UINT32,   max_rx_frame,      8) \
 X(a, STATIC,   REPEATED, UINT32,   supported_wifi_channels,   9) \
-X(a, STATIC,   REPEATED, STRING,   custom_schema_ids,  10)
+X(a, STATIC,   REPEATED, STRING,   custom_schema_ids,  10) \
+X(a, STATIC,   SINGULAR, UENUM,    link,             11) \
+X(a, STATIC,   SINGULAR, BYTES,    auth_nonce,       12) \
+X(a, STATIC,   SINGULAR, STRING,   name,             13) \
+X(a, STATIC,   SINGULAR, UENUM,    configured_link,  14)
 #define retrovision_v1_Hello_CALLBACK NULL
 #define retrovision_v1_Hello_DEFAULT NULL
 
@@ -637,7 +709,8 @@ X(a, STATIC,   SINGULAR, UINT32,   protocol_minor,    2) \
 X(a, STATIC,   SINGULAR, FIXED32,  boot_id,           3) \
 X(a, STATIC,   SINGULAR, BOOL,     accepted,          4) \
 X(a, STATIC,   SINGULAR, STRING,   reject_reason,     5) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  config,            6)
+X(a, STATIC,   OPTIONAL, MESSAGE,  config,            6) \
+X(a, STATIC,   SINGULAR, BYTES,    auth_mac,          7)
 #define retrovision_v1_HelloAck_CALLBACK NULL
 #define retrovision_v1_HelloAck_DEFAULT NULL
 #define retrovision_v1_HelloAck_config_MSGTYPE retrovision_v1_Config
@@ -715,13 +788,25 @@ X(a, STATIC,   SINGULAR, BYTES,    payload,           2)
 X(a, STATIC,   ONEOF,    MESSAGE,  (kind,set_config,kind.set_config),   1) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (kind,time_sync,kind.time_sync),   2) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (kind,get_status,kind.get_status),   3) \
-X(a, STATIC,   ONEOF,    MESSAGE,  (kind,reboot,kind.reboot),   4)
+X(a, STATIC,   ONEOF,    MESSAGE,  (kind,reboot,kind.reboot),   4) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (kind,set_link,kind.set_link),   5)
 #define retrovision_v1_Command_CALLBACK NULL
 #define retrovision_v1_Command_DEFAULT NULL
 #define retrovision_v1_Command_kind_set_config_MSGTYPE retrovision_v1_Config
 #define retrovision_v1_Command_kind_time_sync_MSGTYPE retrovision_v1_TimeSyncRequest
 #define retrovision_v1_Command_kind_get_status_MSGTYPE retrovision_v1_GetStatus
 #define retrovision_v1_Command_kind_reboot_MSGTYPE retrovision_v1_Reboot
+#define retrovision_v1_Command_kind_set_link_MSGTYPE retrovision_v1_SetLink
+
+#define retrovision_v1_SetLink_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UENUM,    mode,              1) \
+X(a, STATIC,   SINGULAR, STRING,   name,              2) \
+X(a, STATIC,   SINGULAR, BYTES,    key,               3) \
+X(a, STATIC,   SINGULAR, STRING,   wifi_ssid,         4) \
+X(a, STATIC,   SINGULAR, STRING,   wifi_password,     5) \
+X(a, STATIC,   SINGULAR, UINT32,   host_port,         6)
+#define retrovision_v1_SetLink_CALLBACK NULL
+#define retrovision_v1_SetLink_DEFAULT NULL
 
 #define retrovision_v1_GetStatus_FIELDLIST(X, a) \
 
@@ -799,7 +884,9 @@ X(a, STATIC,   SINGULAR, UINT64,   wifi_obs_sent,    11) \
 X(a, STATIC,   SINGULAR, UINT64,   ble_adv_seen,     12) \
 X(a, STATIC,   SINGULAR, UINT64,   ble_obs_sent,     13) \
 X(a, STATIC,   SINGULAR, UINT64,   obs_dropped,      14) \
-X(a, STATIC,   SINGULAR, UINT64,   rx_frames_bad,    15)
+X(a, STATIC,   SINGULAR, UINT64,   rx_frames_bad,    15) \
+X(a, STATIC,   SINGULAR, UENUM,    link,             16) \
+X(a, STATIC,   SINGULAR, SINT32,   link_rssi,        17)
 #define retrovision_v1_Status_CALLBACK NULL
 #define retrovision_v1_Status_DEFAULT NULL
 
@@ -822,6 +909,7 @@ extern const pb_msgdesc_t retrovision_v1_BleAdvertisement_msg;
 extern const pb_msgdesc_t retrovision_v1_GnssFix_msg;
 extern const pb_msgdesc_t retrovision_v1_CustomObservation_msg;
 extern const pb_msgdesc_t retrovision_v1_Command_msg;
+extern const pb_msgdesc_t retrovision_v1_SetLink_msg;
 extern const pb_msgdesc_t retrovision_v1_GetStatus_msg;
 extern const pb_msgdesc_t retrovision_v1_Reboot_msg;
 extern const pb_msgdesc_t retrovision_v1_CommandAck_msg;
@@ -845,6 +933,7 @@ extern const pb_msgdesc_t retrovision_v1_Log_msg;
 #define retrovision_v1_GnssFix_fields &retrovision_v1_GnssFix_msg
 #define retrovision_v1_CustomObservation_fields &retrovision_v1_CustomObservation_msg
 #define retrovision_v1_Command_fields &retrovision_v1_Command_msg
+#define retrovision_v1_SetLink_fields &retrovision_v1_SetLink_msg
 #define retrovision_v1_GetStatus_fields &retrovision_v1_GetStatus_msg
 #define retrovision_v1_Reboot_fields &retrovision_v1_Reboot_msg
 #define retrovision_v1_CommandAck_fields &retrovision_v1_CommandAck_msg
@@ -865,16 +954,17 @@ extern const pb_msgdesc_t retrovision_v1_Log_msg;
 #define retrovision_v1_Command_size              1004
 #define retrovision_v1_Config_size               1001
 #define retrovision_v1_CustomObservation_size    564
-#define retrovision_v1_Envelope_size             1130
+#define retrovision_v1_Envelope_size             1164
 #define retrovision_v1_GetStatus_size            0
 #define retrovision_v1_GnssFix_size              44
-#define retrovision_v1_HelloAck_size             1120
-#define retrovision_v1_Hello_size                727
+#define retrovision_v1_HelloAck_size             1154
+#define retrovision_v1_Hello_size                774
 #define retrovision_v1_Log_size                  160
 #define retrovision_v1_Observation_size          593
 #define retrovision_v1_RadioSchedule_size        14
 #define retrovision_v1_Reboot_size               2
-#define retrovision_v1_Status_size               100
+#define retrovision_v1_SetLink_size              165
+#define retrovision_v1_Status_size               110
 #define retrovision_v1_TimeSyncRequest_size      11
 #define retrovision_v1_TimeSyncResponse_size     22
 #define retrovision_v1_WifiConfig_size           942

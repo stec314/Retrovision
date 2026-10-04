@@ -1,21 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 stec314 and the Retrovision contributors
+// Multi-transport link core: framing + protobuf, shared TX, per-transport RX decoders.
 #include "link.h"
 
-#include "sdkconfig.h"
-#if CONFIG_IDF_TARGET_ESP32
-// Classic ESP32: UART0 behind the board's USB-UART bridge (CP210x / CH340).
-#include "driver/uart.h"
-#define RV_UART UART_NUM_0
-#define RV_UART_BAUD 921600
-#else
-#include "driver/usb_serial_jtag.h"
-#endif
-#include "esp_check.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
+#include "link_cfg.h"
 #include "pb_decode.h"
 #include "pb_encode.h"
 #include "rv_framing.h"
@@ -26,49 +16,44 @@ static SemaphoreHandle_t s_tx_lock;
 static uint32_t s_seq;
 static rv_link_rx_cb_t s_on_envelope;
 static volatile uint32_t s_rx_bad_pb;
-// 32-bit ms stamp: a 64-bit volatile can tear between tasks on a 32-bit core. Wraps after
-// 49 days; unsigned subtraction keeps the age right across the wrap.
-static volatile uint32_t s_last_rx_ms;
+static volatile rv_transport_t s_active = RV_T_USB;
+static const rv_transport_ops_t *s_ops[RV_T_COUNT];
 
 // TX scratch, protected by s_tx_lock.
 static uint8_t s_tx_pb[RV_MAX_ENVELOPE];
 static uint8_t s_tx_frame[RV_FRAME_BUF_SIZE];
 
-// RX state, owned by the rx task.
-static rv_frame_decoder_t s_dec;
-static retrovision_v1_Envelope s_rx_env;
+// RX state, one per transport (each fed from a single task).
+static rv_frame_decoder_t s_dec[RV_T_COUNT];
+static retrovision_v1_Envelope s_rx_env[RV_T_COUNT];
 
-static void rx_task(void *arg)
+void rv_link_register(rv_transport_t t, const rv_transport_ops_t *ops)
 {
-    uint8_t chunk[128];
-    rv_frame_decoder_init(&s_dec);
-    for (;;) {
-#if CONFIG_IDF_TARGET_ESP32
-        int n = uart_read_bytes(RV_UART, chunk, sizeof chunk, pdMS_TO_TICKS(20));
-        if (n > 0) {
-            s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    rv_frame_decoder_init(&s_dec[t]);
+    s_ops[t] = ops;
+}
+
+void rv_link_reset_rx(rv_transport_t t)
+{
+    rv_frame_decoder_init(&s_dec[t]);
+}
+
+void rv_link_feed(rv_transport_t t, const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        const uint8_t *env;
+        size_t n;
+        if (rv_frame_decoder_feed(&s_dec[t], data[i], &env, &n) != RV_FRAME_OK) {
+            continue;
         }
-#else
-        int n = usb_serial_jtag_read_bytes(chunk, sizeof chunk, pdMS_TO_TICKS(100));
-        if (n > 0) {
-            s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        s_rx_env[t] = (retrovision_v1_Envelope)retrovision_v1_Envelope_init_zero;
+        pb_istream_t is = pb_istream_from_buffer(env, n);
+        if (!pb_decode(&is, retrovision_v1_Envelope_fields, &s_rx_env[t])) {
+            s_rx_bad_pb++;
+            ESP_LOGW(TAG, "bad envelope on %d: %s", t, PB_GET_ERROR(&is));
+            continue;
         }
-#endif
-        for (int i = 0; i < n; i++) {
-            const uint8_t *env;
-            size_t len;
-            if (rv_frame_decoder_feed(&s_dec, chunk[i], &env, &len) != RV_FRAME_OK) {
-                continue;
-            }
-            s_rx_env = (retrovision_v1_Envelope)retrovision_v1_Envelope_init_zero;
-            pb_istream_t is = pb_istream_from_buffer(env, len);
-            if (!pb_decode(&is, retrovision_v1_Envelope_fields, &s_rx_env)) {
-                s_rx_bad_pb++;
-                ESP_LOGW(TAG, "bad envelope: %s", PB_GET_ERROR(&is));
-                continue;
-            }
-            s_on_envelope(&s_rx_env);
-        }
+        s_on_envelope(&s_rx_env[t], t);
     }
 }
 
@@ -76,31 +61,17 @@ void rv_link_init(rv_link_rx_cb_t on_envelope)
 {
     s_on_envelope = on_envelope;
     s_tx_lock = xSemaphoreCreateMutex();
-#if CONFIG_IDF_TARGET_ESP32
-    const uart_config_t ucfg = {
-        .baud_rate = RV_UART_BAUD,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-    ESP_ERROR_CHECK(uart_driver_install(RV_UART, 2048, 8192, 0, NULL, 0));
-    ESP_ERROR_CHECK(uart_param_config(RV_UART, &ucfg));
-    ESP_ERROR_CHECK(uart_set_pin(RV_UART, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
-    s_last_rx_ms = (uint32_t)(esp_timer_get_time() / 1000);
-#else
-    usb_serial_jtag_driver_config_t cfg = {
-        .rx_buffer_size = 2048,
-        .tx_buffer_size = 8192,
-    };
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
-#endif
-    xTaskCreatePinnedToCore(rx_task, "rv_link_rx", 4096, NULL, 10, NULL, tskNO_AFFINITY);
+    rv_link_usb_init();
+    // The BLE transport registers itself from the NimBLE init path (see capture/ble_scanner),
+    // and only when the stored link mode is BLE.
 }
 
-bool rv_link_send(retrovision_v1_Envelope *env, TickType_t timeout)
+bool rv_link_send_to(rv_transport_t t, retrovision_v1_Envelope *env, TickType_t timeout)
 {
+    const rv_transport_ops_t *ops = s_ops[t];
+    if (!ops || !ops->connected()) {
+        return false;
+    }
     if (xSemaphoreTake(s_tx_lock, timeout) != pdTRUE) {
         return false;
     }
@@ -110,52 +81,66 @@ bool rv_link_send(retrovision_v1_Envelope *env, TickType_t timeout)
         env->seq = s_seq = 1; // wrap: 0 is never used
     }
     pb_ostream_t os = pb_ostream_from_buffer(s_tx_pb, sizeof s_tx_pb);
-    if (!pb_encode(&os, retrovision_v1_Envelope_fields, env)) {
-        goto out; // cannot happen with bounded fields; logged by caller's counters
+    if (pb_encode(&os, retrovision_v1_Envelope_fields, env)) {
+        size_t n = rv_frame_encode(s_tx_pb, os.bytes_written, s_tx_frame, sizeof s_tx_frame);
+        if (n > 0) {
+            ok = ops->write(s_tx_frame, n, timeout);
+        }
     }
-    size_t n = rv_frame_encode(s_tx_pb, os.bytes_written, s_tx_frame, sizeof s_tx_frame);
-    if (n == 0) {
-        goto out;
-    }
-    // The driver queues into a byte ring buffer; a send either fits entirely
-    // within `timeout` or returns 0, so frames are not cut in half here.
-    // (If they ever were, the host decoder resyncs on the next delimiter.)
-#if CONFIG_IDF_TARGET_ESP32
-    // Blocks until the whole frame is in the 8 KB TX ring (drains at ~90 KB/s).
-    ok = uart_write_bytes(RV_UART, s_tx_frame, n) == (int)n;
-#else
-    ok = usb_serial_jtag_write_bytes(s_tx_frame, n, timeout) == (int)n;
-#endif
-out:
     xSemaphoreGive(s_tx_lock);
     return ok;
 }
 
+bool rv_link_send(retrovision_v1_Envelope *env, TickType_t timeout)
+{
+    return rv_link_send_to(s_active, env, timeout);
+}
+
+void rv_link_set_active(rv_transport_t t)
+{
+    if (t != s_active) {
+        ESP_LOGI(TAG, "active link: %d", t);
+    }
+    s_active = t;
+}
+
+rv_transport_t rv_link_active(void)
+{
+    return s_active;
+}
+
+bool rv_link_connected(rv_transport_t t)
+{
+    return s_ops[t] && s_ops[t]->connected();
+}
+
 bool rv_link_host_connected(void)
 {
-    // The host sends time-sync requests every 30 s while a session is up, so silence for
-    // 2 minutes means it is gone -- or it reopened the port and lost our session (the USB
-    // cable never left, so the USB layer still says "connected"). Either way: go back to
-    // the handshake so the next host hears a Hello instead of waiting forever.
-    const bool talking = (uint32_t)(esp_timer_get_time() / 1000) - s_last_rx_ms < 120u * 1000u;
-#if CONFIG_IDF_TARGET_ESP32
-    // A UART cannot tell whether anyone listens: silence is the only signal.
-    return talking;
-#else
-    return talking && usb_serial_jtag_is_connected();
-#endif
+    return rv_link_connected(s_active);
+}
+
+retrovision_v1_LinkKind rv_link_kind(rv_transport_t t)
+{
+    switch (t) {
+    case RV_T_BLE: return retrovision_v1_LinkKind_LINK_KIND_BLE;
+    case RV_T_TCP: return retrovision_v1_LinkKind_LINK_KIND_WIFI;
+    default: return retrovision_v1_LinkKind_LINK_KIND_USB;
+    }
 }
 
 uint32_t rv_link_rx_bad(void)
 {
-    return s_dec.bad_frames + s_rx_bad_pb;
+    uint32_t n = s_rx_bad_pb;
+    for (int t = 0; t < RV_T_COUNT; t++) {
+        n += s_dec[t].bad_frames;
+    }
+    return n;
 }
 
 void rv_link_flush(TickType_t timeout)
 {
-#if CONFIG_IDF_TARGET_ESP32
-    uart_wait_tx_done(RV_UART, timeout);
-#else
-    usb_serial_jtag_wait_tx_done(timeout);
-#endif
+    const rv_transport_ops_t *ops = s_ops[s_active];
+    if (ops && ops->flush) {
+        ops->flush(timeout);
+    }
 }

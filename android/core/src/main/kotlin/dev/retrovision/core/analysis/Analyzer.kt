@@ -136,6 +136,8 @@ sealed class Reason {
      * would a follower that never left the area with you. Not enough movement to tell: no alert.
      */
     data class OneAreaOnly(val extentM: Double) : Reason()
+    /** An Apple device that said its owner was driving (Apple Nearby Info): it is in a vehicle. Information only. */
+    object ReportsDriving : Reason()
     /** Beacon uptime: running for [days] without a reboot. Typical of a fixed router; information only. */
     data class ApUptime(val days: Double) : Reason()
 }
@@ -209,12 +211,16 @@ class EntityReport(
     val rawScore: Double = score,
     /** Caps that lowered the score, in the order applied. */
     val caps: List<ScoreCap> = emptyList(),
+    /** Model from its advertisement (AirPods/Beats, Fast Pair accessory), when decoded. */
+    val model: String? = null,
+    /** Apple device: what it last said it was doing (Nearby Info). */
+    val appleActivity: dev.retrovision.core.identity.PayloadDecoder.AppleActivity? = null,
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
-        memberIds, htProfile, addressLinks, apUptimeDays, visits, reasonWeights, rawScore, caps,
+        memberIds, htProfile, addressLinks, apUptimeDays, visits, reasonWeights, rawScore, caps, model, appleActivity,
     )
 }
 
@@ -666,6 +672,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             if (effPlaces >= 2) score += 0.15
         }
         for (n in notable) if (n.kind != NotableKind.DRONE) reasons += Reason.Notable(n.name, n.kind)
+        if (hints.drivingSeen) reasons += Reason.ReportsDriving
 
         val rawScore = score
         val caps = ArrayList<ScoreCap>()
@@ -744,10 +751,17 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             bleCompanyId = companyId,
             mobileAp = mobileAp,
             track = track,
-            category = if (drone) DeviceCategory.DRONE else when (kind) {
-                EntityKind.WIFI_AP -> DeviceCategories.forWifiAp(mobileAp)
-                EntityKind.WIFI_CLIENT -> DeviceCategory.WIFI_CLIENT
-                else -> DeviceCategories.forBle(tk, tk != null && TrackerClassifier.isTag(tk), hints)
+            category = when {
+                drone -> DeviceCategory.DRONE
+                // A catalogue match on what it says about itself beats the generic guess.
+                notable.any { it.kind == NotableKind.VEHICLE } -> DeviceCategory.VEHICLE
+                kind != EntityKind.WIFI_AP && notable.any { it.kind == NotableKind.FINDER } -> DeviceCategory.TRACKER
+                kind == EntityKind.WIFI_AP && notable.any { it.kind == NotableKind.HOTSPOT } -> DeviceCategory.HOTSPOT
+                else -> when (kind) {
+                    EntityKind.WIFI_AP -> DeviceCategories.forWifiAp(mobileAp)
+                    EntityKind.WIFI_CLIENT -> DeviceCategory.WIFI_CLIENT
+                    else -> DeviceCategories.forBle(tk, tk != null && TrackerClassifier.isTag(tk), hints)
+                }
             },
             macTrust = trust,
             probedSsids = probed,
@@ -755,6 +769,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             wildcardProbes = wildcard,
             joinAttempts = joins.values.sortedByDescending { it.lastMs },
             bleName = hints.name,
+            model = hints.model,
+            appleActivity = hints.appleActivity,
             unfamiliarPlaces = nUnfamiliar,
             notable = notable.toList(),
             droneId = droneId,

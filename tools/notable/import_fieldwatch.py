@@ -11,7 +11,13 @@ import json
 import sys
 
 OUT = "android/core/src/main/resources/dev/retrovision/core/identity/notable-signatures.tsv"
-KEEP = {"HACKING", "SURVEILLANCE", "LAW_ENFORCEMENT", "GLASSES", "DRONE"}
+KEEP = {"HACKING", "SURVEILLANCE", "LAW_ENFORCEMENT", "GLASSES", "DRONE",
+        # Identification only (no attention): what a follower may carry or drive.
+        "VEHICLE", "FINDER", "MESH", "PHONE"}
+# Fieldwatch kind -> Retrovision NotableKind where the names differ.
+RENAME = {"PHONE": "HOTSPOT"}
+# Kept kinds that are too broad: every iPhone/Android/Windows device, fixed LoRaWAN gateways.
+SKIP = {"Apple Device", "Fast Pair", "Google", "Microsoft Device", "Helium", "RAK WisGate", "SenseCAP"}
 RECORDERS = {"Bee Pendant", "Fieldy", "Friend Pendant", "Limitless Pendant", "Omi", "Plaud Note"}
 RULES = {"NAME_GLOB", "NAME_CONTAINS", "OUI", "SERVICE_UUID", "MANUFACTURER_ID",
          "MANUFACTURER_DATA", "SERVICE_DATA", "VENDOR_IE_OUI", "MAC_PREFIX"}
@@ -27,14 +33,16 @@ def main(src):
         "# Retrovision notable-device signatures.",
         "# Derived from the Fieldwatch signature catalog v%s (c) 2026 Off Grid Pete LLC, MIT License," % d["catalogVersion"],
         "# https://github.com/OffGridPete/Fieldwatch  -- subset: hacking tools, surveillance, law-enforcement",
-        "# gear, smart glasses, recording pendants, drones. Regenerate with tools/notable/import_fieldwatch.py.",
+        "# gear, smart glasses, recording pendants, drones; and, for identification only, vehicles (infotainment,",
+        "# fleet telematics, BLE tyre sensors), item finders, off-grid mesh radios and phone hotspots.",
+        "# Regenerate with tools/notable/import_fieldwatch.py.",
         "# F<TAB>id<TAB>name<TAB>kind<TAB>note ; R<TAB>rule<TAB>radio(WIFI|BLE|*)<TAB>text<TAB>companyId<TAB>dataPrefixHex",
     ]
     for f in d["fleets"]:
         kind = "RECORDER" if f["name"] in RECORDERS else f.get("kind")
-        if kind not in KEEP | {"RECORDER"} or not f.get("enabled", True):
+        if kind not in KEEP | {"RECORDER"} or f["name"] in SKIP or not f.get("enabled", True):
             continue
-        out.append("\t".join(["F", f["id"], f["name"], kind, clean(f.get("attentionNote") or f.get("notes"))]))
+        out.append("\t".join(["F", f["id"], f["name"], RENAME.get(kind, kind), clean(f.get("attentionNote") or f.get("notes"))]))
         for r in f["rules"]:
             if r.get("enabled", True) and r["kind"] in RULES:
                 out.append("\t".join(["R", r["kind"], r["radio"] or "*", clean(r["text"]), str(r["companyId"]), r["dataPrefixHex"]]))

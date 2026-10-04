@@ -2,6 +2,7 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 package dev.retrovision.app.ui
 
+import dev.retrovision.proto.v1.LinkKind
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Place
@@ -530,9 +531,11 @@ fun ProbeScreen(modifier: Modifier) {
     }
 
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(Texts.tr("Probe firmware", "Firmware della sonda"), style = MaterialTheme.typography.headlineSmall)
+        Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.headlineSmall)
         Text(linkText(conn.link, conn.device, conn.error))
         conn.session?.info?.let { Text("${Texts.tr("Installed", "Installato")}: ${it.firmware} (${it.probeType})") }
+
+        ProbeLinkCard()
 
         var ledOn by remember { mutableStateOf(app.prefs.probeLedOn) }
         Card(Modifier.fillMaxWidth()) {
@@ -545,7 +548,7 @@ fun ProbeScreen(modifier: Modifier) {
                             ledOn = it
                             app.prefs.probeLedOn = it
                             Collector.probeLedOn.value = it
-                            Collector.session?.setLedEnabled(it)
+                            Collector.allSessions().forEach { s -> s.setLedEnabled(it) }
                         },
                     )
                 }
@@ -691,6 +694,11 @@ fun SettingsScreen(modifier: Modifier) {
         }
 
         Expandable(
+            title = Texts.tr("Backup and restore", "Backup e ripristino"),
+            summary = backupSummary(),
+        ) { BackupSection() }
+
+        Expandable(
             title = Texts.tr("Alerts and notifications", "Allerte e notifiche"),
             summary = if (!prefs.alertsEnabled) Texts.tr("Off", "Spente") else listOfNotNull(
                 Texts.tr("On", "Attive"),
@@ -804,6 +812,25 @@ fun SettingsScreen(modifier: Modifier) {
                     FilterChip(selected = bleMode == v, onClick = { bleMode = v; prefs.phoneBleMode = v }, label = { Text(l) })
                 }
             }
+            var plan by remember { mutableIntStateOf(prefs.channelPlan) }
+            Text(Texts.tr("Wi-Fi channels the probe listens to", "Canali Wi-Fi ascoltati dalla sonda"), style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(0 to Texts.tr("Focused", "Mirato"), 1 to Texts.tr("Balanced", "Bilanciato"), 2 to Texts.tr("All", "Tutti")).forEach { (v, l) ->
+                    FilterChip(selected = plan == v, onClick = {
+                        plan = v; prefs.channelPlan = v
+                        Collector.reconfigureAll()
+                    }, label = { Text(l) })
+                }
+            }
+            Text(
+                Texts.tr(
+                    "Cycle about %.1f s on the C5 · %d%% of the time on the channels where phones send probe requests. Focused also covers hotspots on any 2.4 GHz channel; Balanced and All add DFS channels (fixed routers): more networks, fewer phone sightings."
+                        .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
+                    "Ciclo di circa %.1f s sul C5 · %d%% del tempo sui canali dove i telefoni mandano probe request. Mirato copre anche gli hotspot su qualsiasi canale 2.4 GHz; Bilanciato e Tutti aggiungono i canali DFS (router fissi): più reti, meno avvistamenti di telefoni."
+                        .format(dev.retrovision.app.probe.ChannelPlans.cycleMs(plan) / 1000.0, (dev.retrovision.app.probe.ChannelPlans.probeShare(plan) * 100).toInt()),
+                ),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             var drift by remember { mutableStateOf(prefs.driftGuard) }
             SettingSwitch(
                 Texts.tr("Reject GPS drift while the phone is still", "Scarta la deriva GPS quando il telefono è fermo"),
@@ -821,7 +848,7 @@ fun SettingsScreen(modifier: Modifier) {
             ) {
                 dataFrames = it; prefs.captureDataFrames = it
                 Collector.captureDataFrames.value = it
-                Collector.session?.resendConfig()
+                Collector.reconfigureAll()
             }
         }
 
@@ -1104,7 +1131,8 @@ internal fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
     return when {
         s.phase == dev.retrovision.app.probe.Phase.REJECTED -> Health("●", Texts.tr("Rejected", "Rifiutata"), bad)
         s.chipTempC >= 80f -> Health("●", Texts.tr("Hot: ${"%.0f".format(s.chipTempC)} °C — give it air", "Calda: ${"%.0f".format(s.chipTempC)} °C — dalle aria"), bad)
-        s.freeHeap in 1..20480 -> Health("●", Texts.tr("Low memory", "Memoria bassa"), warn)
+        // Free heap swings with Wi-Fi buffers in flight; the low-water mark is the real margin.
+        s.minFreeHeap in 1..16383 || s.freeHeap in 1..12287 -> Health("●", Texts.tr("Low memory: ${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024})", "Memoria bassa: ${s.freeHeap / 1024} KiB liberi (minimo ${s.minFreeHeap / 1024})"), warn)
         lossPct > 5 -> Health("●", Texts.tr("Dropping frames (%.1f%%)".format(lossPct), "Perde frame (%.1f%%)".format(lossPct)), warn)
         s.chipTempC >= 70f -> Health("●", Texts.tr("Warm: ${"%.0f".format(s.chipTempC)} °C", "Tiepida: ${"%.0f".format(s.chipTempC)} °C"), warn)
         s.phase == dev.retrovision.app.probe.Phase.STREAMING -> Health("●", Texts.tr("Healthy", "In salute"), ok)
@@ -1370,17 +1398,33 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             val s = conn.session
-            if (s != null) {
+            val links by Collector.links.collectAsState()
+            if (links.size > 1) {
+                // Several probes: one line each (re-read on every connection tick).
+                links.values.sortedBy { if (it.usb) 0 else 1 }.forEach { l ->
+                    val h = probeHealth(l.session.state.value)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(h.dot, color = h.color)
+                        Text(l.label.removePrefix("BLE: ") + ": " + h.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            } else if (s != null) {
                 val h = probeHealth(s)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(h.dot, color = h.color)
                     Text(Texts.tr("Probe: ", "Sonda: ") + h.text, style = MaterialTheme.typography.bodyMedium)
                 }
             } else {
-                Text(Texts.tr("Probe: ", "Sonda: ") + linkText(conn.link, "", conn.error), style = MaterialTheme.typography.bodyMedium)
+                val ble by Collector.bleLinks.collectAsState()
+                val best = ble.values.minByOrNull { it.stage.ordinal }
+                Text(
+                    Texts.tr("Probe: ", "Sonda: ") +
+                        if (conn.link == Link.NO_DEVICE && best != null) bleStageText(best.stage) else linkText(conn.link, "", conn.error),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
             Text(
-                Texts.tr("Phone Bluetooth: ", "Bluetooth del telefono: ") + if (bleOn) Texts.tr("listening", "in ascolto") else Texts.tr("off", "spento"),
+                Texts.tr("Phone as Bluetooth sensor: ", "Telefono come sensore Bluetooth: ") + if (bleOn) Texts.tr("listening", "in ascolto") else Texts.tr("off", "spento"),
                 style = MaterialTheme.typography.bodyMedium,
             )
             val maxAcc = app.prefs.maxFixAccuracyM
@@ -1401,9 +1445,14 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
 @Composable
 private fun RadarSection(running: Boolean) {
     val radar by Collector.liveRadar.collectAsState()
-    if (running && radar.blips.isNotEmpty()) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // Stays on screen while collecting, even with nothing heard: a radar that vanishes looks broken.
+    if (running) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             RadarView()
+            if (radar.blips.isEmpty()) Text(
+                Texts.tr("Nothing heard right now.", "Nessun segnale in questo momento."),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -1430,6 +1479,7 @@ private fun SensorDetails(running: Boolean) {
                     s.info?.let {
                         Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
                         Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
+                        Text(linkLine(it, s), style = MaterialTheme.typography.bodySmall)
                     }
                     val h = probeHealth(s)
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1447,7 +1497,7 @@ private fun SensorDetails(running: Boolean) {
                         style = MaterialTheme.typography.bodySmall,
                         color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     )
-                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
+                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024}) · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
                     if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
             }
@@ -1507,3 +1557,5 @@ internal fun ActionGrid(tiles: List<ActionTileSpec>) {
         }
     }
 }
+
+
