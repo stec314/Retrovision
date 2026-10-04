@@ -23,6 +23,9 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "esp_timer.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 
 // Bond storage in NVS (CONFIG_BT_NIMBLE_NVS_PERSIST). Without it bonding cannot be stored.
 void ble_store_config_init(void);
@@ -40,6 +43,15 @@ static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static volatile bool s_subscribed;
 static volatile uint16_t s_mtu = 23;
 static uint8_t s_own_addr_type;
+
+// The NimBLE host task must never block: incoming bytes are handed to a small task of our own
+// (decoding takes the session lock, which another task may hold while it sends to us), and sends
+// from inside the host task do not wait for buffers that only the host task can free.
+static StreamBufferHandle_t s_rx;
+static volatile TaskHandle_t s_host_task;
+static volatile uint32_t s_rx_dropped;
+static volatile int64_t s_conn_since_us;
+static volatile int64_t s_last_rx_us;
 
 // Diagnostics, reported to the host over the cable (rv_link_ble_report).
 static volatile bool s_synced;
@@ -60,15 +72,30 @@ static int rx_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *
     uint8_t buf[256];
     uint16_t total = OS_MBUF_PKTLEN(ctxt->om);
     uint16_t off = 0;
+    s_last_rx_us = esp_timer_get_time();
     while (off < total) {
         uint16_t n = total - off > sizeof buf ? sizeof buf : total - off;
         if (os_mbuf_copydata(ctxt->om, off, n, buf) != 0) {
             return BLE_ATT_ERR_UNLIKELY;
         }
-        rv_link_feed(RV_T_BLE, buf, n);
+        // Never wait here: a full buffer means the decoder is stuck, and the host must keep going.
+        if (xStreamBufferSend(s_rx, buf, n, 0) != n) {
+            s_rx_dropped++;
+        }
         off += n;
     }
     return 0;
+}
+
+static void rx_task(void *arg)
+{
+    uint8_t buf[128];
+    for (;;) {
+        size_t n = xStreamBufferReceive(s_rx, buf, sizeof buf, portMAX_DELAY);
+        if (n > 0) {
+            rv_link_feed(RV_T_BLE, buf, n);
+        }
+    }
 }
 
 static int tx_access(uint16_t conn, uint16_t attr, struct ble_gatt_access_ctxt *ctxt, void *arg)
@@ -118,8 +145,10 @@ static bool ble_write(const uint8_t *data, size_t len, TickType_t timeout)
             continue;
         }
         if (rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) {
-            ESP_LOGW(TAG, "notify failed: %d", rc);
-            return false;
+            return false; // no log: a log line from here would be forwarded back into this path
+        }
+        if (xTaskGetCurrentTaskHandle() == s_host_task) {
+            return false; // only the host task frees these buffers: waiting here would stall it
         }
         // Controller buffers full: wait for them to drain.
         if (xTaskGetTickCount() - start > timeout + pdMS_TO_TICKS(200)) {
@@ -170,6 +199,8 @@ void rv_link_ble_register_gatt(void)
     snprintf(name, sizeof name, "RV-%s", rv_link_cfg()->name);
     ble_svc_gap_device_name_set(name);
     ble_store_config_init();
+    s_rx = xStreamBufferCreate(2048, 1);
+    xTaskCreatePinnedToCore(rx_task, "rv_link_ble_rx", 4096, NULL, 9, NULL, tskNO_AFFINITY);
     rv_link_register(RV_T_BLE, &s_ops);
 }
 
@@ -266,6 +297,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             s_subscribed = false;
             s_mtu = 23;
             rv_link_reset_rx(RV_T_BLE);
+            s_conn_since_us = s_last_rx_us = esp_timer_get_time();
             s_conns++;
             ESP_LOGI(TAG, "connected");
         } else {
@@ -317,20 +349,33 @@ void rv_link_ble_tick(void)
     if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE && !adv_active()) {
         advertise();
     }
+    // A connection that never subscribes, or that has gone silent (the app time-syncs every
+    // 30 s), is dead weight: with one connection allowed it would lock the real phone out.
+    const uint16_t conn = s_conn;
+    if (conn != BLE_HS_CONN_HANDLE_NONE) {
+        const int64_t now = esp_timer_get_time();
+        const bool unsubscribed = !s_subscribed && now - s_conn_since_us > 20LL * 1000 * 1000;
+        const bool silent = now - s_last_rx_us > 90LL * 1000 * 1000;
+        if (unsubscribed || silent) {
+            ESP_LOGW(TAG, "dropping %s connection", unsubscribed ? "unsubscribed" : "silent");
+            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+        }
+    }
 }
 
 void rv_link_ble_report(char *buf, size_t cap)
 {
     // Kept under 127 chars: it travels as a Log frame. Parsed by the app (keys before '=').
-    snprintf(buf, cap, "st=%s rc=%d name=%s at=%u conns=%lu disc=%d heap=%lu/%lu/%lu",
+    snprintf(buf, cap, "st=%s rc=%d name=%s at=%u conns=%lu disc=%d rxdrop=%lu heap=%lu/%lu/%lu",
              !s_synced ? "nosync" : s_conn != BLE_HS_CONN_HANDLE_NONE ? "connected" : (adv_active() ? "adv" : s_adv_step),
-             s_adv_rc, ble_svc_gap_device_name(), s_own_addr_type, (unsigned long)s_conns, s_last_disc,
+             s_adv_rc, ble_svc_gap_device_name(), s_own_addr_type, (unsigned long)s_conns, s_last_disc, (unsigned long)s_rx_dropped,
              (unsigned long)(s_heap_at_sync / 1024), (unsigned long)(esp_get_free_heap_size() / 1024),
              (unsigned long)(esp_get_minimum_free_heap_size() / 1024));
 }
 
 void rv_link_ble_on_sync(void)
 {
+    s_host_task = xTaskGetCurrentTaskHandle(); // on_sync runs in the NimBLE host task
     s_synced = true;
     s_heap_at_sync = esp_get_free_heap_size();
     if (ble_hs_id_infer_auto(0, &s_own_addr_type) != 0) {

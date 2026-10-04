@@ -532,16 +532,26 @@ class CollectorService : Service() {
         }
     }
 
+    /** Consecutive setup failures per probe: past 3 the GATT cache is cleared and the card suggests a power cycle. */
+    private val bleFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     private suspend fun connectBle(name: String, dev: android.bluetooth.BluetoothDevice) {
         val fresh = BleChannel(this)
+        val fails = bleFailures[name] ?: 0
+        fresh.clearCache = fails >= 3 && fails % 3 == 0
         fresh.onStage = { st -> bleUi(name) { it.copy(stage = if (st == "bonding") BleStage.BONDING else BleStage.CONNECTING) } }
         try {
             if (!fresh.open(dev)) {
+                val n = (bleFailures[name] ?: 0) + 1
+                bleFailures[name] = n
                 Diag.w("ble", "$name: open failed: ${fresh.lastError}")
-                bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = fresh.lastError) }
+                val hint = if (n >= 6) " — " + Texts.tr("still failing after $n tries: switch the probe off and on (unplug its power for a few seconds)",
+                    "fallisce ancora dopo $n tentativi: spegni e riaccendi la sonda (stacca l'alimentazione per qualche secondo)") else ""
+                bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = fresh.lastError + hint) }
                 delay(3000)
                 return
             }
+            bleFailures.remove(name)
             bleUi(name) { it.copy(stage = BleStage.HANDSHAKE, mtu = fresh.currentMtu, lastError = "") }
             runBleSession(name, fresh)
             if (fresh.lastError.isNotEmpty()) bleUi(name) { it.copy(lastError = fresh.lastError) }

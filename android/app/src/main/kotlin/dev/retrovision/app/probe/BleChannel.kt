@@ -145,11 +145,14 @@ class BleChannel(private val ctx: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Diag.i("ble", "connected, requesting MTU")
-                g.requestMtu(247)
+                mtuAsked = true
+                if (!linkUp.isCompleted) linkUp.complete(true)
+                if (!g.requestMtu(247)) { mtuAsked = false; g.discoverServices() }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 up = false
                 lastError = "disconnected: " + gattStatus(status)
                 if (!servicesReady.isCompleted) servicesReady.complete(false)
+                if (!linkUp.isCompleted) linkUp.complete(false)
                 Diag.i("ble", lastError)
             }
         }
@@ -160,7 +163,7 @@ class BleChannel(private val ctx: Context) {
 
         override fun onMtuChanged(g: BluetoothGatt, m: Int, status: Int) {
             mtu = if (status == BluetoothGatt.GATT_SUCCESS) m else 23
-            g.discoverServices()
+            if (mtuAsked) { mtuAsked = false; g.discoverServices() }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -206,6 +209,18 @@ class BleChannel(private val ctx: Context) {
         }
     }
 
+    @Volatile private var mtuAsked = false
+    private val linkUp = CompletableDeferred<Boolean>()
+
+    /** Set after repeated setup failures: drop the phone's cached service table before discovering. */
+    @Volatile var clearCache = false
+
+    /** BluetoothGatt.refresh() is hidden; it clears a stale service cache that makes discovery hang. */
+    private fun refreshCache() {
+        runCatching { gatt?.javaClass?.getMethod("refresh")?.invoke(gatt) }
+            .onSuccess { Diag.i("ble", "GATT cache cleared") }
+    }
+
     /** Called as the connection progresses ("bonding", "connecting"…), for the status line. */
     @Volatile var onStage: (String) -> Unit = {}
 
@@ -235,7 +250,19 @@ class BleChannel(private val ctx: Context) {
         }
         onStage("connecting")
         gatt = device.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
-        val ok = withTimeoutOrNull(20_000) { servicesReady.await() } ?: false
+        if (clearCache) refreshCache()
+        // Some stacks never answer the MTU request: go on with the default MTU after a few seconds
+        // instead of waiting out the whole setup timeout.
+        val ok = withTimeoutOrNull(20_000) {
+            if (!linkUp.await()) return@withTimeoutOrNull false
+            withTimeoutOrNull(4_000) { while (mtuAsked) delay(100) }
+            if (mtuAsked) {
+                mtuAsked = false
+                Diag.w("ble", "no MTU answer: continuing with the default")
+                gatt?.discoverServices()
+            }
+            servicesReady.await()
+        } ?: false
         up = ok && gatt != null && rxChar != null
         if (!up && lastError.isEmpty()) lastError = "GATT setup timed out"
         return up
