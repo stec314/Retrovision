@@ -201,6 +201,7 @@ fun ProbeLinkCard() {
                         "Wi-Fi ${session.wifiObs}" + (if (session.channel > 0) " · ch ${session.channel}" else "") +
                             " · " + Texts.tr("lost", "persi") + " $lost" + (if (seen + lost > 0) " (%.1f%%)".format(100.0 * lost / (seen + lost)) else "") +
                             (if (session.chipTempC != 0f) " · ${"%.0f".format(session.chipTempC)} °C" else "") +
+                            (if (session.freeHeap > 0) " · " + Texts.tr("memory ", "memoria ") + "${session.freeHeap / 1024}/${session.minFreeHeap / 1024} KiB" else "") +
                             (if (ble.connectedSinceMs > 0) " · " + Texts.tr("up ", "attivo da ") + ago(ble.connectedSinceMs) else ""),
                         style = MaterialTheme.typography.bodySmall,
                     )

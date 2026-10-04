@@ -80,6 +80,8 @@ data class SessionState(
     val badFrames: Long = 0,
     val probeDropped: Long = 0,
     val freeHeap: Int = 0,
+    /** Lowest free heap since the probe booted: the real margin. */
+    val minFreeHeap: Int = 0,
     val chipTempC: Float = 0f,
     val channel: Int = 0,
     val lastLog: String = "",
@@ -223,7 +225,7 @@ class ProbeSession(
             Envelope.PayloadCase.STATUS -> env.status.let { s ->
                 update {
                     it.copy(
-                        probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes,
+                        probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes, minFreeHeap = s.minFreeHeapBytes,
                         chipTempC = s.chipTempC, channel = s.currentWifiChannel, linkRssi = s.linkRssi,
                     )
                 }

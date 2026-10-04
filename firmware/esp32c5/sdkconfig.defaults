@@ -13,8 +13,11 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # --- Wi-Fi sniffer (dual band) -------------------------------------------
 CONFIG_ESP_WIFI_NVS_ENABLED=n
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=16
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=64
+# The C5 has 384 KB of SRAM and no PSRAM: 64 dynamic RX buffers let a traffic burst take
+# ~100 KB, which left ~9 KB free with the BLE link up. The sniffer callback copies each frame
+# out at once, so the IDF default of 32 is enough.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
 
 # --- BLE observer (NimBLE), Bluetooth 5 ----------------------------------
 CONFIG_BT_ENABLED=y

@@ -1131,7 +1131,8 @@ internal fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
     return when {
         s.phase == dev.retrovision.app.probe.Phase.REJECTED -> Health("●", Texts.tr("Rejected", "Rifiutata"), bad)
         s.chipTempC >= 80f -> Health("●", Texts.tr("Hot: ${"%.0f".format(s.chipTempC)} °C — give it air", "Calda: ${"%.0f".format(s.chipTempC)} °C — dalle aria"), bad)
-        s.freeHeap in 1..20480 -> Health("●", Texts.tr("Low memory", "Memoria bassa"), warn)
+        // Free heap swings with Wi-Fi buffers in flight; the low-water mark is the real margin.
+        s.minFreeHeap in 1..16383 || s.freeHeap in 1..12287 -> Health("●", Texts.tr("Low memory: ${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024})", "Memoria bassa: ${s.freeHeap / 1024} KiB liberi (minimo ${s.minFreeHeap / 1024})"), warn)
         lossPct > 5 -> Health("●", Texts.tr("Dropping frames (%.1f%%)".format(lossPct), "Perde frame (%.1f%%)".format(lossPct)), warn)
         s.chipTempC >= 70f -> Health("●", Texts.tr("Warm: ${"%.0f".format(s.chipTempC)} °C", "Tiepida: ${"%.0f".format(s.chipTempC)} °C"), warn)
         s.phase == dev.retrovision.app.probe.Phase.STREAMING -> Health("●", Texts.tr("Healthy", "In salute"), ok)
@@ -1480,7 +1481,7 @@ private fun SensorDetails(running: Boolean) {
                         style = MaterialTheme.typography.bodySmall,
                         color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     )
-                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
+                    if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024}) · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
                     if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
             }
