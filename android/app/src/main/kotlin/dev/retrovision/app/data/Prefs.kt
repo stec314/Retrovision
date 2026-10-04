@@ -108,26 +108,45 @@ class Prefs(ctx: Context) {
         set(v) = p.edit().putInt("devicesShown", v).apply()
 
     /** BLE wireless link: the probe's name and the pairing key (16..32 bytes), stored encrypted. */
-    var blePairName: String
-        get() = p.getString("blePairName", "") ?: ""
-        set(v) = p.edit().putString("blePairName", v).apply()
+    /** A probe paired for the wireless link: its advertised name ("RV-<name>") and the pairing key. */
+    class BlePair(val name: String, val key: ByteArray)
 
-    private var blePairKeyB64: String
-        get() = secret("blePairKey")
-        set(v) = setSecret("blePairKey", v)
-
-    fun blePairKey(): ByteArray? =
-        blePairKeyB64.takeIf { it.isNotEmpty() }?.let { runCatching { android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }.getOrNull() }
-
-    fun setBlePair(name: String, key: ByteArray) {
-        blePairName = name
-        blePairKeyB64 = android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)
+    /** Paired wireless probes, kept Keystore-sealed as "name:base64key" lines. */
+    fun blePairs(): List<BlePair> {
+        // One pairing stored by r104-r109 (before multi-probe): carry it over once.
+        val oldName = p.getString("blePairName", "") ?: ""
+        if (oldName.isNotEmpty()) {
+            val oldKey = secret("blePairKey")
+            p.edit().remove("blePairName").apply()
+            setSecret("blePairKey", "")
+            if (oldKey.isNotEmpty()) setSecret("blePairs", (secret("blePairs").split('\n').filter { it.isNotBlank() } + "$oldName:$oldKey").joinToString("\n"))
+        }
+        return secret("blePairs").split('\n').mapNotNull { line ->
+            val i = line.indexOf(':')
+            if (i <= 0) return@mapNotNull null
+            val key = runCatching { android.util.Base64.decode(line.substring(i + 1), android.util.Base64.NO_WRAP) }.getOrNull() ?: return@mapNotNull null
+            BlePair(line.substring(0, i), key)
+        }
     }
 
-    fun clearBlePair() {
-        blePairName = ""
-        blePairKeyB64 = ""
+    fun blePairKey(name: String): ByteArray? = blePairs().firstOrNull { it.name == name }?.key
+
+    /** Adds or replaces the pairing for [name]. */
+    fun putBlePair(name: String, key: ByteArray) {
+        val rest = blePairs().filter { it.name != name }
+        val all = rest + BlePair(name, key)
+        setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
     }
+
+    fun removeBlePair(name: String) {
+        val all = blePairs().filter { it.name != name }
+        setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
+    }
+
+    /** Split the Wi-Fi channels between probes when several stream at once. */
+    var splitChannels: Boolean
+        get() = p.getBoolean("splitChannels", true)
+        set(v) = p.edit().putBoolean("splitChannels", v).apply()
 
     // ---- automatic backup to a folder outside the app (survives an uninstall) ----
     /** Folder picked by the user (SAF tree URI), "" = automatic backup off. */

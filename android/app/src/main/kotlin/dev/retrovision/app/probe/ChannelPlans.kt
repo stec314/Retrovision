@@ -41,4 +41,29 @@ object ChannelPlans {
     }
 
     fun cycleMs(plan: Int): Int = hops(plan).sumOf { it.second }
+
+    private val primaryChannels = setOf(1, 6, 11)
+
+    /**
+     * Splits [plan] between several probes listening at the same time ([dual] = each probe can tune
+     * 5 GHz), so each one dwells longer on fewer channels instead of all of them hopping the same list.
+     * 5 GHz goes to dual-band probes only; 2.4 GHz goes to the single-band ones if there are any
+     * (the dual-band ones then stay on 5 GHz), otherwise it is shared too. The busy channels 1/6/11
+     * are dealt first so they spread out, and keep a double dwell. A probe never ends up idle.
+     */
+    fun split(plan: Int, dual: List<Boolean>): List<List<Pair<Int, Int>>> {
+        if (dual.size <= 1) return dual.map { hops(plan, it) }
+        val distinct = LinkedHashMap<Int, Int>()
+        hops(plan, true).forEach { (c, d) -> distinct.putIfAbsent(c, d) }
+        val ch24 = distinct.entries.filter { it.key <= 14 }.map { it.key to it.value }
+            .sortedBy { if (it.first in primaryChannels) 0 else 1 }
+        val ch5 = distinct.entries.filter { it.key > 14 }.map { it.key to it.value }
+        val dualIdx = dual.indices.filter { dual[it] }
+        val singleIdx = dual.indices.filter { !dual[it] }
+        val out = List(dual.size) { mutableListOf<Pair<Int, Int>>() }
+        if (dualIdx.isNotEmpty()) ch5.forEachIndexed { i, c -> out[dualIdx[i % dualIdx.size]] += c }
+        val takers = singleIdx.ifEmpty { dualIdx }
+        ch24.forEachIndexed { i, (c, d) -> out[takers[i % takers.size]] += c to (if (c in primaryChannels) d * 2 else d) }
+        return out.mapIndexed { i, l -> if (l.isEmpty()) hops(plan, dual[i]) else l.sortedBy { it.first } }
+    }
 }

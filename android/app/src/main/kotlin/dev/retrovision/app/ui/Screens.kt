@@ -548,7 +548,7 @@ fun ProbeScreen(modifier: Modifier) {
                             ledOn = it
                             app.prefs.probeLedOn = it
                             Collector.probeLedOn.value = it
-                            Collector.session?.setLedEnabled(it)
+                            Collector.allSessions().forEach { s -> s.setLedEnabled(it) }
                         },
                     )
                 }
@@ -818,7 +818,7 @@ fun SettingsScreen(modifier: Modifier) {
                 listOf(0 to Texts.tr("Focused", "Mirato"), 1 to Texts.tr("Balanced", "Bilanciato"), 2 to Texts.tr("All", "Tutti")).forEach { (v, l) ->
                     FilterChip(selected = plan == v, onClick = {
                         plan = v; prefs.channelPlan = v
-                        Collector.session?.resendConfig()
+                        Collector.reconfigureAll()
                     }, label = { Text(l) })
                 }
             }
@@ -848,7 +848,7 @@ fun SettingsScreen(modifier: Modifier) {
             ) {
                 dataFrames = it; prefs.captureDataFrames = it
                 Collector.captureDataFrames.value = it
-                Collector.session?.resendConfig()
+                Collector.reconfigureAll()
             }
         }
 
@@ -1398,17 +1398,28 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             val s = conn.session
-            if (s != null) {
+            val links by Collector.links.collectAsState()
+            if (links.size > 1) {
+                // Several probes: one line each (re-read on every connection tick).
+                links.values.sortedBy { if (it.usb) 0 else 1 }.forEach { l ->
+                    val h = probeHealth(l.session.state.value)
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(h.dot, color = h.color)
+                        Text(l.label.removePrefix("BLE: ") + ": " + h.text, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            } else if (s != null) {
                 val h = probeHealth(s)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(h.dot, color = h.color)
                     Text(Texts.tr("Probe: ", "Sonda: ") + h.text, style = MaterialTheme.typography.bodyMedium)
                 }
             } else {
-                val ble by Collector.bleLink.collectAsState()
+                val ble by Collector.bleLinks.collectAsState()
+                val best = ble.values.minByOrNull { it.stage.ordinal }
                 Text(
                     Texts.tr("Probe: ", "Sonda: ") +
-                        if (conn.link == Link.NO_DEVICE && ble.stage != dev.retrovision.app.BleStage.OFF) bleStageText(ble.stage) else linkText(conn.link, "", conn.error),
+                        if (conn.link == Link.NO_DEVICE && best != null) bleStageText(best.stage) else linkText(conn.link, "", conn.error),
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -1434,9 +1445,14 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
 @Composable
 private fun RadarSection(running: Boolean) {
     val radar by Collector.liveRadar.collectAsState()
-    if (running && radar.blips.isNotEmpty()) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    // Stays on screen while collecting, even with nothing heard: a radar that vanishes looks broken.
+    if (running) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             RadarView()
+            if (radar.blips.isEmpty()) Text(
+                Texts.tr("Nothing heard right now.", "Nessun segnale in questo momento."),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

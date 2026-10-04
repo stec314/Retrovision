@@ -99,6 +99,48 @@ class BleChannel(private val ctx: Context) {
         return ScanHit(hit?.first, hit?.second ?: 0, HashMap(others))
     }
 
+    /** Result of [scanMany]: the wanted probes found (name -> device, dBm) and any other probes heard. */
+    class MultiHit(val found: Map<String, Pair<BluetoothDevice, Int>>, val others: Map<String, Int>)
+
+    /**
+     * One scan for several paired probes at once (Android throttles apps that start more than five
+     * scans in 30 s, so each probe must not run its own). Stops early when all are found.
+     */
+    suspend fun scanMany(names: Set<String>, timeoutMs: Long = 12_000): MultiHit {
+        lastError = ""
+        val ad = adapter
+        if (ad == null || !ad.isEnabled) { lastError = "Bluetooth is off"; return MultiHit(emptyMap(), emptyMap()) }
+        val scanner = ad.bluetoothLeScanner ?: run { lastError = "no BLE scanner"; return MultiHit(emptyMap(), emptyMap()) }
+        val want = names.associateBy { "RV-$it" }
+        val found = java.util.concurrent.ConcurrentHashMap<String, Pair<BluetoothDevice, Int>>()
+        val others = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        val all = CompletableDeferred<Unit>()
+        val cb = object : ScanCallback() {
+            override fun onScanResult(type: Int, r: ScanResult) {
+                val n = r.scanRecord?.deviceName ?: runCatching { r.device.name }.getOrNull()
+                val name = n?.let { want[it] }
+                if (name != null) {
+                    found[name] = r.device to r.rssi
+                    if (found.keys.containsAll(names) && !all.isCompleted) all.complete(Unit)
+                } else {
+                    others[n ?: r.device.address] = r.rssi
+                }
+            }
+            override fun onScanFailed(code: Int) {
+                lastError = "scan failed (code $code)" + if (code == SCAN_FAILED_APPLICATION_REGISTRATION_FAILED) ": toggle Bluetooth off and on" else ""
+                Diag.w("ble", lastError)
+                if (!all.isCompleted) all.complete(Unit)
+            }
+        }
+        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
+        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        runCatching { scanner.startScan(listOf(filter), settings, cb) }
+            .onFailure { lastError = "cannot scan: ${it.message}"; Diag.w("ble", lastError); return MultiHit(emptyMap(), emptyMap()) }
+        withTimeoutOrNull(timeoutMs) { all.await() }
+        runCatching { scanner.stopScan(cb) }
+        return MultiHit(HashMap(found), HashMap(others))
+    }
+
     private val cb = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {

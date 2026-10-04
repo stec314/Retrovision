@@ -59,7 +59,7 @@ object FlashRunner {
         val usb = UsbAccess(ctx)
         try {
             // 1. If a probe is streaming, ask it to reboot into the ROM bootloader first.
-            val live = Collector.session
+            val live = Collector.usbSession
             if (live != null) {
                 stage("Riavvio della sonda in modalità download")
                 live.rebootProbe(intoBootloader = true)

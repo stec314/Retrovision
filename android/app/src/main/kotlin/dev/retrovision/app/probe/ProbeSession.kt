@@ -109,8 +109,8 @@ class ProbeSession(
     private val dataFrames: () -> Boolean = { false },
     /** Channel plan (see [ChannelPlans]): 0 = the probe's own default. */
     private val channelPlan: () -> Int = { 0 },
-    /** Pairing key for a wireless link, or null (USB, or not paired). */
-    private val pairingKey: () -> ByteArray? = { null },
+    /** Pairing key for the probe named in its Hello (wireless link), or null if not paired. */
+    private val pairingKey: (String) -> ByteArray? = { null },
 ) {
     private val lock = Any()
     private val decoder = FrameDecoder()
@@ -291,7 +291,7 @@ class ProbeSession(
         probeId = h.hardwareId.toByteArray().joinToString("") { "%02x".format(it) }
         // A wireless probe challenges us: prove we hold the pairing key, or it streams nothing.
         if (h.link == LinkKind.LINK_KIND_BLE) {
-            val key = pairingKey()
+            val key = pairingKey(h.name)
             if (key == null || h.authNonce.size() != 16) {
                 update { it.copy(phase = Phase.REJECTED, rejectReason = "This phone has no pairing key for this probe: pair again with the cable") }
                 return
@@ -471,11 +471,15 @@ class ProbeSession(
     }
 
     /** Set from the probe's Hello: it can tune 5 GHz (ESP32-C5). */
-    @Volatile private var dualBand = false
+    @Volatile var dualBand = false
+        private set
+
+    /** Channels assigned by the multi-probe split (null = the plan's full list). Call [resendConfig] after changing. */
+    @Volatile var assignedHops: List<Pair<Int, Int>>? = null
 
     private fun defaultConfig(): Config = configWith(ledOn(), dataFrames())
 
-    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = ChannelPlans.hops(channelPlan(), dualBand)): Config = Config.newBuilder()
+    private fun configWith(led: Boolean, data: Boolean, hops: List<Pair<Int, Int>> = assignedHops ?: ChannelPlans.hops(channelPlan(), dualBand)): Config = Config.newBuilder()
         .setWifi(
             WifiConfig.newBuilder().setEnabled(true)
                 .addFrameTypes(WifiFrameType.WIFI_FRAME_TYPE_PROBE_REQ)
