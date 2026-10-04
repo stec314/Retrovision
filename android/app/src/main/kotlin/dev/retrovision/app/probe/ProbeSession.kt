@@ -87,6 +87,9 @@ data class SessionState(
     /** BLE link: the probe's view of our signal (dBm), 0 if unknown. */
     val linkRssi: Int = 0,
     val lastAck: AckInfo? = null,
+    /** BLE-link self-report the probe sends over the cable ("st=adv rc=0 name=… heap=a/b/c"). */
+    val bleReport: String = "",
+    val bleReportMs: Long = 0,
 )
 
 /**
@@ -225,7 +228,10 @@ class ProbeSession(
                     )
                 }
             }
-            Envelope.PayloadCase.LOG -> update { it.copy(lastLog = "${env.log.tag}: ${env.log.text}") }
+            Envelope.PayloadCase.LOG -> update {
+                if (env.log.tag == "blelink") it.copy(bleReport = env.log.text, bleReportMs = System.currentTimeMillis())
+                else it.copy(lastLog = "${env.log.tag}: ${env.log.text}")
+            }
             Envelope.PayloadCase.TIME_SYNC_RESPONSE -> env.timeSyncResponse.let {
                 val t3 = nowUs()
                 // Ignore absurd round trips (stale echo after a reconnect).

@@ -379,6 +379,9 @@ static void session_task(void *arg)
     int64_t last_hello = -HELLO_REJECTED_PERIOD_MS * 1000LL;
     int64_t last_status = 0;
     int64_t usb_gone_since = 0;
+    int64_t last_ble_tick = 0;
+    int64_t last_ble_report = 0;
+    bool was_active = false;
     bool led = false;
 
     for (;;) {
@@ -436,7 +439,25 @@ static void session_task(void *arg)
             led = true;
             break;
         }
+        const bool active_now = s_state == ST_ACTIVE;
         xSemaphoreGive(s_lock);
+
+        // BLE link mode: keep advertising alive, and tell the host over the cable how the
+        // Bluetooth side is doing (it cannot see it otherwise when the phone does not find us).
+        if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+            if (now - last_ble_tick >= 5000000LL) {
+                last_ble_tick = now;
+                rv_link_ble_tick();
+            }
+            if (active_now && s_link == RV_T_USB &&
+                (!was_active || now - last_ble_report >= 30000000LL)) {
+                last_ble_report = now;
+                char line[160];
+                rv_link_ble_report(line, sizeof line);
+                ESP_LOGW("blelink", "%s", line);
+            }
+        }
+        was_active = active_now;
 #if defined(LED_WS2812_GPIO)
         ws2812_set(led && !s_cfg.led_off, s_state != ST_ACTIVE);
 #elif !defined(LED_NONE)

@@ -21,6 +21,11 @@
 #include "os/os_mbuf.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
+#include "esp_heap_caps.h"
+#include "esp_system.h"
+
+// Bond storage in NVS (CONFIG_BT_NIMBLE_NVS_PERSIST). Without it bonding cannot be stored.
+void ble_store_config_init(void);
 static const char *TAG = "link_ble";
 
 static const ble_uuid128_t NUS_SVC =
@@ -35,6 +40,14 @@ static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
 static volatile bool s_subscribed;
 static volatile uint16_t s_mtu = 23;
 static uint8_t s_own_addr_type;
+
+// Diagnostics, reported to the host over the cable (rv_link_ble_report).
+static volatile bool s_synced;
+static volatile int s_adv_rc;              // last advertise() failure code, 0 = ok
+static const char *volatile s_adv_step = "nosync";
+static volatile uint32_t s_conns;
+static volatile int s_last_disc = -1;
+static volatile uint32_t s_heap_at_sync;
 
 static int gap_event(struct ble_gap_event *ev, void *arg);
 static void advertise(void);
@@ -156,6 +169,7 @@ void rv_link_ble_register_gatt(void)
     char name[32];
     snprintf(name, sizeof name, "RV-%s", rv_link_cfg()->name);
     ble_svc_gap_device_name_set(name);
+    ble_store_config_init();
     rv_link_register(RV_T_BLE, &s_ops);
 }
 
@@ -194,16 +208,31 @@ static void advertise(void)
     int rc = ble_gap_ext_adv_configure(0, &p, NULL, gap_event, NULL);
     if (rc != 0) {
         ESP_LOGE(TAG, "adv configure: %d", rc);
+        s_adv_step = "fail-configure"; s_adv_rc = rc;
         return;
     }
     struct os_mbuf *data = os_msys_get_pkthdr(BLE_HS_ADV_MAX_SZ, 0);
     struct os_mbuf *scan = os_msys_get_pkthdr(BLE_HS_ADV_MAX_SZ, 0);
     if (!data || !scan || ble_hs_adv_set_fields_mbuf(&f, data) != 0 || ble_hs_adv_set_fields_mbuf(&rsp, scan) != 0) {
         ESP_LOGE(TAG, "adv data");
+        if (data) os_mbuf_free_chain(data);
+        if (scan) os_mbuf_free_chain(scan);
+        s_adv_step = "fail-advdata"; s_adv_rc = -1;
         return;
     }
-    ble_gap_ext_adv_set_data(0, data);
-    ble_gap_ext_adv_rsp_set_data(0, scan);
+    rc = ble_gap_ext_adv_set_data(0, data);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv set data: %d", rc);
+        os_mbuf_free_chain(scan);
+        s_adv_step = "fail-setdata"; s_adv_rc = rc;
+        return;
+    }
+    rc = ble_gap_ext_adv_rsp_set_data(0, scan);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "adv set rsp: %d", rc);
+        s_adv_step = "fail-setrsp"; s_adv_rc = rc;
+        return;
+    }
     rc = ble_gap_ext_adv_start(0, 0, 0);
 #else
     if (ble_gap_adv_active()) {
@@ -221,8 +250,10 @@ static void advertise(void)
 #endif
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "adv start: %d", rc);
+        s_adv_step = "fail-start"; s_adv_rc = rc;
     } else {
         ESP_LOGI(TAG, "advertising as %s", name);
+        s_adv_step = "adv"; s_adv_rc = 0;
     }
 }
 
@@ -235,6 +266,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             s_subscribed = false;
             s_mtu = 23;
             rv_link_reset_rx(RV_T_BLE);
+            s_conns++;
             ESP_LOGI(TAG, "connected");
         } else {
             advertise();
@@ -242,6 +274,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
         ESP_LOGI(TAG, "disconnected (%d)", ev->disconnect.reason);
+        s_last_disc = ev->disconnect.reason;
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_subscribed = false;
         rv_link_reset_rx(RV_T_BLE);
@@ -268,8 +301,38 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     }
 }
 
+static bool adv_active(void)
+{
+#if MYNEWT_VAL(BLE_EXT_ADV)
+    return ble_gap_ext_adv_active(0);
+#else
+    return ble_gap_adv_active();
+#endif
+}
+
+void rv_link_ble_tick(void)
+{
+    // Advertising can stop on its own (a failed start, a controller reset, coexistence
+    // hiccups): restart it whenever nobody is connected.
+    if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE && !adv_active()) {
+        advertise();
+    }
+}
+
+void rv_link_ble_report(char *buf, size_t cap)
+{
+    // Kept under 127 chars: it travels as a Log frame. Parsed by the app (keys before '=').
+    snprintf(buf, cap, "st=%s rc=%d name=%s at=%u conns=%lu disc=%d heap=%lu/%lu/%lu",
+             !s_synced ? "nosync" : s_conn != BLE_HS_CONN_HANDLE_NONE ? "connected" : (adv_active() ? "adv" : s_adv_step),
+             s_adv_rc, ble_svc_gap_device_name(), s_own_addr_type, (unsigned long)s_conns, s_last_disc,
+             (unsigned long)(s_heap_at_sync / 1024), (unsigned long)(esp_get_free_heap_size() / 1024),
+             (unsigned long)(esp_get_minimum_free_heap_size() / 1024));
+}
+
 void rv_link_ble_on_sync(void)
 {
+    s_synced = true;
+    s_heap_at_sync = esp_get_free_heap_size();
     if (ble_hs_id_infer_auto(0, &s_own_addr_type) != 0) {
         s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
     }

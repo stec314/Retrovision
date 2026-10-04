@@ -56,3 +56,7 @@ void rv_link_ble_register_gatt(void);   // before the NimBLE host starts (BLE li
 void rv_link_ble_on_sync(void);         // NimBLE host synced: start advertising
 // RSSI of the connected BLE host (dBm), 0 if none.
 int rv_link_ble_rssi(void);
+// Restarts advertising if it stopped while nobody is connected (BLE link mode only).
+void rv_link_ble_tick(void);
+// One-line state of the BLE link for diagnostics.
+void rv_link_ble_report(char *buf, size_t cap);

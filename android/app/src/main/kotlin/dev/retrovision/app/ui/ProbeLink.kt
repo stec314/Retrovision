@@ -64,6 +64,25 @@ private fun linkName(k: LinkKind) = when (k) {
     else -> "USB"
 }
 
+/** Reads the probe's BLE self-report ("st=adv rc=0 name=RV-x at=0 conns=0 disc=-1 heap=a/b/c"). */
+internal fun bleReportText(r: String): Pair<String, Boolean> {
+    val kv = r.split(' ').mapNotNull { p -> p.indexOf('=').takeIf { it > 0 }?.let { p.substring(0, it) to p.substring(it + 1) } }.toMap()
+    val st = kv["st"].orEmpty()
+    val heap = kv["heap"]?.split('/')?.mapNotNull { it.toIntOrNull() }.orEmpty()
+    val low = heap.size == 3 && heap[2] < 16
+    val parts = mutableListOf<String>()
+    val bad = when {
+        st == "adv" -> { parts += Texts.tr("advertising as ${kv["name"]}", "in advertising come ${kv["name"]}"); false }
+        st == "connected" -> { parts += Texts.tr("a phone is connected", "un telefono è connesso"); false }
+        st == "nosync" -> { parts += Texts.tr("the Bluetooth stack did not start", "lo stack Bluetooth non è partito"); true }
+        st.startsWith("fail-") -> { parts += Texts.tr("advertising fails at “${st.removePrefix("fail-")}” (code ${kv["rc"]})", "l'advertising fallisce in “${st.removePrefix("fail-")}” (codice ${kv["rc"]})"); true }
+        else -> { parts += st; true }
+    }
+    kv["conns"]?.toIntOrNull()?.takeIf { it > 0 }?.let { parts += Texts.tr("$it connections since boot", "$it connessioni dall'avvio") }
+    if (heap.size == 3) parts += Texts.tr("free memory ${heap[1]} KiB (lowest ${heap[2]})", "memoria libera ${heap[1]} KiB (minimo ${heap[2]})")
+    return parts.joinToString(" · ") to (bad || low)
+}
+
 /** One line for the probe card: which transport the session runs on and its signal. */
 internal fun linkLine(i: ProbeInfo, s: SessionState): String =
     Texts.tr("link ", "collegamento ") + linkName(i.link) +
@@ -242,6 +261,19 @@ fun ProbeLinkCard() {
                         style = MaterialTheme.typography.bodySmall,
                     )
                     else -> Unit
+                }
+                if (info.configuredLink == LinkKind.LINK_KIND_BLE) {
+                    val r = session?.bleReport.orEmpty()
+                    if (r.isEmpty()) Text(
+                        Texts.tr("The probe has not reported its Bluetooth state (older firmware: flash it below).",
+                            "La sonda non ha riportato lo stato Bluetooth (firmware vecchio: flashalo qui sotto)."),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ) else {
+                        val (txt, bad) = bleReportText(r)
+                        Text(Texts.tr("Probe's Bluetooth: ", "Bluetooth della sonda: ") + txt, style = MaterialTheme.typography.bodySmall,
+                            color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        Text(r, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
 

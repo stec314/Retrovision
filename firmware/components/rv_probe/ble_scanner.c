@@ -104,6 +104,9 @@ static void on_ext(const struct ble_gap_ext_disc_desc *d)
 
 static void start_scan(void)
 {
+    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
+        return; // the radio carries the host link: never scan (it would starve advertising)
+    }
     uint8_t own_addr_type;
     if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) {
         own_addr_type = BLE_OWN_ADDR_RANDOM;

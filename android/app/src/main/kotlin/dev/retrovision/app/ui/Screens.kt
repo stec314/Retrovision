@@ -1412,7 +1412,7 @@ private fun SensorsSummary(expanded: Boolean, onToggle: () -> Unit) {
                 )
             }
             Text(
-                Texts.tr("Phone Bluetooth: ", "Bluetooth del telefono: ") + if (bleOn) Texts.tr("listening", "in ascolto") else Texts.tr("off", "spento"),
+                Texts.tr("Phone as Bluetooth sensor: ", "Telefono come sensore Bluetooth: ") + if (bleOn) Texts.tr("listening", "in ascolto") else Texts.tr("off", "spento"),
                 style = MaterialTheme.typography.bodyMedium,
             )
             val maxAcc = app.prefs.maxFixAccuracyM
