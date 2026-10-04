@@ -197,6 +197,9 @@ static void fill_status(retrovision_v1_Envelope *e)
     s->obs_dropped = st.dropped;
     s->rx_frames_bad = rv_link_rx_bad();
     s->link = rv_link_kind(s_link);
+    if (s_link == RV_T_BLE) {
+        s->link_rssi = rv_link_ble_rssi();
+    }
 }
 
 static void send_ack(uint32_t command_seq, retrovision_v1_AckResult res, const char *msg)
@@ -246,6 +249,8 @@ static void on_hello_ack(uint32_t seq, const retrovision_v1_HelloAck *a, rv_tran
     if (s_link != RV_T_USB && a->accepted) {
         if (a->auth_mac.size != 32 || !rv_link_auth_check(s_nonce, s_boot_id, a->auth_mac.bytes, a->auth_mac.size)) {
             ESP_LOGW(TAG, "wireless auth failed; not starting session");
+            // Tell the host why, so it can ask for a re-pair instead of retrying blindly.
+            send_ack(seq, retrovision_v1_AckResult_ACK_RESULT_INVALID, "auth failed: pairing key mismatch");
             go_idle(ST_HELLO); // retry with a fresh challenge
             return;
         }
@@ -386,8 +391,10 @@ static void session_task(void *arg)
         // Plugging or unplugging the cable restarts the handshake on the new transport.
         const bool usb = rv_link_connected(RV_T_USB);
         const bool ble = rv_link_connected(RV_T_BLE);
-        const rv_transport_t want = usb ? RV_T_USB : (ble ? RV_T_BLE : s_link);
-        if ((usb || ble) && want != s_link) {
+        // With no host anywhere, fall back to the cable: Hellos then reach a phone that plugs in
+        // later (a dropped BLE host has to reconnect and handshake again anyway).
+        const rv_transport_t want = usb ? RV_T_USB : (ble ? RV_T_BLE : RV_T_USB);
+        if (want != s_link && (usb || ble || s_link != RV_T_USB)) {
             ESP_LOGI(TAG, "link switch %d -> %d", s_link, want);
             s_link = want;
             rv_link_set_active(want);

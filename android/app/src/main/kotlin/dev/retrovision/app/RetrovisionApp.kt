@@ -14,6 +14,8 @@ class RetrovisionApp : Application() {
         super.onCreate()
         instance = this
         CrashLog.install(this)
+        // A restore confirmed in the previous run is applied before anything opens the database.
+        dev.retrovision.app.data.Backup.applyPending(this)
         Diag.i("app", "started · ${BuildConfig.VERSION_NAME} · ${Diag.heapLine()}")
         Diag.startStallWatch()
         // Map renderer: offline only. Marked disconnected so it never tries the network on its own.
@@ -23,6 +25,8 @@ class RetrovisionApp : Application() {
         }.onFailure { Diag.w("map", "renderer init failed: ${it.message}") }
         Thread { dev.retrovision.app.enrich.Vendors.load(this) }.start()
         Thread { dev.retrovision.app.map.OfflineMaps.init(this) }.start()
+        // Automatic backup, if due (also checked hourly while collecting).
+        Thread({ Thread.sleep(20_000); runCatching { dev.retrovision.app.data.Backup.runIfDue(this) } }, "rv-autobackup").apply { isDaemon = true }.start()
     }
 
     override fun onTrimMemory(level: Int) {

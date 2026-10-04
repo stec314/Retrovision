@@ -129,6 +129,16 @@ static void ble_flush(TickType_t timeout)
 
 static const rv_transport_ops_t s_ops = {ble_write, ble_connected, ble_flush};
 
+int rv_link_ble_rssi(void)
+{
+    uint16_t conn = s_conn;
+    int8_t rssi = 0;
+    if (conn == BLE_HS_CONN_HANDLE_NONE || ble_gap_conn_rssi(conn, &rssi) != 0) {
+        return 0;
+    }
+    return rssi;
+}
+
 void rv_link_ble_register_gatt(void)
 {
     // LE Secure Connections, no I/O ("just works"), bonded so the phone reconnects silently.

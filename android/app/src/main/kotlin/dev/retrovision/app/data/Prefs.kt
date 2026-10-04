@@ -129,6 +129,34 @@ class Prefs(ctx: Context) {
         blePairKeyB64 = ""
     }
 
+    // ---- automatic backup to a folder outside the app (survives an uninstall) ----
+    /** Folder picked by the user (SAF tree URI), "" = automatic backup off. */
+    var autoBackupTree: String
+        get() = p.getString("autoBackupTree", "") ?: ""
+        set(v) = p.edit().putString("autoBackupTree", v).apply()
+
+    /** Password the automatic backups are sealed with (kept Keystore-sealed here). */
+    var autoBackupPassword: String
+        get() = secret("autoBackupPassword")
+        set(v) = setSecret("autoBackupPassword", v)
+
+    /** Days between automatic backups (1 or 7). */
+    var autoBackupDays: Int
+        get() = p.getInt("autoBackupDays", 1)
+        set(v) = p.edit().putInt("autoBackupDays", v).apply()
+
+    var autoBackupMaps: Boolean
+        get() = p.getBoolean("autoBackupMaps", false)
+        set(v) = p.edit().putBoolean("autoBackupMaps", v).apply()
+
+    var lastAutoBackupMs: Long
+        get() = p.getLong("lastAutoBackupMs", 0L)
+        set(v) = p.edit().putLong("lastAutoBackupMs", v).apply()
+
+    var lastAutoBackupError: String
+        get() = p.getString("lastAutoBackupError", "") ?: ""
+        set(v) = p.edit().putString("lastAutoBackupError", v).apply()
+
     /** Wi-Fi channel plan sent to the probe: 0 focused (default), 1 balanced, 2 full sweep. */
     var channelPlan: Int
         get() = p.getInt("channelPlan", 0)

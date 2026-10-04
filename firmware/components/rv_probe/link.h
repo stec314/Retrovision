@@ -54,3 +54,5 @@ void rv_link_reset_rx(rv_transport_t t);
 void rv_link_usb_init(void);
 void rv_link_ble_register_gatt(void);   // before the NimBLE host starts (BLE link mode only)
 void rv_link_ble_on_sync(void);         // NimBLE host synced: start advertising
+// RSSI of the connected BLE host (dBm), 0 if none.
+int rv_link_ble_rssi(void);

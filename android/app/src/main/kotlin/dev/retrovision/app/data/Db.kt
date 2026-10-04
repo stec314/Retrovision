@@ -353,7 +353,7 @@ abstract class Db : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
-        private const val NAME = "retrovision.db"
+        const val NAME = "retrovision.db"
 
         val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {

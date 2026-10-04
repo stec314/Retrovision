@@ -56,30 +56,47 @@ class BleChannel(private val ctx: Context) {
     private val servicesReady = CompletableDeferred<Boolean>()
     private val outbox = Channel<ByteArray>(capacity = 256)
 
-    /** Scans for a probe advertising our service whose name matches "RV-<name>". Null on timeout. */
-    suspend fun scan(name: String, timeoutMs: Long = 12_000): BluetoothDevice? {
-        val scanner = adapter?.bluetoothLeScanner ?: return null
+    /** A probe found by [scan]: the device, its signal, and every other Retrovision probe heard. */
+    class ScanHit(val device: BluetoothDevice?, val rssi: Int, val others: Map<String, Int>)
+
+    /** Human-readable reason of the last failure, for the Settings status line. */
+    @Volatile var lastError: String = ""
+        private set
+
+    /**
+     * Scans for a probe advertising our service whose name matches "RV-<name>". The hit's device is
+     * null on timeout; [ScanHit.others] lists other probes heard (e.g. one paired with another key).
+     */
+    suspend fun scan(name: String, timeoutMs: Long = 12_000): ScanHit {
+        val ad = adapter
+        if (ad == null || !ad.isEnabled) { lastError = "Bluetooth is off"; return ScanHit(null, 0, emptyMap()) }
+        val scanner = ad.bluetoothLeScanner ?: run { lastError = "no BLE scanner"; return ScanHit(null, 0, emptyMap()) }
         val want = "RV-$name"
-        val found = CompletableDeferred<BluetoothDevice?>()
+        val found = CompletableDeferred<Pair<BluetoothDevice, Int>?>()
+        val others = java.util.concurrent.ConcurrentHashMap<String, Int>()
         val cb = object : ScanCallback() {
             override fun onScanResult(type: Int, r: ScanResult) {
-                val n = r.scanRecord?.deviceName ?: r.device.name
+                val n = r.scanRecord?.deviceName ?: runCatching { r.device.name }.getOrNull()
                 if (n == want || (name.isEmpty() && r.scanRecord?.serviceUuids?.contains(ParcelUuid(SVC)) == true)) {
-                    if (!found.isCompleted) found.complete(r.device)
+                    if (!found.isCompleted) found.complete(r.device to r.rssi)
+                } else {
+                    others[n ?: r.device.address] = r.rssi
                 }
             }
             override fun onScanFailed(code: Int) {
-                Diag.w("ble", "scan failed: $code")
+                lastError = "scan failed (code $code)" + if (code == SCAN_FAILED_APPLICATION_REGISTRATION_FAILED) ": toggle Bluetooth off and on" else ""
+                Diag.w("ble", lastError)
                 if (!found.isCompleted) found.complete(null)
             }
         }
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         runCatching { scanner.startScan(listOf(filter), settings, cb) }
-            .onFailure { Diag.w("ble", "startScan: ${it.message}"); return null }
-        val dev = withTimeoutOrNull(timeoutMs) { found.await() }
+            .onFailure { lastError = "cannot scan: ${it.message}"; Diag.w("ble", lastError); return ScanHit(null, 0, emptyMap()) }
+        val hit = withTimeoutOrNull(timeoutMs) { found.await() }
         runCatching { scanner.stopScan(cb) }
-        return dev
+        if (hit == null && lastError.isEmpty()) lastError = "“$want” not heard"
+        return ScanHit(hit?.first, hit?.second ?: 0, HashMap(others))
     }
 
     private val cb = object : BluetoothGattCallback() {
@@ -89,9 +106,14 @@ class BleChannel(private val ctx: Context) {
                 g.requestMtu(247)
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 up = false
+                lastError = "disconnected: " + gattStatus(status)
                 if (!servicesReady.isCompleted) servicesReady.complete(false)
-                Diag.i("ble", "disconnected (status $status)")
+                Diag.i("ble", lastError)
             }
+        }
+
+        override fun onReadRemoteRssi(g: BluetoothGatt, r: Int, status: Int) {
+            if (status == BluetoothGatt.GATT_SUCCESS) rssi = r
         }
 
         override fun onMtuChanged(g: BluetoothGatt, m: Int, status: Int) {
@@ -104,7 +126,8 @@ class BleChannel(private val ctx: Context) {
             val rx = svc?.getCharacteristic(RX)
             val tx = svc?.getCharacteristic(TX)
             if (rx == null || tx == null) {
-                Diag.w("ble", "NUS service/characteristics not found")
+                lastError = "probe service not found (status $status): old firmware, or the probe is not in BLE mode"
+                Diag.w("ble", lastError)
                 servicesReady.complete(false)
                 return
             }
@@ -141,22 +164,46 @@ class BleChannel(private val ctx: Context) {
         }
     }
 
+    /** Called as the connection progresses ("bonding", "connecting"…), for the status line. */
+    @Volatile var onStage: (String) -> Unit = {}
+
     /** Connects to [device], discovers the service and enables notifications. Bonds if needed. */
     suspend fun open(device: BluetoothDevice): Boolean {
+        lastError = ""
         // Bond first so the encrypted RX characteristic is writable right away.
         if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            onStage("bonding")
+            Diag.i("ble", "bonding with ${device.address}")
             runCatching { device.createBond() }
-            withTimeoutOrNull(20_000) {
+            var sawBonding = false
+            val bonded = withTimeoutOrNull(30_000) {
                 while (device.bondState != BluetoothDevice.BOND_BONDED) {
-                    if (device.bondState == BluetoothDevice.BOND_NONE && coroutineContext.isActive) delay(300) else delay(300)
+                    if (device.bondState == BluetoothDevice.BOND_BONDING) sawBonding = true
+                    // Back to NONE after trying: refused, timed out, or a stale key on one side.
+                    if (sawBonding && device.bondState == BluetoothDevice.BOND_NONE) return@withTimeoutOrNull false
+                    delay(300)
                 }
+                true
+            } ?: false
+            if (!bonded) {
+                lastError = "Bluetooth pairing failed or was not accepted. If the probe was re-flashed or re-paired, remove “${runCatching { device.name }.getOrNull() ?: device.address}” in the phone's Bluetooth settings and retry"
+                Diag.w("ble", lastError)
+                return false
             }
         }
+        onStage("connecting")
         gatt = device.connectGatt(ctx, false, cb, BluetoothDevice.TRANSPORT_LE)
         val ok = withTimeoutOrNull(20_000) { servicesReady.await() } ?: false
         up = ok && gatt != null && rxChar != null
+        if (!up && lastError.isEmpty()) lastError = "GATT setup timed out"
         return up
     }
+
+    /** RSSI of the open connection as the phone hears it, refreshed by [readRssi]. */
+    @Volatile var rssi: Int = 0
+        private set
+
+    fun readRssi() { runCatching { gatt?.readRemoteRssi() } }
 
     /** Queues a frame; the writer loop drains it, chunked to the MTU, without response. */
     fun write(data: ByteArray) {
@@ -204,4 +251,19 @@ class BleChannel(private val ctx: Context) {
         gatt = null
         rxChar = null
     }
+
+    /** Mtu agreed for this connection (payload per packet = mtu - 3). */
+    val currentMtu get() = mtu
+}
+
+/** GATT status codes as people meet them. */
+fun gattStatus(status: Int): String = when (status) {
+    0 -> "normal"
+    5, 15 -> "status $status, authentication/encryption refused: remove the probe in the phone's Bluetooth settings and retry"
+    8 -> "status 8, link timeout (out of range or probe off)"
+    19 -> "status 19, the probe closed the link"
+    22 -> "status 22, closed by the phone"
+    62 -> "status 62, connection failed to establish"
+    133 -> "status 133, generic GATT error (often transient: retry; toggling Bluetooth helps)"
+    else -> "status $status"
 }

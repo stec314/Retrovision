@@ -57,6 +57,23 @@ data class RadarBlip(
 
 data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Double = 0.0, val ts: Long = 0L)
 
+/** Where the wireless (BLE) probe link stands, for the Settings status card. */
+enum class BleStage { OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT }
+
+data class BleLinkUi(
+    val stage: BleStage = BleStage.OFF,
+    /** Last failure, human readable ("" = none). Kept across retries so it stays visible. */
+    val lastError: String = "",
+    /** Phone-side RSSI: from the scan, then from the open connection. */
+    val rssi: Int = 0,
+    /** Other Retrovision probes heard while scanning (name -> dBm): paired with another phone or key. */
+    val others: Map<String, Int> = emptyMap(),
+    val attempts: Int = 0,
+    val mtu: Int = 0,
+    val connectedSinceMs: Long = 0,
+    val sinceMs: Long = System.currentTimeMillis(),
+)
+
 /** Process-wide state shared between the service and the UI. */
 object Collector {
     val connection = MutableStateFlow(ConnectionUi())
@@ -70,6 +87,11 @@ object Collector {
     @Volatile var session: ProbeSession? = null
     /** True while a USB probe session is up: the BLE link stands down (cable is preferred). */
     @Volatile var usbConnected = false
+    /** True while a BLE probe session is up: the USB loop must not overwrite [connection]. */
+    @Volatile var bleSessionUp = false
+    val bleLink = MutableStateFlow(BleLinkUi())
+    /** Bumped by the UI ("Retry now") to cut the wait between attempts. */
+    val bleKick = MutableStateFlow(0L)
 
     /** Set while the flasher owns the USB port. */
     val usbPaused = AtomicBoolean(false)

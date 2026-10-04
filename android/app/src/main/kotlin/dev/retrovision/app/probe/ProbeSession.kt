@@ -54,7 +54,17 @@ class ProbeInfo(
     val hardwareId: String,
     val bootId: Int,
     val protocol: String,
+    /** Transport this session runs on, and the one the probe is set up for (pairing). */
+    val link: LinkKind = LinkKind.LINK_KIND_USB,
+    val configuredLink: LinkKind = LinkKind.LINK_KIND_USB,
+    /** Name the probe advertises over BLE ("RV-<name>"), empty if never paired. */
+    val linkName: String = "",
+    /** Firmware can carry the session over BLE. */
+    val bleLinkCapable: Boolean = false,
 )
+
+/** Last CommandAck from the probe. */
+data class AckInfo(val commandSeq: Int, val ok: Boolean, val result: String, val message: String, val atMs: Long)
 
 data class SessionState(
     val phase: Phase = Phase.WAITING_HELLO,
@@ -73,6 +83,9 @@ data class SessionState(
     val channel: Int = 0,
     val lastLog: String = "",
     val rejectReason: String = "",
+    /** BLE link: the probe's view of our signal (dBm), 0 if unknown. */
+    val linkRssi: Int = 0,
+    val lastAck: AckInfo? = null,
 )
 
 /**
@@ -207,7 +220,7 @@ class ProbeSession(
                 update {
                     it.copy(
                         probeDropped = s.obsDropped, freeHeap = s.freeHeapBytes,
-                        chipTempC = s.chipTempC, channel = s.currentWifiChannel,
+                        chipTempC = s.chipTempC, channel = s.currentWifiChannel, linkRssi = s.linkRssi,
                     )
                 }
             }
@@ -217,7 +230,17 @@ class ProbeSession(
                 // Ignore absurd round trips (stale echo after a reconnect).
                 if (t3 - it.hostT1Us in 0..5_000_000L) clock.addSample(it.hostT1Us, it.probeT2Us, t3)
             }
-            else -> Unit // CommandAck: nothing to do in v1
+            Envelope.PayloadCase.COMMAND_ACK -> env.commandAck.let { a ->
+                val ok = a.result == dev.retrovision.proto.v1.AckResult.ACK_RESULT_OK
+                val info = AckInfo(a.commandSeq, ok, a.result.name.removePrefix("ACK_RESULT_"), a.message, System.currentTimeMillis())
+                // A wireless probe that rejects our MAC says so: the keys on the two sides differ.
+                if (!ok && a.message.startsWith("auth failed")) {
+                    update { it.copy(lastAck = info, phase = Phase.REJECTED, rejectReason = "Pairing key mismatch: pair again with the cable") }
+                } else {
+                    update { it.copy(lastAck = info) }
+                }
+            }
+            else -> Unit
         }
     }
 
@@ -261,7 +284,7 @@ class ProbeSession(
         if (h.link == LinkKind.LINK_KIND_BLE) {
             val key = pairingKey()
             if (key == null || h.authNonce.size() != 16) {
-                update { it.copy(phase = Phase.REJECTED, rejectReason = "Not paired with this probe") }
+                update { it.copy(phase = Phase.REJECTED, rejectReason = "This phone has no pairing key for this probe: pair again with the cable") }
                 return
             }
             val mac = LinkAuth.authMac(key, h.authNonce.toByteArray(), h.bootId)
@@ -287,6 +310,8 @@ class ProbeSession(
                 info = ProbeInfo(
                     h.probeType, h.firmwareVersion, probeId, h.bootId,
                     "${h.protocolMajor}.${h.protocolMinor}",
+                    link = h.link, configuredLink = h.configuredLink, linkName = h.name,
+                    bleLinkCapable = h.capabilitiesList.contains(Capability.CAPABILITY_LINK_BLE),
                 ),
             )
         }
@@ -421,16 +446,18 @@ class ProbeSession(
      * a name and the pairing key on the probe, which then reboots into that mode.
      * [key] is 16..32 random bytes. [mode] USB turns wireless off.
      */
-    fun setLink(mode: LinkKind, name: String, key: ByteArray) {
+    fun setLink(mode: LinkKind, name: String, key: ByteArray): Int {
         synchronized(lock) {
+            val seq = nextSeq()
             send(
-                Envelope.newBuilder().setSeq(nextSeq()).setCommand(
+                Envelope.newBuilder().setSeq(seq).setCommand(
                     Command.newBuilder().setSetLink(
                         SetLink.newBuilder().setMode(mode).setName(name)
                             .setKey(com.google.protobuf.ByteString.copyFrom(key)),
                     ),
                 ).build(),
             )
+            return seq
         }
     }
 

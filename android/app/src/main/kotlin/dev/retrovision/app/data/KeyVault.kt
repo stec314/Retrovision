@@ -47,6 +47,28 @@ object KeyVault {
         return hex(pass)
     }
 
+    /**
+     * Replaces the stored passphrase with one restored from a backup ([hexPass] as returned by
+     * [passphrase]). Only for the restore step at start-up, before the database is opened.
+     */
+    fun importPassphrase(ctx: Context, hexPass: ByteArray): Boolean {
+        val txt = String(hexPass, Charsets.US_ASCII).trim()
+        if (txt.length != 64 || !txt.all { it in "0123456789abcdef" }) return false
+        val raw = ByteArray(32) { i -> txt.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
+        val key = wrappingKey(ALIAS) ?: return false
+        return try {
+            val c = Cipher.getInstance("AES/GCM/NoPadding")
+            c.init(Cipher.ENCRYPT_MODE, key)
+            val enc = c.doFinal(raw)
+            ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit()
+                .putString(PREF_KEY, Base64.encodeToString(c.iv + enc, Base64.NO_WRAP)).commit()
+        } catch (_: Exception) {
+            false
+        } finally {
+            raw.fill(0)
+        }
+    }
+
     /** Forget the stored passphrase (the database becomes unreadable and must be deleted). */
     fun reset(ctx: Context) {
         ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit().clear().apply()

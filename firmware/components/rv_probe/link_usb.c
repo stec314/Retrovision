@@ -2,6 +2,7 @@
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 // Cable transport: USB-Serial-JTAG (ESP32-S3/C5) or UART0 at 921600 baud (classic ESP32).
 #include "link.h"
+#include "link_cfg.h"
 
 #include "sdkconfig.h"
 #if CONFIG_IDF_TARGET_ESP32
@@ -48,7 +49,10 @@ static bool usb_write(const uint8_t *data, size_t len, TickType_t timeout)
 
 static bool usb_connected(void)
 {
-    const bool talking = esp_timer_get_time() - s_last_rx_us < 120LL * 1000 * 1000;
+    // With a BLE host attached, give up on a silent cable sooner (the host time-syncs every
+    // 30 s), so unplugging hands over to BLE within ~40 s instead of 2 minutes.
+    const int64_t window_us = (rv_link_connected(RV_T_BLE) ? 40LL : 120LL) * 1000 * 1000;
+    const bool talking = esp_timer_get_time() - s_last_rx_us < window_us;
 #if CONFIG_IDF_TARGET_ESP32
     // A UART cannot tell whether anyone listens: silence is the only signal.
     return talking;
@@ -89,8 +93,12 @@ void rv_link_usb_init(void)
     };
     ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
 #endif
-    // Assume a host at boot (the app opens the port, which resets the board).
-    s_last_rx_us = esp_timer_get_time();
+    // Assume a host at boot (the app opens the port, which resets the board) -- unless the probe
+    // is set up for a wireless link, where it most likely runs on a power bank: then the cable
+    // counts only once a host actually talks on it.
+    s_last_rx_us = rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_USB
+                       ? esp_timer_get_time()
+                       : esp_timer_get_time() - 600LL * 1000 * 1000;
     rv_link_register(RV_T_USB, &s_ops);
     xTaskCreatePinnedToCore(rx_task, "rv_link_usb", 4096, NULL, 10, NULL, tskNO_AFFINITY);
 }
