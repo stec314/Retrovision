@@ -43,6 +43,9 @@ import dev.retrovision.app.BleLinkUi
 import dev.retrovision.app.BleStage
 import kotlinx.coroutines.flow.first
 import dev.retrovision.app.probe.ProbeSession
+import dev.retrovision.app.probe.Phase
+import dev.retrovision.app.ProbeLinkInfo
+import dev.retrovision.proto.v1.LinkKind
 import dev.retrovision.app.probe.ProbeTransport
 import dev.retrovision.app.probe.UsbAccess
 import dev.retrovision.app.ui.MainActivity
@@ -287,7 +290,7 @@ class CollectorService : Service() {
             // that does lets the phone's own scanner rest.
             val streaming = Collector.allSessions().any {
                 val st = it.state.value
-                st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != dev.retrovision.proto.v1.LinkKind.LINK_KIND_BLE
+                st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
             }
             val nowMs = System.currentTimeMillis()
             probeGoneSince = if (streaming) 0L else if (probeGoneSince == 0L) nowMs else probeGoneSince
@@ -502,7 +505,7 @@ class CollectorService : Service() {
                 val ad = (getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
                 if (ad?.isEnabled != true) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.BT_OFF) } }; bleWait(3000); continue }
 
-                val missing = names.filter { it != onCable && it !in running }.toSet()
+                val missing = names.filter { it != onCable && !running.containsKey(it) }.toSet()
                 if (missing.isEmpty()) { bleWait(2000); continue }
                 missing.forEach { n -> bleUi(n) { it.copy(stage = BleStage.SCANNING, attempts = it.attempts + 1) } }
                 val scanner = BleChannel(this)
@@ -567,7 +570,7 @@ class CollectorService : Service() {
         // Notifications arrive on a binder thread: hop onto a worker so decoding never blocks BLE.
         val inbox = java.util.concurrent.ArrayBlockingQueue<ByteArray>(INBOX_CHUNKS)
         channel.onData = { if (!inbox.offer(it)) Diag.update { d -> d.copy(inboxDrops = d.inboxDrops + 1) } }
-        Collector.addLink(dev.retrovision.app.ProbeLinkInfo(key, name, session, usb = false))
+        Collector.addLink(ProbeLinkInfo(key, name, session, usb = false))
         val worker = Thread({
             try {
                 while (!Thread.currentThread().isInterrupted) {
@@ -698,7 +701,7 @@ class CollectorService : Service() {
             }
         }
         val session = ProbeSession(transport, scope, ::onSighting, ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value }, channelPlan = { prefs.channelPlan })
-        Collector.addLink(dev.retrovision.app.ProbeLinkInfo("usb", name, session, usb = true))
+        Collector.addLink(ProbeLinkInfo("usb", name, session, usb = true))
         Collector.usbConnected = true
         val done = CompletableDeferred<Unit>()
         // The USB reader only copies bytes into [inbox]; decoding, identity resolution and the DB
@@ -750,7 +753,7 @@ class CollectorService : Service() {
                     phase = st.phase
                     Diag.i("probe", "phase ${st.phase}" + (st.info?.let { " · fw ${it.firmware} · proto ${it.protocol}" } ?: "") +
                         (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
-                    if (st.phase == dev.retrovision.app.probe.Phase.STREAMING) reconfigureAll()
+                    if (st.phase == Phase.STREAMING) reconfigureAll()
                 }
                 if (st.probeDropped > dropped + 500) {
                     dropped = st.probeDropped
