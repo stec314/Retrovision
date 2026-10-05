@@ -23,7 +23,8 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
-#include "store/config/ble_store_config.h"
+// Bond storage in NVS (CONFIG_BT_NIMBLE_NVS_PERSIST); not declared in a public header.
+void ble_store_config_init(void);
 #include "host/ble_store.h"
 #include "esp_timer.h"
 #include "freertos/stream_buffer.h"
