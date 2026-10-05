@@ -5,6 +5,8 @@ package dev.retrovision.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -92,6 +94,23 @@ fun AlertsScreen(onClose: () -> Unit) {
     val threats = threatsAll.filter { (show == "all" || show == "attack") && (!strongOnly || Levels.of(it) == Level.STRONG) }
     val drones = dronesAll.filter { (show == "all" || show == "drone") && !strongOnly }
     var entity by remember { mutableStateOf<EntityReport?>(null) }
+    // Multi-select (long-press a device alert): act on several at once.
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var confirmBulkMine by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val selecting = selected.isNotEmpty()
+    val chosen = alerts.filter { it.entityId in selected }
+    fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
+    BackHandler(enabled = selecting) { selected = emptySet() }
+    fun bulkVerdict(label: Int) = scope.launch {
+        val dao = RetrovisionApp.instance.db.dao()
+        val now = System.currentTimeMillis()
+        for (r in chosen) for (m in r.memberIds) {
+            dao.addFeedback(FeedbackRow(entityId = m, label = label, score = r.score, reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = now))
+        }
+        selected = emptySet()
+        Collector.analyzeNow.value = System.nanoTime()
+    }
     var threat by remember { mutableStateOf<WifiThreats.Threat?>(null) }
     var drone by remember { mutableStateOf<Drones.Drone?>(null) }
 
@@ -104,6 +123,7 @@ fun AlertsScreen(onClose: () -> Unit) {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(160.dp),
                 modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = if (selecting) 88.dp else 0.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -147,13 +167,29 @@ fun AlertsScreen(onClose: () -> Unit) {
                 }
                 if (alerts.isNotEmpty()) {
                     header(if (show == "tracker") Texts.tr("Trackers", "Tracker") else Texts.tr("Possibly following you", "Forse ti segue"))
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (selecting) Texts.tr("${selected.size} selected", "${selected.size} selezionate")
+                                else Texts.tr("Long-press to select several", "Tieni premuto per selezionarne più di una"),
+                                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (selecting) {
+                                TextButton(onClick = { selected = alerts.map { it.entityId }.toSet() }) { Text(Texts.tr("All", "Tutte")) }
+                                TextButton(onClick = { selected = emptySet() }) { Text(Texts.tr("None", "Nessuna")) }
+                            }
+                        }
+                    }
                     items(alerts, key = { "e" + it.entityId }) { r ->
                         Tile(
                             CategoryUi.icon(r.category), Texts.entityLabel(r),
                             r.reasons.take(2).joinToString(" · ") { Texts.reason(it) },
                             Texts.level(Levels.of(r)), r.lastSeenMs, if (Levels.of(r) == Level.STRONG) ATTACK else FOLLOW,
                             r.memberIds.firstNotNullOfOrNull { verdicts[it] },
-                        ) { entity = r }
+                            selected = r.entityId in selected,
+                            onLongClick = { toggle(r.entityId) },
+                        ) { if (selecting) toggle(r.entityId) else entity = r }
                     }
                 }
                 if (drones.isNotEmpty()) {
@@ -204,6 +240,58 @@ fun AlertsScreen(onClose: () -> Unit) {
             }
         }
     }
+    if (selecting) {
+        androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Surface(tonalElevation = 6.dp, shadowElevation = 6.dp, shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    OutlinedButton(onClick = { confirmBulkMine = true }) { Text(Texts.tr("It's mine", "Sono miei")) }
+                    OutlinedButton(onClick = { bulkVerdict(0) }) { Text(Texts.tr("False alarm", "Falso allarme")) }
+                    OutlinedButton(onClick = { bulkVerdict(2) }) { Text(Texts.tr("Suspicious", "Sospetti")) }
+                    val types = chosen.mapNotNull { r -> dev.retrovision.app.data.Mutes.typeKey(r)?.let { it to dev.retrovision.app.data.Mutes.typeLabel(r) } }.distinct()
+                    if (types.isNotEmpty()) OutlinedButton(onClick = {
+                        for ((k, l) in types) dev.retrovision.app.data.Mutes.mute(prefs, k, l, System.currentTimeMillis() + 24 * 3_600_000L)
+                        muteTick++; selected = emptySet(); Collector.analyzeNow.value = System.nanoTime()
+                    }) { Text(Texts.tr("Mute type 24 h", "Silenzia tipo 24 h")) }
+                    TextButton(onClick = { selected = emptySet() }) { Text(Texts.tr("Cancel", "Annulla")) }
+                }
+            }
+        }
+    }
+    if (confirmBulkMine) {
+        val rotating = chosen.count { it.macTrust != dev.retrovision.core.identity.MacTrust.STABLE }
+        AlertDialog(
+            onDismissRequest = { confirmBulkMine = false },
+            title = { Text(Texts.tr("Are these ${chosen.size} devices yours?", "Questi ${chosen.size} dispositivi sono tuoi?")) },
+            text = {
+                Text(
+                    Texts.tr(
+                        "They will be hidden from alerts and lists until you remove them in Settings → Ignored devices. Only confirm what you are sure of: a device planted on you also travels with you.",
+                        "Verranno nascosti da allerte ed elenchi finché non li togli in Impostazioni → Dispositivi ignorati. Conferma solo ciò di cui sei sicuro: anche un dispositivo nascosto addosso a te viaggia con te.",
+                    ) + if (rotating > 0) Texts.tr(
+                        "\n\n$rotating of them rotate their address: this covers only the addresses seen so far. For your own devices that keep coming back, use “Mute type”.",
+                        "\n\n$rotating di questi cambiano indirizzo: vale solo per gli indirizzi visti finora. Per i tuoi dispositivi che ricompaiono, usa “Silenzia tipo”.",
+                    ) else "",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val list = chosen
+                    scope.launch {
+                        val dao = RetrovisionApp.instance.db.dao()
+                        val now = System.currentTimeMillis()
+                        for (r in list) for (m in r.memberIds) dao.addIgnore(dev.retrovision.app.data.IgnoreRow(m, Texts.entityLabel(r), now))
+                        selected = emptySet()
+                        Collector.analyzeNow.value = System.nanoTime()
+                    }
+                    confirmBulkMine = false
+                }) { Text(Texts.tr("Yes, they're mine", "Sì, sono miei")) }
+            },
+            dismissButton = { TextButton(onClick = { confirmBulkMine = false }) { Text(Texts.tr("Cancel", "Annulla")) } },
+        )
+    }
     entity?.let { DeviceDialog(it) { entity = null } }
     threat?.let { ThreatDialog(it) { threat = null } }
     drone?.let { DroneDialog(it) { drone = null } }
@@ -216,6 +304,7 @@ private fun verdictLabel(v: Int) = when (v) {
 }
 
 @Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 private fun Tile(
     icon: String,
     title: String,
@@ -224,21 +313,24 @@ private fun Tile(
     lastMs: Long,
     color: Color,
     verdict: Int?,
+    selected: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val ago = ((System.currentTimeMillis() - lastMs) / 60_000).let { if (it < 1) Texts.tr("now", "ora") else Texts.tr("$it min ago", "$it min fa") }
     Column(
         Modifier
             .clip(RoundedCornerShape(12.dp))
-            .background(color.copy(alpha = 0.13f))
-            .clickable { onClick() }
+            .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.30f) else color.copy(alpha = 0.13f))
+            .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(12.dp)
             // Same size for every tile, whatever the text: a regular grid reads at a glance.
             .height(176.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(icon, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            Text(if (selected) "✓" else icon, fontSize = 18.sp, modifier = Modifier.weight(1f))
             Text(value, color = color, fontWeight = FontWeight.SemiBold)
         }
         Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
