@@ -29,6 +29,8 @@ data class AnalysisConfig(
     val windowMinutes: List<Int> = listOf(5, 10, 15, 20),
     val placeRadiusM: Double = 100.0,
     val fixMaxGapMs: Long = 60_000,
+    /** Gaps up to this long are bridged when the fixes either side are within 75 m (you stood still). */
+    val stationaryBridgeMs: Long = 20 * 60_000L,
     /** Alert when score ≥ this AND the entity was seen at ≥ [alertMinPlaces] places. */
     val alertScore: Double = 0.7,
     val alertMinPlaces: Int = 3,
@@ -88,7 +90,25 @@ data class IgnoreList(
     val apSsids: Set<String> = emptySet(),
     /** Probe-request fingerprints of YOUR phone (calibrated), so its own probes don't count as "someone else". */
     val ownFingerprints: Set<String> = emptySet(),
-)
+    /** BLE advert signatures ([dev.retrovision.core.identity.BleSignature]) you marked as yours: every address. */
+    val bleSignatures: Set<String> = emptySet(),
+) {
+    companion object {
+        /**
+         * Splits stored ignore rows: plain entity ids, and "sig:" rows that ignore an advert
+         * signature on every address.
+         */
+        fun fromRows(ids: Collection<String>, apSsids: Set<String> = emptySet(), ownFingerprints: Set<String> = emptySet()): IgnoreList {
+            val p = dev.retrovision.core.identity.BleSignature.IGNORE_PREFIX
+            return IgnoreList(
+                entityIds = ids.filterNot { it.startsWith(p) }.toSet(),
+                apSsids = apSsids,
+                ownFingerprints = ownFingerprints,
+                bleSignatures = ids.filter { it.startsWith(p) }.map { it.removePrefix(p) }.toSet(),
+            )
+        }
+    }
+}
 
 /** One sighting already attributed to an entity by the EntityResolver. */
 class EntitySighting(val entityId: String, val sighting: Sighting)
@@ -215,12 +235,15 @@ class EntityReport(
     val model: String? = null,
     /** Apple device: what it last said it was doing (Nearby Info). */
     val appleActivity: dev.retrovision.core.identity.PayloadDecoder.AppleActivity? = null,
+    /** Its BLE advert signature, when it has one ([dev.retrovision.core.identity.BleSignature]). */
+    val bleSignature: String? = null,
 ) {
     fun with(score: Double, alert: Boolean, reasons: List<Reason>) = EntityReport(
         entityId, kind, score, alert, reasons, placeIds, windows, firstSeenMs, lastSeenMs, sightings, activeMinutes,
         maxRssi, addresses, ssids, tracker, bleCompanyId, mobileAp, track, category, macTrust, probedSsids, probeRequests,
         wildcardProbes, joinAttempts, bleName, unfamiliarPlaces, notable, droneId, isDrone, effectivePlaces, buckets,
         memberIds, htProfile, addressLinks, apUptimeDays, visits, reasonWeights, rawScore, caps, model, appleActivity,
+        bleSignature,
     )
 }
 
@@ -273,6 +296,8 @@ enum class LinkVia {
     SEQUENCE,
     /** BLE: same distinctive name and advert shape, right after the previous address went quiet. */
     BLE_NAME,
+    /** BLE: the very same advert from a new address, seconds after the previous one went quiet. */
+    BLE_HANDOVER,
     /** Several addresses asking for the same rare networks. */
     RARE_NETWORKS,
     /** Access point with the same boot moment (beacon uptime) under a new name or address. */
@@ -379,7 +404,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val goodFixes = fixes.filter {
             it.timeMs in from..nowMs && it.accuracyM <= config.maxFixAccuracyM.toFloat()
         }
-        val timeline = FixTimeline(goodFixes, config.fixMaxGapMs)
+        val timeline = FixTimeline(goodFixes, config.fixMaxGapMs, config.stationaryBridgeMs)
         val clusterer = PlaceClusterer(config.placeRadiusM)
         val placeOfFix = HashMap<GeoFix, Place>()
         for (f in timeline.fixes) placeOfFix[f] = clusterer.assign(f)
@@ -424,6 +449,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 r0.track, r0.category, r0.macTrust, r0.probedSsids, r0.probeRequests, r0.wildcardProbes, r0.joinAttempts,
                 r0.bleName, r0.unfamiliarPlaces, r0.notable, r0.droneId, r0.isDrone, r0.effectivePlaces, r0.buckets, members,
                 r0.htProfile, r0.addressLinks, r0.apUptimeDays, r0.visits, r0.reasonWeights, r0.rawScore, r0.caps,
+                r0.model, r0.appleActivity, r0.bleSignature,
             ) else r0
             reports += links.shared[id]?.let { sh ->
                 val n = list.map { it.sighting.address }.toSet().size
@@ -455,6 +481,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
         if (id in ignore.entityIds) return true
         if (list.any { it.sighting.address in ignore.addresses }) return true
+        if (ignore.bleSignatures.isNotEmpty() && list.any { s ->
+                val ad = s.sighting.ble?.advData
+                ad != null && dev.retrovision.core.identity.BleSignature.of(ad) in ignore.bleSignatures
+            }
+        ) return true
         if (ignore.apSsids.isNotEmpty() && list.any { s ->
                 val w = s.sighting.wifi
                 w != null && (w.kind == WifiKind.BEACON || w.kind == WifiKind.PROBE_RESP) && w.ssidText in ignore.apSsids
@@ -771,6 +802,7 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             bleName = hints.name,
             model = hints.model,
             appleActivity = hints.appleActivity,
+            bleSignature = list.firstNotNullOfOrNull { es -> es.sighting.ble?.advData?.let { dev.retrovision.core.identity.BleSignature.of(it) } },
             unfamiliarPlaces = nUnfamiliar,
             notable = notable.toList(),
             droneId = droneId,
@@ -804,10 +836,18 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 original && merged != null -> merged
                 original -> LinkVia.ORIGINAL
                 a.first.sighting.radio == Radio.WIFI -> LinkVia.SEQUENCE
-                else -> LinkVia.BLE_NAME
+                bleNameLinked(a.first.sighting) -> LinkVia.BLE_NAME
+                else -> LinkVia.BLE_HANDOVER
             }
             AddressLink(mac, via, a.first.sighting.timeMs, a.last, a.n)
         }.sortedBy { it.firstMs }
+    }
+
+    /** True when this BLE sighting was stitched by its serial-like name (else by advert handover). */
+    private fun bleNameLinked(s: dev.retrovision.core.model.Sighting): Boolean {
+        val ad = s.ble?.advData ?: return true
+        val name = dev.retrovision.core.identity.AdvertisementInfo.of(ad).name.orEmpty()
+        return dev.retrovision.core.identity.EntityResolver.isDistinctiveName(name)
     }
 
     /** Largest distance between two of your positions where it was heard (≤ 150 evenly picked). */

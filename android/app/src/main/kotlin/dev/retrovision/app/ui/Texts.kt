@@ -46,6 +46,10 @@ object Texts {
             "linked: same distinctive Bluetooth name and advert, right after the previous address",
             "collegato: stesso nome Bluetooth distintivo e stesso annuncio, subito dopo l'indirizzo precedente",
         )
+        dev.retrovision.core.analysis.LinkVia.BLE_HANDOVER -> tr(
+            "probably the same device: identical advert from a new address, seconds after the previous one went quiet",
+            "probabilmente lo stesso dispositivo: annuncio identico da un nuovo indirizzo, pochi secondi dopo che il precedente ha taciuto",
+        )
         dev.retrovision.core.analysis.LinkVia.RARE_NETWORKS -> tr(
             "linked: asks for the same rare networks",
             "collegato: cerca le stesse reti rare",

@@ -82,10 +82,22 @@ class PlaceClusterer(private val radiusM: Double = 100.0) {
 
 /**
  * Chronological phone positions with nearest-in-time lookup. A sighting is
- * only placed when a fix exists within [maxGapMs]; otherwise it has no place
- * (we never guess a location).
+ * only placed when a fix exists within [maxGapMs], or when it falls in a gap of at most
+ * [stationaryBridgeMs] whose two sides are within [stationaryRadiusM] (you stood still);
+ * otherwise it has no place (we never guess a location while you move).
  */
-class FixTimeline(fixes: List<GeoFix>, private val maxGapMs: Long = 60_000) {
+class FixTimeline(
+    fixes: List<GeoFix>,
+    private val maxGapMs: Long = 60_000,
+    /**
+     * Longest gap bridged while you stand still: when the fixes on both sides of a gap are within
+     * [stationaryRadiusM] of each other you did not go anywhere, so the gap gets that place.
+     * Field data: indoors in a city centre the phone went 14–20 min without a usable fix and 58.6%
+     * of the busiest stop's sightings had no place. 0 disables.
+     */
+    private val stationaryBridgeMs: Long = 0,
+    private val stationaryRadiusM: Double = 75.0,
+) {
     private val sorted = fixes.sortedBy { it.timeMs }
     private val times = LongArray(sorted.size) { sorted[it].timeMs }
 
@@ -98,6 +110,12 @@ class FixTimeline(fixes: List<GeoFix>, private val maxGapMs: Long = 60_000) {
         i = -i - 1
         val cand = listOfNotNull(sorted.getOrNull(i - 1), sorted.getOrNull(i))
         val best = cand.minBy { kotlin.math.abs(it.timeMs - timeMs) }
-        return if (kotlin.math.abs(best.timeMs - timeMs) <= maxGapMs) best else null
+        if (kotlin.math.abs(best.timeMs - timeMs) <= maxGapMs) return best
+        // Standing still through a gap: both sides agree on where you were.
+        if (stationaryBridgeMs > 0 && cand.size == 2) {
+            val (before, after) = cand
+            if (after.timeMs - before.timeMs <= stationaryBridgeMs && Geo.distanceM(before, after) <= stationaryRadiusM) return best
+        }
+        return null
     }
 }
