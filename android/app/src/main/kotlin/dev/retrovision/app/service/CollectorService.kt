@@ -840,16 +840,20 @@ class CollectorService : Service() {
     private suspend fun analysisLoop() {
         var lastTrigger = Collector.analyzeNow.value
         var sinceLast = 60_000L
+        var lastMs = 0L
         while (scope.isActive) {
             delay(1000)
             sinceLast += 1000
             val trig = Collector.analyzeNow.value
-            if (sinceLast >= 60_000 || trig != lastTrigger) {
+            // A slow run spaces the next ones out (at most ~1/6 of the time busy), so a long look-back
+            // with several probes cannot keep the phone hot. A tap on "analyse now" always runs.
+            if (sinceLast >= maxOf(60_000L, lastMs * 6) || trig != lastTrigger) {
                 lastTrigger = trig
                 sinceLast = 0
                 val t0 = android.os.SystemClock.elapsedRealtime()
                 val r = runCatching { analyzeOnce() }
                 val ms = android.os.SystemClock.elapsedRealtime() - t0
+                lastMs = ms
                 r.exceptionOrNull()?.let { if (it is kotlinx.coroutines.CancellationException) throw it } // service stopping
                 r.onFailure { e ->
                     Diag.update { it.copy(analysisErrors = it.analysisErrors + 1) }
@@ -1027,28 +1031,38 @@ class CollectorService : Service() {
         val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
         // When the baseline started: "new near your places" only means something after a week of it.
         if (prefs.baselineStartDay == 0L) prefs.baselineStartDay = day
+        // Ids already counted today: the rest of the day's runs have nothing to write for them.
+        if (baselineDay != day) { baselineDay = day; baselineDone.clear() }
+        val todo = result.routineOnlyIds.filter { it !in baselineDone }
+        if (todo.isEmpty()) return
         val full = result.entities.associateBy { it.entityId }
         val stubs = result.others.associateBy { it.entityId }
+        // One read and one batched write per run, instead of a query per device (thousands at home).
+        val known = dao.baselineAll().associateBy { it.entityId }
+        val out = ArrayList<dev.retrovision.app.data.BaselineRow>()
         // Every device confined to routine places, including those trimmed from the result.
-        for (id in result.routineOnlyIds) {
-            val b = dao.baseline(id)
+        for (id in todo) {
+            baselineDone += id
+            val b = known[id]
             val r = full[id]
             val st = stubs[id]
             val label = r?.let { Texts.entityLabel(it) } ?: st?.let { dev.retrovision.app.ui.stubLabel(it) } ?: ""
             val category = r?.category ?: st?.category
             val mobile = category != dev.retrovision.core.identity.DeviceCategory.ROUTER
             if (b == null) {
-                dao.putBaseline(dev.retrovision.app.data.BaselineRow(id, 1, day, now, firstDay = day, label = label, mobile = mobile))
+                out += dev.retrovision.app.data.BaselineRow(id, 1, day, now, firstDay = day, label = label, mobile = mobile)
             } else if (b.lastDay != day) {
-                dao.putBaseline(
-                    dev.retrovision.app.data.BaselineRow(
-                        id, (b.days + 1).coerceAtMost(30), day, now,
-                        firstDay = b.firstDay, label = label.ifEmpty { b.label }, mobile = mobile,
-                    ),
+                out += dev.retrovision.app.data.BaselineRow(
+                    id, (b.days + 1).coerceAtMost(30), day, now,
+                    firstDay = b.firstDay, label = label.ifEmpty { b.label }, mobile = mobile,
                 )
             }
         }
+        if (out.isNotEmpty()) dao.putBaselines(out)
     }
+
+    private var baselineDay = -1L
+    private val baselineDone = HashSet<String>()
 
     /**
      * Devices that travel with you day after day are most likely yours (watch, earbuds, car).

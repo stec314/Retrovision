@@ -21,11 +21,22 @@ value class MacAddress(val bits: Long) : Comparable<MacAddress> {
 
     fun toBytes(): ByteArray = ByteArray(6) { octet(it).toByte() }
 
-    override fun toString(): String = (0 until 6).joinToString(":") { "%02x".format(octet(it)) }
+    // Hot path (analysis labels, catalogue matching): no String.format per octet.
+    override fun toString(): String {
+        val c = CharArray(17)
+        for (i in 0 until 6) {
+            val o = octet(i)
+            c[i * 3] = HEX[o ushr 4]; c[i * 3 + 1] = HEX[o and 0xF]
+            if (i < 5) c[i * 3 + 2] = ':'
+        }
+        return String(c)
+    }
 
     override fun compareTo(other: MacAddress): Int = bits.compareTo(other.bits)
 
     companion object {
+        private val HEX = "0123456789abcdef".toCharArray()
+
         fun of(bytes: ByteArray): MacAddress {
             require(bytes.size == 6) { "address must be 6 bytes, got ${bytes.size}" }
             var v = 0L

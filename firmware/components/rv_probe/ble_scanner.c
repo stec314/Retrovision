@@ -102,11 +102,18 @@ static void on_ext(const struct ble_gap_ext_disc_desc *d)
 }
 #endif
 
+// Thermal throttle: 0 normal, 1 half the scan window, 2 no BLE scanning (Wi-Fi keeps going).
+static volatile int s_throttle;
+
 static void start_scan(void)
 {
     if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
         return; // the radio carries the host link: never scan (it would starve advertising)
     }
+    if (s_throttle >= 2) {
+        return;
+    }
+    const uint16_t window = s_throttle == 1 ? (uint16_t)(s_cfg->ble_window / 2 < 4 ? 4 : s_cfg->ble_window / 2) : s_cfg->ble_window;
     uint8_t own_addr_type;
     if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) {
         own_addr_type = BLE_OWN_ADDR_RANDOM;
@@ -116,7 +123,7 @@ static void start_scan(void)
     if (s_cfg->ble_extended) {
         const struct ble_gap_ext_disc_params p = {
             .itvl = s_cfg->ble_itvl,
-            .window = s_cfg->ble_window,
+            .window = window,
             .passive = !s_cfg->ble_active,
         };
         // duration 0 = forever; no controller duplicate filtering, we dedup
@@ -128,7 +135,7 @@ static void start_scan(void)
     {
         const struct ble_gap_disc_params p = {
             .itvl = s_cfg->ble_itvl,
-            .window = s_cfg->ble_window,
+            .window = window,
             .filter_policy = BLE_HCI_SCAN_FILT_NO_WL,
             .passive = !s_cfg->ble_active,
             .filter_duplicates = 0,
@@ -224,4 +231,19 @@ void rv_ble_scanner_stop(void)
     if (ble_gap_disc_active()) {
         ble_gap_disc_cancel();
     }
+}
+
+void rv_ble_scanner_set_throttle(int level)
+{
+    if (level == s_throttle) {
+        return;
+    }
+    s_throttle = level;
+    if (!s_want || !s_synced) {
+        return;
+    }
+    if (ble_gap_disc_active()) {
+        ble_gap_disc_cancel();
+    }
+    start_scan(); // applies the new level (level 2: stays off)
 }

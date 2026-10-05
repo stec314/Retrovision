@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "capture.h"
+#include "ble_scanner.h"
 #include "config.h"
 #include "driver/gpio.h"
 #include "soc/soc_caps.h"
@@ -390,6 +391,8 @@ static void session_task(void *arg)
     int64_t last_status = 0;
     int64_t usb_gone_since = 0;
     int64_t last_ble_tick = 0;
+    int64_t last_thermal = 0;
+    int thermal = 0;
     int64_t last_ble_report = 0;
     bool was_active = false;
     bool led = false;
@@ -451,6 +454,31 @@ static void session_task(void *arg)
         }
         const bool active_now = s_state == ST_ACTIVE;
         xSemaphoreGive(s_lock);
+
+        // Thermal throttle on the die temperature (it runs 20-30 °C above the air around it). BLE
+        // scanning shares the radio with Wi-Fi and is what can give: half its window from 80 °C,
+        // off from 88 °C, back to normal under 72 °C.
+#if SOC_TEMP_SENSOR_SUPPORTED
+        if (s_tsens && now - last_thermal >= 10000000LL) {
+            last_thermal = now;
+            float t = 0;
+            if (temperature_sensor_get_celsius(s_tsens, &t) == ESP_OK) {
+                int want = thermal;
+                if (t >= 88.0f) {
+                    want = 2;
+                } else if (t >= 80.0f && thermal < 1) {
+                    want = 1;
+                } else if (t < 72.0f) {
+                    want = 0;
+                }
+                if (want != thermal) {
+                    thermal = want;
+                    ESP_LOGW("thermal", "%.0f C: BLE scan %s", t, want == 0 ? "normal" : want == 1 ? "halved" : "paused");
+                    rv_ble_scanner_set_throttle(want);
+                }
+            }
+        }
+#endif
 
         // BLE link mode: keep advertising alive, and tell the host over the cable how the
         // Bluetooth side is doing (it cannot see it otherwise when the phone does not find us).

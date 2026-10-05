@@ -41,6 +41,29 @@ class AnalyzerTest {
 
     private fun fourPlaceSightings(id: String) = listOf(5L, 15L, 25L, 35L).map { ble(id, it * min) }
 
+    /** A drive east at 15 m/s, one fix every 10 s. */
+    private fun drive(durationMs: Long): List<GeoFix> =
+        (0..durationMs / 10_000).map { i -> val t = i * 10_000; GeoFix(t, lat0, lon0 + 15.0 * (t / 1000.0) * degPerMetre, 5f) }
+
+    private fun rpa(entity: String, t: Long) = EntitySighting(
+        entity,
+        Sighting(t, Radio.BLE, MacAddress(0x4A11_2233_4455L), -60, ble = BleDetail(BleAddressKind.RANDOM_RESOLVABLE, 1, byteArrayOf(2, 1, 6))),
+    )
+
+    @Test fun rotatingAddressInOneStretchIsHeldBelowAlert() {
+        // Heard every minute for 15 min of driving: many 100 m "places", but one unbroken stretch.
+        val r = analyzer().analyze(16 * min, (0L..15L).map { rpa("r", it * min) }, drive(16 * min)).entities.single()
+        assertFalse(r.alert)
+        assertTrue(r.score <= ScoreCap.ONE_STRETCH.max + 1e-9)
+        assertTrue(r.reasons.any { it is Reason.OneStretchOnly })
+    }
+
+    @Test fun rotatingAddressThatComesBackAfterABreakIsNotCapped() {
+        val times = (0L..5L) + (25L..30L)
+        val r = analyzer().analyze(31 * min, times.map { rpa("r", it * min) }, drive(31 * min)).entities.single()
+        assertTrue(r.reasons.none { it is Reason.OneStretchOnly })
+    }
+
     @Test fun followerAcrossFourPlacesAlerts() {
         val r = analyzer().analyze(now, fourPlaceSightings("a"), walk(40 * min)).entities.single()
         assertTrue(r.alert)

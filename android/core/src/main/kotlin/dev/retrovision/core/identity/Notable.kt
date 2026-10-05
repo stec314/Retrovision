@@ -46,6 +46,8 @@ class NotableSignature(
     class Rule internal constructor(val kind: String, val radio: Radio?, val text: String, val companyId: Int, val dataHex: String) {
         val glob: Regex? = if (kind == "NAME_GLOB") globRegex(text) else null
         val prefix: String = text.filter { it.isLetterOrDigit() }.uppercase()
+        /** OUI rules as a number, so matching does not format every address. -1 = not an OUI rule. */
+        val ouiInt: Int = if (kind == "OUI" && prefix.length == 6) prefix.toIntOrNull(16) ?: -1 else -1
     }
 
     override fun toString() = name
@@ -156,7 +158,7 @@ object NotableCatalog {
         return when (r.kind) {
             "NAME_CONTAINS" -> f.name != null && r.text.isNotBlank() && f.name.contains(r.text, ignoreCase = true)
             "NAME_GLOB" -> f.name != null && r.glob!!.matches(f.name)
-            "OUI" -> ouiHits(f, r.prefix)
+            "OUI" -> ouiHits(f, r.ouiInt)
             "MAC_PREFIX" -> f.address.toString().filter { it.isLetterOrDigit() }.uppercase().startsWith(r.prefix)
             "VENDOR_IE_OUI" -> f.vendorIeOuis.any { it.startsWith(r.prefix) }
             "SERVICE_UUID" -> when (r.prefix.length) {
@@ -172,15 +174,13 @@ object NotableCatalog {
         }
     }
 
-    private fun ouiHits(f: RadioFacts, want: String): Boolean {
-        if (want.length != 6) return false
+    private fun ouiHits(f: RadioFacts, want: Int): Boolean {
+        if (want < 0) return false
         if (f.radio == Radio.BLE && f.bleKind != BleAddressKind.PUBLIC && f.bleKind != BleAddressKind.UNKNOWN) return false
-        val oui = "%06X".format(f.address.oui)
+        val oui = f.address.oui
         if (oui == want) return true
         // Guest/mesh radios set the local bit on a burned-in vendor prefix: recover it for APs.
-        if (f.radio == Radio.WIFI && f.isAp && f.address.isLocallyAdministered) {
-            return "%06X".format(f.address.oui and 0xFDFFFF) == want
-        }
+        if (f.radio == Radio.WIFI && f.isAp && f.address.isLocallyAdministered) return (oui and 0xFDFFFF) == want
         return false
     }
 

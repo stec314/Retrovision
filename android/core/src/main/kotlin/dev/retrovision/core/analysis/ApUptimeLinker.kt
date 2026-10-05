@@ -52,9 +52,21 @@ object ApUptimeLinker {
         val root = HashMap<String, String>()
         val renamed = HashMap<String, Pair<String, String>>()
         fun find(x: String): String { var y = x; while (root[y] != null && root[y] != y) y = root[y]!!; return y }
-        for (i in aps.indices) for (j in i + 1 until aps.size) {
-            val a = aps[i]; val b = aps[j]
-            if (kotlin.math.abs(a.boot - b.boot) > MAX_BOOT_DIFF_MS) continue
+        // Candidate pairs come from a sweep over boot moments (n log n; a busy window holds thousands
+        // of access points), then are applied in first-seen order exactly as an all-pairs scan would.
+        val byBoot = aps.indices.sortedBy { aps[it].boot }
+        val pairs = ArrayList<Long>()
+        for (x in byBoot.indices) {
+            var y = x + 1
+            while (y < byBoot.size && aps[byBoot[y]].boot - aps[byBoot[x]].boot <= MAX_BOOT_DIFF_MS) {
+                val i = minOf(byBoot[x], byBoot[y]); val j = maxOf(byBoot[x], byBoot[y])
+                pairs += (i.toLong() shl 32) or j.toLong()
+                y++
+            }
+        }
+        pairs.sort()
+        for (p in pairs) {
+            val a = aps[(p ushr 32).toInt()]; val b = aps[(p and 0xFFFFFFFFL).toInt()]
             val replaces = b.first >= a.last - MAX_OVERLAP_MS && b.first - a.last <= MAX_HANDOVER_MS
             if (!replaces) continue
             val ra = find(a.id); val rb = find(b.id)

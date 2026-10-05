@@ -136,6 +136,12 @@ sealed class Reason {
      * would a follower that never left the area with you. Not enough movement to tell: no alert.
      */
     data class OneAreaOnly(val extentM: Double) : Reason()
+    /**
+     * Its address rotates and this identity was heard in one unbroken stretch of [minutes]: it was
+     * near you (same car, same train, a car alongside), but nothing shows it reappearing after a
+     * break. Your own phone, watch and earbuds look exactly like this.
+     */
+    data class OneStretchOnly(val minutes: Int) : Reason()
     /** An Apple device that said its owner was driving (Apple Nearby Info): it is in a vehicle. Information only. */
     object ReportsDriving : Reason()
     /** Beacon uptime: running for [days] without a reboot. Typical of a fixed router; information only. */
@@ -263,6 +269,8 @@ enum class ScoreCap(val max: Double) {
     ONE_AREA(0.45),
     /** Learned to belong to your routine places. */
     RESIDENT(0.25),
+    /** Rotating address heard in one short unbroken stretch: near you for a while, not shown to follow. */
+    ONE_STRETCH(0.60),
 }
 
 /** How an address came to belong to an entity (shown so you can judge the link yourself). */
@@ -695,6 +703,19 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 score = minOf(score, ONE_AREA_CAP)
             }
         }
+        // A rotating identity lives ~15 min: heard in one go while you drive it crosses many 100 m
+        // "places" and looks like a follower, yet the same is true of your own devices and of every
+        // car alongside. Following means reappearing after a break; without one, hold it below the
+        // alert. Tags that say they are away from their owner keep their address and are exempt.
+        if (trust == MacTrust.ROTATING && !(tk != null && TrackerClassifier.isTag(tk) && separated == true)) {
+            var maxGap = 0L
+            for (i in 1 until list.size) maxGap = maxOf(maxGap, list[i].sighting.timeMs - list[i - 1].sighting.timeMs)
+            if (maxGap < ONE_STRETCH_GAP_MS && last - first < ONE_STRETCH_MAX_MS) {
+                reasons += Reason.OneStretchOnly(((last - first) / 60_000L).toInt() + 1)
+                if (score > ScoreCap.ONE_STRETCH.max) caps += ScoreCap.ONE_STRETCH
+                score = minOf(score, ScoreCap.ONE_STRETCH.max)
+            }
+        }
         val uptimeDays = if (maxTsfUs > 0) maxTsfUs / 86_400e6 else null
         if (uptimeDays != null && uptimeDays >= 1.0) reasons += Reason.ApUptime(uptimeDays)
         if (isResident) {
@@ -973,6 +994,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         const val STAYS_PUT_MAX_RHO = -0.2
         const val STAYS_PUT_MAX_Z = -4.0
         const val STAYS_PUT_CAP = 0.35
+        /** A silence this long splits stretches; a rotating identity heard in one stretch shorter than the max is capped. */
+        const val ONE_STRETCH_GAP_MS = 10 * 60_000L
+        const val ONE_STRETCH_MAX_MS = 30 * 60_000L
         /**
          * An outdoor AP can be heard ~250-300 m away, so a fixed one can be heard up to ~600 m apart
          * as you walk past on opposite sides. Only beyond that is "it was there too" proof.

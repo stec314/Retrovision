@@ -156,6 +156,7 @@ object Texts {
         dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
         dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
+        dev.retrovision.core.analysis.ScoreCap.ONE_STRETCH -> tr("rotating address heard in one unbroken stretch (max 0.60)", "indirizzo che cambia, sentito in un solo tratto continuo (max 0,60)")
     }
 
     fun level(l: dev.retrovision.core.analysis.Level) = when (l) {
@@ -301,6 +302,10 @@ object Texts {
         is Reason.OneAreaOnly -> tr(
             "Access point only heard within ~${r.extentM.toInt()} m of one area. A fixed router fits that; a follower would have to be heard farther apart than its range (≥ 600 m). No alert until it is",
             "Access point sentito solo entro ~${r.extentM.toInt()} m da una zona. Un router fisso è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ 600 m). Nessuna allerta finché non succede",
+        )
+        is Reason.OneStretchOnly -> tr(
+            "Heard in one unbroken stretch of ${r.minutes} min with an address that rotates: it was near you (same car or train, a car alongside, or one of your own devices), but nothing shows it coming back after a break",
+            "Sentito in un solo tratto continuo di ${r.minutes} min con un indirizzo che cambia: ti era vicino (stessa auto o treno, un'auto accanto, o un tuo dispositivo), ma niente mostra che sia tornato dopo una pausa",
         )
         is Reason.ApUptime -> tr(
             "Running for ${"%.0f".format(r.days)} days without a reboot (beacon clock): typical of a fixed router",

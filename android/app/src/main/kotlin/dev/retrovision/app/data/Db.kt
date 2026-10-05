@@ -284,6 +284,12 @@ interface AppDao {
     @Query("SELECT * FROM baseline WHERE entityId = :id")
     suspend fun baseline(id: String): BaselineRow?
 
+    @Query("SELECT * FROM baseline")
+    suspend fun baselineAll(): List<BaselineRow>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putBaselines(rows: List<BaselineRow>)
+
     @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
     suspend fun putBaseline(row: BaselineRow)
 

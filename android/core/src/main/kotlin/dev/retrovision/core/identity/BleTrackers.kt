@@ -170,7 +170,9 @@ object TrackerClassifier {
             if (sd.isNotEmpty() && (sd[0].toInt() and 0xFF) in 0x40..0x41) {
                 val kind = if (info.flags == 0x02) TrackerKind.GOOGLE_FIND_MY_PHONE
                 else TrackerKind.GOOGLE_FIND_MY_DEVICE
-                return TrackerMatch(kind, null)
+                // Frame 0x41 = unwanted-tracking-protection mode, which the network switches on when
+                // the tag has been away from its owner: the state of a tag planted on someone.
+                return TrackerMatch(kind, (sd[0].toInt() and 0xFF) == 0x41)
             }
         }
 

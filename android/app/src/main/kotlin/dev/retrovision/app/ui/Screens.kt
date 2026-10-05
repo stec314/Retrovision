@@ -1181,11 +1181,12 @@ internal fun probeHealth(s: dev.retrovision.app.probe.SessionState): Health {
     val lossPct = if (seen + lost > 0) 100.0 * lost / (seen + lost) else 0.0
     return when {
         s.phase == dev.retrovision.app.probe.Phase.REJECTED -> Health("●", Texts.tr("Rejected", "Rifiutata"), bad)
-        s.chipTempC >= 80f -> Health("●", Texts.tr("Hot: ${"%.0f".format(s.chipTempC)} °C — give it air", "Calda: ${"%.0f".format(s.chipTempC)} °C — dalle aria"), bad)
+        // Chip (die) temperature: 20-30 °C above the air. The firmware halves BLE scanning from 80 °C, pauses it from 88.
+        s.chipTempC >= 88f -> Health("●", Texts.tr("Hot chip: ${"%.0f".format(s.chipTempC)} °C — BLE scan paused, give it air", "Chip caldo: ${"%.0f".format(s.chipTempC)} °C — scansione BLE in pausa, dalle aria"), bad)
         // Free heap swings with Wi-Fi buffers in flight; the low-water mark is the real margin.
         s.minFreeHeap in 1..16383 || s.freeHeap in 1..12287 -> Health("●", Texts.tr("Low memory: ${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024})", "Memoria bassa: ${s.freeHeap / 1024} KiB liberi (minimo ${s.minFreeHeap / 1024})"), warn)
         lossPct > 5 -> Health("●", Texts.tr("Dropping frames (%.1f%%)".format(lossPct), "Perde frame (%.1f%%)".format(lossPct)), warn)
-        s.chipTempC >= 70f -> Health("●", Texts.tr("Warm: ${"%.0f".format(s.chipTempC)} °C", "Tiepida: ${"%.0f".format(s.chipTempC)} °C"), warn)
+        s.chipTempC >= 80f -> Health("●", Texts.tr("Warm chip: ${"%.0f".format(s.chipTempC)} °C — BLE scan halved", "Chip caldo: ${"%.0f".format(s.chipTempC)} °C — scansione BLE dimezzata"), warn)
         s.phase == dev.retrovision.app.probe.Phase.STREAMING -> Health("●", Texts.tr("Healthy", "In salute"), ok)
         else -> Health("●", Texts.tr("Connecting…", "Connessione…"), warn)
     }
