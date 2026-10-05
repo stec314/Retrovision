@@ -58,6 +58,7 @@ fun bleStageText(s: BleStage): String = when (s) {
     BleStage.STREAMING -> Texts.tr("streaming over Bluetooth", "ricezione via Bluetooth")
     BleStage.REJECTED -> Texts.tr("refused: pairing key mismatch", "rifiutata: chiave di abbinamento diversa")
     BleStage.RETRY_WAIT -> Texts.tr("not reached, retrying", "non raggiunta, riprovo")
+    BleStage.PAUSED -> Texts.tr("paused: not connecting until you resume it", "in pausa: non si collega finché non la riprendi")
 }
 
 private fun linkName(k: LinkKind) = when (k) {
@@ -119,7 +120,7 @@ private fun PairedProbeRow(name: String, ui: BleLinkUi?, session: SessionState?,
     val (dot, color) = when (stage) {
         BleStage.STREAMING -> "●" to MaterialTheme.colorScheme.primary
         BleStage.REJECTED, BleStage.NO_PERMISSION, BleStage.BT_OFF -> "●" to MaterialTheme.colorScheme.error
-        BleStage.OFF, BleStage.CABLE, BleStage.STOPPED -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
+        BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
         else -> "◐" to MaterialTheme.colorScheme.tertiary
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -257,7 +258,7 @@ fun ProbeLinkCard() {
                     when {
                         BleStage.NO_PERMISSION in stages -> Button(onClick = { askPerms() }) { Text(Texts.tr("Grant Bluetooth permission", "Concedi permesso Bluetooth")) }
                         BleStage.BT_OFF in stages -> Button(onClick = { btSettings() }) { Text(Texts.tr("Turn Bluetooth on", "Attiva il Bluetooth")) }
-                        stages.any { it != BleStage.STREAMING && it != BleStage.CABLE } ->
+                        stages.any { it != BleStage.STREAMING && it != BleStage.CABLE && it != BleStage.PAUSED } ->
                             OutlinedButton(onClick = { Collector.bleKick.value = System.nanoTime() }) { Text(Texts.tr("Retry now", "Riprova ora")) }
                     }
                     if (pairs.any { bleLinks[it]?.lastError?.contains("Bluetooth settings") == true }) TextButton(onClick = { btSettings() }) { Text(Texts.tr("Bluetooth settings", "Impostazioni Bluetooth")) }
@@ -396,5 +397,156 @@ fun ProbeLinkCard() {
             },
             dismissButton = { TextButton(onClick = { confirmForget = null }) { Text(Texts.tr("Cancel", "Annulla")) } },
         )
+    }
+}
+
+/** Asks the app to show a bottom tab (0 Status … 4 Probe); reset to -1 once shown. */
+object TabNav {
+    val tab = kotlinx.coroutines.flow.MutableStateFlow(-1)
+}
+
+/** Pauses or resumes one wireless probe (saved, so it survives a restart of the collection). */
+private fun setPaused(name: String, paused: Boolean) {
+    val now = if (paused) Collector.blePaused.value + name else Collector.blePaused.value - name
+    Collector.blePaused.value = now
+    app.prefs.blePaused = now
+    Collector.bleKick.value = System.nanoTime()
+}
+
+/** Drops the open link of one probe and lets the loop reconnect it straight away. */
+private fun reconnect(name: String) {
+    Collector.bleReconnect.value = Collector.bleReconnect.value + (name to System.currentTimeMillis())
+    Collector.bleKick.value = System.nanoTime()
+}
+
+/**
+ * Status → wireless probes: where each paired Bluetooth probe stands, whether data is flowing,
+ * and the actions you need in the field (pause, resume, reconnect, retry, permission, Bluetooth on).
+ * Pairing and forgetting stay on the Probe tab, which needs the cable.
+ */
+@Composable
+fun ProbeStatusPanel() {
+    val ctx = LocalContext.current
+    val bleLinks by Collector.bleLinks.collectAsState()
+    val links by Collector.links.collectAsState()
+    val running by Collector.running.collectAsState()
+    val paused by Collector.blePaused.collectAsState()
+    // Pairings are read from settings; re-read when the link map changes (pair/forget elsewhere).
+    val pairs = remember(bleLinks.keys) { app.prefs.blePairs().map { it.name } }
+    LaunchedEffect(Unit) { if (Collector.blePaused.value.isEmpty()) Collector.blePaused.value = app.prefs.blePaused }
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(1000); tick++ } }
+    @Suppress("UNUSED_VARIABLE") val t = tick
+
+    val perms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        Collector.bleKick.value = System.nanoTime()
+    }
+    fun askPerms() {
+        if (Build.VERSION.SDK_INT >= 31) perms.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN))
+    }
+    fun btSettings() = runCatching { ctx.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+
+    val streaming = pairs.count { bleLinks[it]?.stage == BleStage.STREAMING }
+    val silent = pairs.filter { n ->
+        val u = bleLinks[n]
+        u != null && u.stage == BleStage.STREAMING && u.lastDataMs > 0 &&
+            System.currentTimeMillis() - u.lastDataMs > dev.retrovision.app.service.CollectorService.SILENT_PROBE_MS
+    }
+    val tint = when {
+        pairs.isEmpty() -> null
+        silent.isNotEmpty() || pairs.any { n -> bleLinks[n]?.stage.let { s -> s == BleStage.REJECTED || s == BleStage.NO_PERMISSION || s == BleStage.BT_OFF } } -> MaterialTheme.colorScheme.error
+        else -> null
+    }
+    Panel(
+        title = Texts.tr("Bluetooth probes", "Sonde Bluetooth"),
+        tint = tint,
+        trailing = {
+            if (pairs.isNotEmpty()) Text(
+                "$streaming/${pairs.size} " + Texts.tr("streaming", "attive"),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (running && streaming < pairs.size - paused.count { it in pairs }) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        },
+    ) {
+        if (pairs.isEmpty()) {
+            Text(
+                Texts.tr("No probe paired for Bluetooth. Pairing needs the cable once.", "Nessuna sonda abbinata per il Bluetooth. L'abbinamento richiede il cavo una volta."),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            TextButton(onClick = { TabNav.tab.value = 4 }) { Text(Texts.tr("Pair a probe ›", "Abbina una sonda ›")) }
+            return@Panel
+        }
+        if (!running) Text(
+            Texts.tr("Collection is stopped: start it and the probes connect on their own.", "La raccolta è ferma: avviala e le sonde si collegano da sole."),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        pairs.forEach { n ->
+            val ui = bleLinks[n]
+            val isPaused = n in paused
+            val stage = when {
+                !running -> BleStage.STOPPED
+                isPaused && ui?.stage != BleStage.CABLE -> BleStage.PAUSED
+                else -> ui?.stage ?: BleStage.SCANNING
+            }
+            val session = links["ble:$n"]?.session?.state?.value
+            val (dot, color) = when (stage) {
+                BleStage.STREAMING -> if (n in silent) "●" to MaterialTheme.colorScheme.error else "●" to MaterialTheme.colorScheme.primary
+                BleStage.REJECTED, BleStage.NO_PERMISSION, BleStage.BT_OFF -> "●" to MaterialTheme.colorScheme.error
+                BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
+                else -> "◐" to MaterialTheme.colorScheme.tertiary
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(dot, color = color)
+                    Column(Modifier.weight(1f)) {
+                        Text("RV-$n", style = MaterialTheme.typography.bodyMedium)
+                        Text(bleStageText(stage), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (running && stage != BleStage.CABLE) {
+                        when {
+                            isPaused -> TextButton(onClick = { setPaused(n, false) }) { Text(Texts.tr("Resume", "Riprendi")) }
+                            stage == BleStage.STREAMING || stage == BleStage.HANDSHAKE -> TextButton(onClick = { reconnect(n) }) { Text(Texts.tr("Reconnect", "Riconnetti")) }
+                            stage == BleStage.RETRY_WAIT || stage == BleStage.SCANNING || stage == BleStage.REJECTED ->
+                                TextButton(onClick = { Collector.bleKick.value = System.nanoTime() }) { Text(Texts.tr("Retry", "Riprova")) }
+                        }
+                        if (!isPaused) TextButton(onClick = { setPaused(n, true) }) { Text(Texts.tr("Pause", "Pausa")) }
+                    }
+                }
+                if (ui != null && running && stage == BleStage.STREAMING) {
+                    val lost = (session?.lostFrames ?: 0L) + (session?.probeDropped ?: 0L)
+                    val seen = (session?.wifiObs ?: 0L) + (session?.bleObs ?: 0L)
+                    val parts = buildList {
+                        add(Texts.tr("${ui.obsPerMin}/min", "${ui.obsPerMin}/min"))
+                        if (ui.lastDataMs > 0) add(Texts.tr("last ", "ultimo dato ") + ago(ui.lastDataMs) + Texts.tr(" ago", " fa"))
+                        if (ui.rssi != 0) add(Texts.tr("phone hears ", "il telefono sente ") + "${ui.rssi} dBm")
+                        if (session != null && session.linkRssi != 0) add(Texts.tr("probe hears ", "la sonda sente ") + "${session.linkRssi} dBm")
+                        if (seen + lost > 0) add(Texts.tr("lost ", "persi ") + "%.1f%%".format(100.0 * lost / (seen + lost)))
+                        if (ui.connectedSinceMs > 0) add(Texts.tr("up ", "attiva da ") + ago(ui.connectedSinceMs))
+                    }
+                    Text(parts.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (n in silent) Text(
+                        Texts.tr(
+                            "Connected, but no data for ${ago(ui.lastDataMs)}. A very quiet place, or the probe is stuck: try Reconnect.",
+                            "Connessa, ma nessun dato da ${ago(ui.lastDataMs)}. Zona molto silenziosa, o la sonda è bloccata: prova Riconnetti.",
+                        ),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    )
+                    if (lost > 0 && seen > 0 && lost * 20 > seen) Text(
+                        Texts.tr("Over 5% lost: move the phone closer to the probe.", "Oltre il 5% perso: avvicina il telefono alla sonda."),
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (ui != null && running && !isPaused && ui.lastError.isNotEmpty() && stage != BleStage.CABLE) {
+                    Text(ui.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        if (running) {
+            val stages = pairs.mapNotNull { bleLinks[it]?.stage }
+            when {
+                BleStage.NO_PERMISSION in stages -> Button(onClick = { askPerms() }) { Text(Texts.tr("Grant Bluetooth permission", "Concedi permesso Bluetooth")) }
+                BleStage.BT_OFF in stages -> Button(onClick = { btSettings() }) { Text(Texts.tr("Turn Bluetooth on", "Attiva il Bluetooth")) }
+            }
+        }
+        TextButton(onClick = { TabNav.tab.value = 4 }) { Text(Texts.tr("Pairing and probe details ›", "Abbinamenti e dettagli sonda ›")) }
     }
 }

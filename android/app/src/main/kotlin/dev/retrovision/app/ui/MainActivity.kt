@@ -70,6 +70,11 @@ private fun AppRoot() {
     androidx.compose.runtime.LaunchedEffect(mapDevice, mapPoint) {
         if (mapDevice != null || mapPoint != null) { AlertsNav.open.value = false; tab = 2 }
     }
+    // A screen asked for another tab (Status → "Pairing and probe details").
+    val navTab by TabNav.tab.collectAsState()
+    androidx.compose.runtime.LaunchedEffect(navTab) {
+        if (navTab >= 0) { tab = navTab; TabNav.tab.value = -1 }
+    }
     val wikiOpen by WikiNav.open.collectAsState()
     if (wikiOpen) {
         WikiScreen(onClose = { WikiNav.open.value = false })
