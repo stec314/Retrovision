@@ -113,6 +113,37 @@ class StaysPutTest {
         assertFalse(r.alert)
     }
 
+    /** Same for what is not an access point: a probing smart plug and a TV's Bluetooth around the block. */
+    @Test fun fixedClientsAndBluetoothHeardOnlyAroundOneAreaNeverAlert() {
+        val rnd = Random(6)
+        /** Heard whenever you are within [reachM] of (x, y), at a signal that does not follow distance. */
+        fun heard(id: String, x: Double, y: Double, reachM: Double, mk: (Long, Int) -> Sighting) = (0..now / 15_000).mapNotNull { i ->
+            val t = i * 15_000
+            val (px, py) = loopXY(t)
+            if (Math.hypot(px - x, py - y) > reachM) null else EntitySighting(id, mk(t, (-80 + rnd.nextGaussian() * 8).toInt()))
+        }
+        val plug = heard("plug", 200.0, 150.0, 1_000.0) { t, rssi ->
+            Sighting(t, Radio.WIFI, MacAddress(0x24A160388581L), rssi,
+                wifi = WifiDetail(WifiKind.PROBE_REQ, 1, ByteArray(0), null, 0, ByteArray(0)), probeId = "probe")
+        }
+        val tv = heard("tv", 200.0, 0.0, 120.0) { t, rssi -> // on the south side, ~100 m of Bluetooth reach
+            Sighting(t, Radio.BLE, MacAddress(0xBC351E5A99C7L), rssi, ble = BleDetail(BleAddressKind.PUBLIC, 0, byteArrayOf(2, 1, 6)), probeId = "probe")
+        }
+        for (r in analyzer.analyze(now, plug + tv, fixes).entities) {
+            assertTrue(r.placeIds.size >= 2)
+            assertTrue(r.entityId, r.reasons.any { it is Reason.OneAreaOnly || it is Reason.StaysPut })
+            assertFalse(r.entityId, r.alert)
+        }
+    }
+
+    /** A Bluetooth device still there 2 km later is not "one area". */
+    @Test fun bluetoothThatTravelsFarStillAlerts() {
+        val walk = (0..now / 5000).map { i -> GeoFix(i * 5000, lat0, lon0 + (i * 5000 / 1000.0 * 1.4) * mLon, 5f) } // 10 km east
+        val r = analyzer.analyze(now, carried("bag", Random(8)), walk).entities.single()
+        assertTrue(r.reasons.none { it is Reason.OneAreaOnly || it is Reason.StaysPut })
+        assertTrue(r.alert)
+    }
+
     /** A hotspot that is still there 2 km later is not "one area". */
     @Test fun apThatTravelsFarStillAlerts() {
         val walk = (0..now / 5000).map { i -> GeoFix(i * 5000, lat0, lon0 + (i * 5000 / 1000.0 * 1.4) * mLon, 5f) } // 10 km east

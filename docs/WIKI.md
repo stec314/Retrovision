@@ -238,7 +238,7 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 **Caps:**
 - **Fewer than 2 effective places → score ≤ 0.30.** Being near you for a long time in one spot makes it a neighbour, not a follower.
 - **Resident → score ≤ 0.25** (see *Places, routine places and residents*).
-- **Access point heard in one area only → score ≤ 0.45.** An access point heard only within **600 m** of one area (largest distance between your positions while hearing it) can't be told apart from a fixed router, whatever its signal does. That is twice a typical outdoor range: you can hear a fixed AP up to ~300 m away on either side. **Only being heard farther apart than that proves it moved with you.** A follower who stays within one neighbourhood with you is therefore not alerted on by position alone; co-movement, joined-after-you and turns still show in the reasons. In the old town of a city this removes the bulk of false alerts (shop, bar and city Wi-Fi heard over and over while you walk around).
+- **Heard in one area only → score ≤ 0.45.** A device heard only within **600 m** (Wi-Fi: access points *and* clients) or **300 m** (Bluetooth) of one area (largest distance between your positions while hearing it) can't be told apart from a fixed router, smart plug or beacon, whatever its signal does. That is twice a typical outdoor range: you can hear a fixed AP up to ~300 m away on either side, a Bluetooth device ~150 m. **Only being heard farther apart than that proves it moved with you.** A follower who stays within one neighbourhood with you is therefore not alerted on by position alone; co-movement, joined-after-you and turns still show in the reasons. In the old town of a city this removes the bulk of false alerts (shop, bar and city Wi-Fi, and the plugs, TVs and beacons around your home, heard over and over while you walk around).
 - **Stays put → score ≤ 0.35.** Walking around a block or between two squares, a fixed access point or beacon is heard at several 100 m "places", for the whole time, before and after every turn. Geometry alone makes it look like a follower. Its signal gives it away: it is loudest near one spot and fades the farther you walk from it. The app tests this on one receiver, with at least 16 positioned readings:
   1. It estimates the spot from the strongest readings of **half** the samples.
   2. It measures the fade on the **other half**: the rank correlation (Spearman ρ) between your distance from the spot and the RSSI.
@@ -272,7 +272,7 @@ score = 0.40·places + 0.20·windows + 0.15·span + 0.25·travel
 | Moves together with N other devices | See *Network signals* |
 | Known at your routine places | Resident: damped |
 | Stays in one spot … | Its signal fades as you walk away from one point: a fixed device you keep passing. Capped at 0.35 |
-| Access point only heard within ~N m of one area | Not enough movement to tell a fixed router from a follower. Capped at 0.45 |
+| Only heard within ~N m of one area | Not enough movement to tell a fixed device from a follower. Capped at 0.45 |
 | Running for N days without a reboot | From the beacon clock. Typical of a fixed router. Information only: a portable router can run for days too |
 
 ### Worked examples

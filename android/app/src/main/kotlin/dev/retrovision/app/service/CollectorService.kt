@@ -92,6 +92,7 @@ class CollectorService : Service() {
     private val recentRaw = ArrayDeque<Sighting>()
     private var locationManager: LocationManager? = null
     private var lastFixWritten = 0L
+    private var lastGpsFixMs = 0L
     private val notifiedAt = HashMap<String, Long>()
     private val notifiedScore = HashMap<String, Double>()
 
@@ -246,9 +247,17 @@ class CollectorService : Service() {
         // A fix worse than 150 m would smear places together; ignore it.
         if (loc.hasAccuracy() && loc.accuracy > 150f) return
         val now = System.currentTimeMillis()
+        // Network location (Wi-Fi/cell geolocation) indoors claims ±20-40 m yet lands 100-400 m
+        // away. Interleaved with GPS every 5 s it zig-zags the track, and every fixed device nearby
+        // is "seen at" a dozen places (field report). Use it only while GPS is silent.
+        if (loc.provider == LocationManager.GPS_PROVIDER) lastGpsFixMs = now
+        else if (now - lastGpsFixMs < GPS_PREFERRED_MS) return
+        // When the position was measured, not when it arrived: a cached network fix can be old.
+        val ageMs = ((android.os.SystemClock.elapsedRealtimeNanos() - loc.elapsedRealtimeNanos) / 1_000_000L).coerceAtLeast(0L)
+        if (ageMs > STALE_FIX_MS) return
         if (now - lastFixWritten < 5000) return
         val fix = dev.retrovision.core.model.GeoFix(
-            now, loc.latitude, loc.longitude,
+            now - ageMs, loc.latitude, loc.longitude,
             if (loc.hasAccuracy()) loc.accuracy else 0f,
             if (loc.hasSpeed()) loc.speed else null,
         )
@@ -1306,6 +1315,10 @@ class CollectorService : Service() {
         private const val NOTIF_PROBE_LOST = 2
         private const val NOTIF_SUMMARY = 3
         private const val BASELINE_MIN_DAYS = 3
+        /** Network fixes are dropped while GPS delivered one this recently. */
+        private const val GPS_PREFERRED_MS = 30_000L
+        /** Fixes measured longer ago than this are not written (they would place sightings wrongly). */
+        private const val STALE_FIX_MS = 30_000L
         private const val COMPANION_DAYS = 3
         /** Hard ceiling on rows held in memory by one analysis pass (~50-80 MB worst case). */
         private const val MAX_ANALYSIS_ROWS = 100_000

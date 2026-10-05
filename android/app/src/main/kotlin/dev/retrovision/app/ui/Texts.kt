@@ -154,7 +154,7 @@ object Texts {
     fun cap(c: dev.retrovision.core.analysis.ScoreCap) = when (c) {
         dev.retrovision.core.analysis.ScoreCap.FEW_PLACES -> tr("heard at fewer than 2 places of yours (max 0.30)", "sentito in meno di 2 tuoi luoghi (max 0,30)")
         dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
-        dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
+        dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("only heard around one area (max 0.45)", "sentito solo in una zona (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
     }
 
@@ -299,8 +299,8 @@ object Texts {
             "Stesso access point con nuovo nome o indirizzo (stesso istante di accensione): “${r.from}” → “${r.to}”",
         )
         is Reason.OneAreaOnly -> tr(
-            "Access point only heard within ~${r.extentM.toInt()} m of one area. A fixed router fits that; a follower would have to be heard farther apart than its range (≥ 600 m). No alert until it is",
-            "Access point sentito solo entro ~${r.extentM.toInt()} m da una zona. Un router fisso è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ 600 m). Nessuna allerta finché non succede",
+            "Only heard within ~${r.extentM.toInt()} m of one area. A fixed device (router, plug, beacon) fits that; a follower would have to be heard farther apart than its range (≥ ${r.limitM.toInt()} m). No alert until it is",
+            "Sentito solo entro ~${r.extentM.toInt()} m da una zona. Un dispositivo fisso (router, presa, beacon) è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ ${r.limitM.toInt()} m). Nessuna allerta finché non succede",
         )
         is Reason.ApUptime -> tr(
             "Running for ${"%.0f".format(r.days)} days without a reboot (beacon clock): typical of a fixed router",

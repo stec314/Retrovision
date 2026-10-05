@@ -132,10 +132,11 @@ sealed class Reason {
      */
     data class StaysPut(val reachM: Double, val decay: Double) : Reason()
     /**
-     * An access point only ever heard within [extentM] of one area: a fixed router fits that, and so
-     * would a follower that never left the area with you. Not enough movement to tell: no alert.
+     * Only ever heard within [extentM] of one area, less than twice its radio's reach ([limitM]): a
+     * fixed router, plug or beacon fits that, and so would a follower that never left the area with
+     * you. Not enough movement to tell: no alert.
      */
-    data class OneAreaOnly(val extentM: Double) : Reason()
+    data class OneAreaOnly(val extentM: Double, val limitM: Double = 600.0) : Reason()
     /** An Apple device that said its owner was driving (Apple Nearby Info): it is in a vehicle. Information only. */
     object ReportsDriving : Reason()
     /** Beacon uptime: running for [days] without a reboot. Typical of a fixed router; information only. */
@@ -259,7 +260,7 @@ enum class ScoreCap(val max: Double) {
     FEW_PLACES(0.30),
     /** Signal fades around one spot: a fixed transmitter. */
     STAYS_PUT(0.35),
-    /** Access point only ever heard within one area. */
+    /** Only ever heard within one area (less than twice its radio's reach). */
     ONE_AREA(0.45),
     /** Learned to belong to your routine places. */
     RESIDENT(0.25),
@@ -685,12 +686,15 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             reasons += Reason.StaysPut(staysPut.first, staysPut.second)
             if (score > STAYS_PUT_CAP) caps += ScoreCap.STAYS_PUT
             score = minOf(score, STAYS_PUT_CAP)
-        } else if (isAp && nPlaces >= 2) {
-            // An access point heard only within one area: a fixed router fits, and nothing shows it
-            // left the area with you. Proof of following needs it heard farther apart than its range.
+        } else if (nPlaces >= 2) {
+            // Heard only within one area: a fixed router, smart plug or beacon fits, and nothing shows
+            // it left the area with you. Proof of following needs it heard farther apart than its
+            // range. Not only access points: fixed Wi-Fi gadgets probe too, and fixed BLE devices are
+            // everywhere (field report: a neighbourhood's plugs and routers alerting together).
+            val limit = if (list.first().sighting.radio == Radio.BLE) BLE_ONE_AREA_M else AP_ONE_AREA_M
             val extent = extentM(positioned)
-            if (extent < AP_ONE_AREA_M) {
-                reasons += Reason.OneAreaOnly(extent)
+            if (extent < limit) {
+                reasons += Reason.OneAreaOnly(extent, limit)
                 if (score > ONE_AREA_CAP) caps += ScoreCap.ONE_AREA
                 score = minOf(score, ONE_AREA_CAP)
             }
@@ -978,6 +982,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
          * as you walk past on opposite sides. Only beyond that is "it was there too" proof.
          */
         const val AP_ONE_AREA_M = 600.0
+        /** Bluetooth reaches ~100-150 m outdoors (more with a probe's antenna): same reasoning. */
+        const val BLE_ONE_AREA_M = 300.0
         const val ONE_AREA_CAP = 0.45
     }
 }
