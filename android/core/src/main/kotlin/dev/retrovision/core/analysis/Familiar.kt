@@ -20,7 +20,16 @@ data class FamiliarPlace(
     enum class State { SUGGESTED, CONFIRMED, REJECTED }
     enum class Kind { HOME_LIKE, FREQUENT }
 
-    fun contains(lat: Double, lon: Double): Boolean = Geo.distanceM(this.lat, this.lon, lat, lon) <= radiusM
+    /**
+     * Never tighter than [MIN_RADIUS_M]: a place drawn at a few tens of metres (a tap on the map) is
+     * smaller than indoor GPS drift (median ~16 m, often 50-100 m), so being at home would otherwise
+     * keep producing "unfamiliar" places around it.
+     */
+    fun contains(lat: Double, lon: Double): Boolean = Geo.distanceM(this.lat, this.lon, lat, lon) <= maxOf(radiusM, MIN_RADIUS_M)
+
+    companion object {
+        const val MIN_RADIUS_M = 120.0
+    }
 }
 
 class FamiliarConfig(

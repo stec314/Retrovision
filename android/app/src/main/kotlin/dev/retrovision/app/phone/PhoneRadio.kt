@@ -110,7 +110,8 @@ class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> U
         val tx = r.txPower.takeIf { it != ScanResult.TX_POWER_NOT_PRESENT } ?: 0
         heard.value = heard.value + 1
         onSighting(
-            Sighting(t, Radio.BLE, addr, r.rssi, ble = BleDetail(addressKind(r.device, addr), advType, bytes, tx), probeId = PHONE_SOURCE),
+            // Android reports 127 when the RSSI is unavailable: store it as unknown (0), not +127 dBm.
+            Sighting(t, Radio.BLE, addr, if (r.rssi >= 20) 0 else r.rssi, ble = BleDetail(addressKind(r.device, addr), advType, bytes, tx), probeId = PHONE_SOURCE),
         )
     }
 
