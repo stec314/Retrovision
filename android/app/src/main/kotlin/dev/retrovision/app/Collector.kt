@@ -58,7 +58,7 @@ data class RadarBlip(
 data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Double = 0.0, val ts: Long = 0L)
 
 /** Where the wireless (BLE) probe link stands, for the Settings status card. */
-enum class BleStage { OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT }
+enum class BleStage { OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT, PAUSED }
 
 data class BleLinkUi(
     val stage: BleStage = BleStage.OFF,
@@ -72,6 +72,10 @@ data class BleLinkUi(
     val mtu: Int = 0,
     val connectedSinceMs: Long = 0,
     val sinceMs: Long = System.currentTimeMillis(),
+    /** When the probe last delivered an observation over this link (0 = none yet). */
+    val lastDataMs: Long = 0,
+    /** Observations per minute over the last minute while streaming. */
+    val obsPerMin: Int = 0,
 )
 
 /** One live probe link. [label] is what the UI shows ("USB JTAG…", "BLE: probe-ab12cd"). */
@@ -104,6 +108,10 @@ object Collector {
     val bleLinks = MutableStateFlow<Map<String, BleLinkUi>>(emptyMap())
     /** Bumped by the UI ("Retry now") to cut the wait between attempts. */
     val bleKick = MutableStateFlow(0L)
+    /** Paired probes you paused from Status: not looked for, their link dropped. Saved in settings. */
+    val blePaused = MutableStateFlow<Set<String>>(emptySet())
+    /** Per probe: when you asked to drop and reopen its link (Status → Reconnect). */
+    val bleReconnect = MutableStateFlow<Map<String, Long>>(emptyMap())
 
     /** Re-splits the channels between probes and resends every probe's config. Set by the service. */
     @Volatile var reconfigureAll: () -> Unit = { allSessions().forEach { it.resendConfig() } }
