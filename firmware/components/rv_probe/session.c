@@ -487,8 +487,9 @@ static void session_task(void *arg)
                 last_ble_tick = now;
                 rv_link_ble_tick();
             }
-            if (active_now && s_link == RV_T_USB &&
-                (!was_active || now - last_ble_report >= 30000000LL)) {
+            // Over the cable every 30 s; over BLE every 60 s (it shares the link, keep it light).
+            const int64_t every = s_link == RV_T_USB ? 30000000LL : 60000000LL;
+            if (active_now && (!was_active || now - last_ble_report >= every)) {
                 last_ble_report = now;
                 char line[160];
                 rv_link_ble_report(line, sizeof line);

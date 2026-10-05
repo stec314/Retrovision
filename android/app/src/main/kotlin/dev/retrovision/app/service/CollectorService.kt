@@ -39,6 +39,7 @@ import dev.retrovision.app.data.FamiliarRow
 import dev.retrovision.app.data.toRow
 import dev.retrovision.app.data.toSighting
 import dev.retrovision.app.probe.BleChannel
+import dev.retrovision.app.probe.removeBond
 import dev.retrovision.app.BleLinkUi
 import dev.retrovision.app.BleStage
 import kotlinx.coroutines.flow.first
@@ -534,6 +535,7 @@ class CollectorService : Service() {
 
     /** Consecutive setup failures per probe: past 3 the GATT cache is cleared and the card suggests a power cycle. */
     private val bleFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val bondFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     private suspend fun connectBle(name: String, dev: android.bluetooth.BluetoothDevice) {
         val fresh = BleChannel(this)
@@ -545,6 +547,18 @@ class CollectorService : Service() {
                 val n = (bleFailures[name] ?: 0) + 1
                 bleFailures[name] = n
                 Diag.w("ble", "$name: open failed: ${fresh.lastError}")
+                // A stale bond (the probe forgot it after a reboot, or the phone kept an old one) makes
+                // every setup hang at the encrypted step. Twice in a row: forget it on the phone, so the
+                // next attempt pairs afresh (the probe accepts a repeat pairing).
+                if (fresh.bondProblem || fresh.lastError.contains("status 5") || fresh.lastError.contains("status 15")) {
+                    val bondFails = (bondFailures[name] ?: 0) + 1
+                    bondFailures[name] = bondFails
+                    if (bondFails >= 2) {
+                        bondFailures.remove(name)
+                        val ok = removeBond(dev)
+                        Diag.w("ble", "$name: stale bond suspected, " + if (ok) "forgot it on the phone: pairing again" else "phone refused to forget it")
+                    }
+                }
                 val hint = if (n >= 6) " — " + Texts.tr("still failing after $n tries: switch the probe off and on (unplug its power for a few seconds)",
                     "fallisce ancora dopo $n tentativi: spegni e riaccendi la sonda (stacca l'alimentazione per qualche secondo)") else ""
                 bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = fresh.lastError + hint) }
@@ -552,6 +566,7 @@ class CollectorService : Service() {
                 return
             }
             bleFailures.remove(name)
+            bondFailures.remove(name)
             bleUi(name) { it.copy(stage = BleStage.HANDSHAKE, mtu = fresh.currentMtu, lastError = "") }
             runBleSession(name, fresh)
             if (fresh.lastError.isNotEmpty()) bleUi(name) { it.copy(lastError = fresh.lastError) }
@@ -597,10 +612,15 @@ class CollectorService : Service() {
         val watcher = scope.launch {
             val started = System.currentTimeMillis()
             var phase: dev.retrovision.app.probe.Phase? = null
+            var lastReport = ""
             var n = 0
             while (isActive) {
                 val st = session.state.value
                 if (Collector.session === session) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
+                if (st.bleReport != lastReport && st.bleReport.isNotEmpty()) {
+                    lastReport = st.bleReport
+                    Diag.i("ble", "$pairName: probe says ${st.bleReport}")
+                }
                 if (st.phase != phase) {
                     phase = st.phase
                     Diag.i("ble", "$pairName: phase ${st.phase}" + (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
@@ -628,22 +648,27 @@ class CollectorService : Service() {
                 delay(400)
             }
         }
+        var endReason = "service stopping"
         try {
             // Ends when the link drops, the probe goes onto the cable, or it is forgotten.
-            while (channel.connected && scope.isActive && usbProbeName() != pairName && prefs.blePairKey(pairName) != null) {
-                delay(500)
-                when (session.tick()) {
-                    ProbeSession.Health.DEAD -> { Diag.w("ble", "$pairName: no data for 45 s: reconnecting"); break }
-                    else -> Unit
+            while (scope.isActive) {
+                endReason = when {
+                    !channel.connected -> "link lost: ${channel.lastError.ifEmpty { "no reason given" }}"
+                    usbProbeName() == pairName -> "probe moved to the cable"
+                    prefs.blePairKey(pairName) == null -> "pairing forgotten"
+                    else -> ""
                 }
+                if (endReason.isNotEmpty()) break
+                delay(500)
+                if (session.tick() == ProbeSession.Health.DEAD) { endReason = "no data for 45 s"; break }
             }
         } finally {
+            Diag.i("ble", "$pairName: session ended ($endReason)")
             watcher.cancel()
             writer.cancel()
             session.stop()
             Collector.removeLink(key)
             worker.interrupt()
-            Diag.i("ble", "$pairName: session ended")
             Collector.reconfigureAll()
         }
     }

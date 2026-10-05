@@ -23,12 +23,12 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
+#include "store/config/ble_store_config.h"
+#include "host/ble_store.h"
 #include "esp_timer.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 
-// Bond storage in NVS (CONFIG_BT_NIMBLE_NVS_PERSIST). Without it bonding cannot be stored.
-void ble_store_config_init(void);
 static const char *TAG = "link_ble";
 
 static const ble_uuid128_t NUS_SVC =
@@ -190,6 +190,8 @@ void rv_link_ble_register_gatt(void)
     ble_hs_cfg.sm_sc = 1;
     ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
     ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    // Bond store full (re-pairings pile up): drop the oldest bond instead of failing the pairing.
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
@@ -366,9 +368,12 @@ void rv_link_ble_tick(void)
 void rv_link_ble_report(char *buf, size_t cap)
 {
     // Kept under 127 chars: it travels as a Log frame. Parsed by the app (keys before '=').
-    snprintf(buf, cap, "st=%s rc=%d name=%s at=%u conns=%lu disc=%d rxdrop=%lu heap=%lu/%lu/%lu",
+    static const char *const reasons[] = {"unknown", "poweron", "ext", "sw", "panic", "intwdt", "taskwdt", "wdt",
+                                           "deepsleep", "brownout", "sdio", "usb", "jtag", "efuse", "pwrglitch", "cpulock"};
+    const int rr = (int)esp_reset_reason();
+    snprintf(buf, cap, "st=%s rc=%d name=%s boot=%s conns=%lu disc=%d rxdrop=%lu heap=%lu/%lu/%lu",
              !s_synced ? "nosync" : s_conn != BLE_HS_CONN_HANDLE_NONE ? "connected" : (adv_active() ? "adv" : s_adv_step),
-             s_adv_rc, ble_svc_gap_device_name(), s_own_addr_type, (unsigned long)s_conns, s_last_disc, (unsigned long)s_rx_dropped,
+             s_adv_rc, ble_svc_gap_device_name(), rr >= 0 && rr < 16 ? reasons[rr] : "other", (unsigned long)s_conns, s_last_disc, (unsigned long)s_rx_dropped,
              (unsigned long)(s_heap_at_sync / 1024), (unsigned long)(esp_get_free_heap_size() / 1024),
              (unsigned long)(esp_get_minimum_free_heap_size() / 1024));
 }

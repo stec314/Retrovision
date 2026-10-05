@@ -145,6 +145,7 @@ class BleChannel(private val ctx: Context) {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Diag.i("ble", "connected, requesting MTU")
+                step = "MTU"
                 mtuAsked = true
                 if (!linkUp.isCompleted) linkUp.complete(true)
                 if (!g.requestMtu(247)) { mtuAsked = false; g.discoverServices() }
@@ -163,7 +164,7 @@ class BleChannel(private val ctx: Context) {
 
         override fun onMtuChanged(g: BluetoothGatt, m: Int, status: Int) {
             mtu = if (status == BluetoothGatt.GATT_SUCCESS) m else 23
-            if (mtuAsked) { mtuAsked = false; g.discoverServices() }
+            if (mtuAsked) { mtuAsked = false; step = "service discovery"; g.discoverServices() }
         }
 
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
@@ -177,6 +178,7 @@ class BleChannel(private val ctx: Context) {
                 return
             }
             rxChar = rx
+            step = "notification subscribe"
             g.setCharacteristicNotification(tx, true)
             val cccd = tx.getDescriptor(CCCD)
             if (cccd != null) {
@@ -194,7 +196,16 @@ class BleChannel(private val ctx: Context) {
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-            if (d.uuid == CCCD && !servicesReady.isCompleted) servicesReady.complete(true)
+            if (d.uuid != CCCD || servicesReady.isCompleted) return
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                step = "ready"
+                servicesReady.complete(true)
+            } else {
+                // Refused at the encrypted step: the bond on one side is stale.
+                lastError = "notifications refused (status $status): Bluetooth bond mismatch"
+                bondProblem = true
+                servicesReady.complete(false)
+            }
         }
 
         // API 33+ delivers the value directly; older APIs use the deprecated getter.
@@ -210,6 +221,12 @@ class BleChannel(private val ctx: Context) {
     }
 
     @Volatile private var mtuAsked = false
+    /** Setup step reached, for the error message ("MTU", "service discovery", …). */
+    @Volatile var step = "connect"
+        private set
+    /** The failure looks like a stale bond on one side (encryption step refused or hanging). */
+    @Volatile var bondProblem = false
+        private set
     private val linkUp = CompletableDeferred<Boolean>()
 
     /** Set after repeated setup failures: drop the phone's cached service table before discovering. */
@@ -264,7 +281,11 @@ class BleChannel(private val ctx: Context) {
             servicesReady.await()
         } ?: false
         up = ok && gatt != null && rxChar != null
-        if (!up && lastError.isEmpty()) lastError = "GATT setup timed out"
+        if (!up && lastError.isEmpty()) {
+            lastError = "GATT setup timed out at $step"
+            // Connected but never got through discovery/subscription: typical of a stale bond.
+            if (step == "service discovery" || step == "notification subscribe") bondProblem = true
+        }
         return up
     }
 
@@ -324,6 +345,11 @@ class BleChannel(private val ctx: Context) {
     /** Mtu agreed for this connection (payload per packet = mtu - 3). */
     val currentMtu get() = mtu
 }
+
+/** Forgets the phone's bond with [device] (hidden API, reflection). False if the phone refuses. */
+@SuppressLint("MissingPermission")
+fun removeBond(device: BluetoothDevice): Boolean =
+    runCatching { device.javaClass.getMethod("removeBond").invoke(device) as? Boolean ?: false }.getOrDefault(false)
 
 /** GATT status codes as people meet them. */
 fun gattStatus(status: Int): String = when (status) {

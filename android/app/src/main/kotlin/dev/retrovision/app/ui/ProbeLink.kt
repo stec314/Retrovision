@@ -81,8 +81,18 @@ internal fun bleReportText(r: String): Pair<String, Boolean> {
         else -> { parts += st; true }
     }
     kv["conns"]?.toIntOrNull()?.takeIf { it > 0 }?.let { parts += Texts.tr("$it connections since boot", "$it connessioni dall'avvio") }
+    // Why the probe last restarted: a crash or a power dip explains a link that drops for no reason.
+    val boot = kv["boot"].orEmpty()
+    val badBoot = boot in setOf("panic", "intwdt", "taskwdt", "wdt", "brownout", "pwrglitch", "cpulock")
+    when (boot) {
+        "brownout", "pwrglitch" -> parts += Texts.tr("last restart: power dip (weak power bank or cable?)", "ultimo riavvio: calo di alimentazione (power bank o cavo deboli?)")
+        "panic", "cpulock" -> parts += Texts.tr("last restart: firmware crash", "ultimo riavvio: crash del firmware")
+        "intwdt", "taskwdt", "wdt" -> parts += Texts.tr("last restart: watchdog (firmware stuck)", "ultimo riavvio: watchdog (firmware bloccato)")
+        "", "poweron", "sw", "usb", "jtag", "ext", "unknown" -> Unit
+        else -> parts += Texts.tr("last restart: $boot", "ultimo riavvio: $boot")
+    }
     if (heap.size == 3) parts += Texts.tr("free memory ${heap[1]} KiB (lowest ${heap[2]})", "memoria libera ${heap[1]} KiB (minimo ${heap[2]})")
-    return parts.joinToString(" · ") to (bad || low)
+    return parts.joinToString(" · ") to (bad || low || badBoot)
 }
 
 /** One line for the probe card: which transport the session runs on and its signal. */
@@ -146,6 +156,11 @@ private fun PairedProbeRow(name: String, ui: BleLinkUi?, session: SessionState?,
                     Texts.tr("Over 5% lost: Bluetooth cannot keep up here (busy area or weak signal).", "Oltre il 5% perso: il Bluetooth non regge qui (zona affollata o segnale debole)."),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                 )
+                if (session.bleReport.isNotEmpty()) {
+                    val (txt, bad) = bleReportText(session.bleReport)
+                    Text(txt, style = MaterialTheme.typography.labelSmall,
+                        color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             if (ui.lastError.isNotEmpty() && stage != BleStage.STREAMING && stage != BleStage.CABLE) {
                 Text(ui.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
