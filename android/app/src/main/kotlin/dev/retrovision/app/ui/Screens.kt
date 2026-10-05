@@ -160,6 +160,7 @@ fun StatusScreen(modifier: Modifier) {
                     Widget.CONTROLS -> Button(onClick = startStop, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                         Text(if (running) Texts.tr("Stop collecting", "Ferma la raccolta") else Texts.tr("Start collecting", "Avvia la raccolta"))
                     }
+                    Widget.PROBES -> ProbeStatusPanel()
                     Widget.ATTACKS -> AttacksPanel()
                     Widget.OVERVIEW -> OverviewPanel()
                     Widget.RADAR -> RadarSection(running)
@@ -461,24 +462,52 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     if (muteType) MuteTypeDialog(r, onClose = { muteType = false }, onDone = { muteType = false; onClose() })
 
     if (confirmMine) {
+        // Rotating Bluetooth: ignoring the addresses seen so far lasts minutes. Offer the advert signature.
+        val sig = r.bleSignature
+        var bySignature by remember { mutableStateOf(sig != null) }
         AlertDialog(
             onDismissRequest = { confirmMine = false },
             title = { Text(Texts.tr("Is this device yours?", "Questo dispositivo è tuo?")) },
             text = {
-                Text(
-                    Texts.tr(
-                        "It will be hidden from alerts and lists until you remove it in Settings → Ignored devices. Only confirm if you are sure: a device planted on you also \"travels with you\".",
-                        "Verrà nascosto da allerte ed elenchi finché non lo togli in Impostazioni → Dispositivi ignorati. Conferma solo se non hai dubbi: anche un dispositivo nascosto addosso a te \"viaggia con te\".",
-                    ) + if (r.macTrust != dev.retrovision.core.identity.MacTrust.STABLE) Texts.tr(
-                        "\n\nIts address rotates: this covers only the addresses seen so far, and it will come back under a new one. For your own phone, watch or earbuds that keep reappearing, use “Mute type” instead.",
-                        "\n\nIl suo indirizzo cambia: questo copre solo gli indirizzi visti finora e tornerà con uno nuovo. Per telefono, orologio o auricolari tuoi che ricompaiono, usa invece “Silenzia tipo”.",
-                    ) else "",
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        Texts.tr(
+                            "It will be hidden from alerts and lists until you remove it in Settings → Ignored devices. Only confirm if you are sure: a device planted on you also \"travels with you\".",
+                            "Verrà nascosto da allerte ed elenchi finché non lo togli in Impostazioni → Dispositivi ignorati. Conferma solo se non hai dubbi: anche un dispositivo nascosto addosso a te \"viaggia con te\".",
+                        ) + if (r.macTrust != dev.retrovision.core.identity.MacTrust.STABLE && sig == null) Texts.tr(
+                            "\n\nIts address rotates: this covers only the addresses seen so far, and it will come back under a new one. For your own phone, watch or earbuds that keep reappearing, use “Mute type” instead.",
+                            "\n\nIl suo indirizzo cambia: questo copre solo gli indirizzi visti finora e tornerà con uno nuovo. Per telefono, orologio o auricolari tuoi che ricompaiono, usa invece “Silenzia tipo”.",
+                        ) else "",
+                    )
+                    if (sig != null) {
+                        val n = dev.retrovision.core.identity.BleSignature.displayName(sig)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(checked = bySignature, onCheckedChange = { bySignature = it })
+                            Text(
+                                Texts.tr(
+                                    "Also every new address announcing “$n” with the same advert. It changes address every few minutes, so otherwise this lasts minutes. Any other device with the same name and advert is hidden too.",
+                                    "Anche ogni nuovo indirizzo che annuncia “$n” con lo stesso annuncio. Cambia indirizzo ogni pochi minuti, quindi senza questa opzione dura pochi minuti. Viene nascosto anche qualsiasi altro dispositivo con lo stesso nome e annuncio.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        for (m in r.memberIds) app.db.dao().addIgnore(IgnoreRow(m, Texts.entityLabel(r), System.currentTimeMillis()))
+                        val now = System.currentTimeMillis()
+                        for (m in r.memberIds) app.db.dao().addIgnore(IgnoreRow(m, Texts.entityLabel(r), now))
+                        if (sig != null && bySignature) {
+                            val n = dev.retrovision.core.identity.BleSignature.displayName(sig)
+                            app.db.dao().addIgnore(
+                                IgnoreRow(
+                                    dev.retrovision.core.identity.BleSignature.IGNORE_PREFIX + sig,
+                                    Texts.tr("Every “$n” advert (any address)", "Ogni annuncio “$n” (qualsiasi indirizzo)"), now,
+                                ),
+                            )
+                        }
                         Collector.analyzeNow.value = System.nanoTime()
                         confirmMine = false
                         onClose()

@@ -122,6 +122,8 @@ The status line on Status → Sensors also shows the BLE stage when no cable is 
 
 **When the link drops.** Each probe row says where a failed setup stalled (MTU, service discovery, notification subscribe) and why a session ended. Two failures in a row at the encrypted step make the phone forget its bond and pair afresh (a probe that lost its bond after a reboot otherwise locks the phone out). The probe reports why it last restarted (power dip, crash, watchdog): a power bank that dips under load shows up as "power dip". The probe drops a connection that never subscribes within 20 s or stays silent for 90 s, so a ghost connection cannot block the phone (one connection at a time).
 
+**Bluetooth probes on Status.** A *Bluetooth probes* card on the Status screen (move or hide it with *Customise dashboard*) shows each paired probe: its stage, observations per minute, when the last one arrived, the signal both ways, loss and uptime. From there you can **Pause** a probe (the app drops its link and stops looking for it until you **Resume**; saved across restarts), **Reconnect** a streaming probe (drop and reopen the link now) and **Retry** one that is not reached. It also asks for the Bluetooth permission or to turn Bluetooth on when that is what blocks. A probe that is connected but has delivered **no observation for 2 minutes** is flagged in red: a very quiet place, or a stuck probe. Pairing and forgetting stay on the Probe tab, because pairing needs the cable.
+
 **Several probes.** Pair each probe once over the cable (*Add this probe*); up to 4 stream at the same time next to the one on the cable, each in its own session, found by one shared Bluetooth scan. Settings (LED, channel plan, data frames) go to all of them. A frame heard by two probes is kept once (same address and 802.11 sequence number, or same advert, within 2 s), otherwise the duplicate would break the sequence-number linking of randomised addresses. *Split Wi-Fi channels between probes* (on by default): with two or more streaming, 5 GHz goes to the dual-band ones (C5), 2.4 GHz to the others, 1/6/11 spread with double dwell, so each listens longer per channel; when one drops out the rest take its channels back. Limits: a probe in BLE link mode does not scan Bluetooth (the phone does), and a probe left in a parked car only streams while the phone is within Bluetooth range (~10–30 m): it adds coverage while you are in or near the car, it does not watch the car while you are away. The probe-lost alert fires only when no probe streams any more.
 
 **Security.** The BLE link is encrypted by LE Secure Connections bonding (against passive sniffing). On top of that, the probe challenges the phone in every handshake: it sends a random nonce and streams nothing until the phone answers with `HMAC-SHA256(pairing key, "RVAUTH1" || nonce || boot id)`. So a different bonded phone cannot inject fake observations or reconfigure the probe. Settings that store the key (`SetLink`) are accepted only over USB.
@@ -168,6 +170,14 @@ Then **your verdict:** *False alarm* / *Suspicious*, and *It's mine*, which asks
 - the advertisement has a **distinctive, serial-like local name** (≥ 10 characters, or ≥ 4 with a digit, e.g. a fitness band broadcasting its serial), and
 - the coarse shape (company ID, service UUIDs, appearance) matches, and
 - exactly one recent trail (≤ 5 minutes) matches, at a comparable signal (|ΔRSSI| ≤ 12 dB).
+
+**Handover (identical advert).** A device whose advert does not change when its address does (a phone advertising its own name, a watch with a fixed payload) is linked when:
+- the advert, apart from the Flags, is **byte-for-byte identical**, and carries a local name or **≥ 6 bytes** of manufacturer/service data with at least 4 different byte values (an all-zero payload is shared by many devices, so it never qualifies; Apple and Microsoft continuity without a name never do either),
+- the old address went quiet **1–30 s** before the new one appeared (both talking at once means two devices),
+- the signal is close (|ΔRSSI| ≤ 8 dB), and exactly one trail fits.
+Field data (one day, ~9,800 BLE addresses): a phone advertising its name took a new address every 8–9 minutes with a 2–10 s gap, 40 addresses in a day. This rule made 201 links; checked against the rest of the data, 2 of them look doubtful. In *Linked addresses* these show as "probably the same device". Same scope as above: within one movement, never across days.
+
+**Which addresses rotate.** For Bluetooth the address kind the probe reports (resolvable or non-resolvable private) decides, not the Wi-Fi "locally administered" bit, which means nothing for a BLE random address. Before this fix about half of the real rotations were never considered for linking.
 
 **Anonymous phones are never stitched.** Their advertising shape (Apple, Google or Microsoft "continuity" messages) is shared by millions of devices, and BLE has no per-device counter like Wi-Fi's sequence number. This is the biggest honest limit of the tool (see *Limits*). Trails are forgotten after 5 minutes, so no cross-day identity is built from BLE.
 
@@ -336,7 +346,9 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 ## Your own devices and your own network
 
-**"Is this yours?"** A device that travelled with you (moved with you across ≥ 2 places) on **3** different days is proposed on the Status screen. *Yes* ignores it; *No* never asks again. Your watch, earbuds and car are the most common false alerts, and this removes them.
+**"Is this yours?"** A device that travelled with you (moved with you across ≥ 2 places) on **3** different days is proposed on the Status screen. *Yes* ignores it; *No* never asks again. Your watch, earbuds and car are the most common false alerts, and this removes them. A "day" is a calendar day on which the device was **heard**, taken from its own sightings: an analysis just after midnight still covers the evening before, and counting by the clock gave every device of that evening a second day.
+
+**Ignoring a device that changes address.** Ignoring stores addresses, and a phone or watch that rotates its address every few minutes outlives every ignore within minutes. When the device announces a local name, *It's mine* offers to ignore its **advert signature** (the name plus service UUIDs, company and appearance, never the rotating payload) on every address. It is listed under *Ignored devices* as "Every “name” advert" and can be removed there. Any other device with the same name and advert is hidden too, so use it for names that are yours. Trackers never get a signature.
 
 **Trackers and drones are never proposed.** A tracker planted on you also "travels with you every day": auto-ignoring would hide exactly the threat the app exists for.
 
@@ -381,6 +393,8 @@ Retrovision handles this in layers:
 3. **Learning routine places** uses the same filter.
 4. **Radar** only uses samples taken with a fix that is good enough and less than 15 s old.
 5. **Silent drift** while the phone is still is rejected using the accelerometer and Doppler speed (see *Your phone's own sensors*).
+
+**Standing still through a gap.** Indoors the phone can go 15–20 minutes without a usable fix. When the good fixes on both sides of a gap are within 75 m of each other and the gap is at most **20 minutes**, you did not go anywhere, so the sightings in between get that place. Nothing is guessed while you move or after the last fix. In field data (one evening in a city centre) this raised the share of sightings with a place from 42% to 94%.
 
 **Trade-off.** A stricter setting means fewer false alerts but also fewer usable fixes. In a long indoor stay you may get no places at all, so following detection effectively pauses there. That is the honest behaviour: without a reliable position, "it followed me" cannot be judged. Trackers and attack detection don't depend on GPS and keep working.
 

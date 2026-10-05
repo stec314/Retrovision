@@ -43,6 +43,16 @@ import kotlin.math.abs
  *   not linked — a deliberate, honest limit. This stitches fragments *within one
  *   movement*; trails are forgotten after [bleLinkWindowMs], so nothing persists across
  *   sessions and no cross-day identity is built.
+ * - Randomised BLE addresses whose advert is byte-for-byte identical across the rotation
+ *   ("handover"): a new address is linked to the previous one when the advert (Flags aside) is
+ *   exactly the same, the old address went quiet [handoverMinGapMs]..[handoverMaxGapMs] before,
+ *   the signal is close (|ΔRSSI| ≤ [handoverRssiTolDb]) and exactly one trail matches. Only adverts
+ *   that carry a local name, or ≥ 6 bytes of manufacturer/service data with real variety in them,
+ *   qualify ([handoverKey]); Apple and Microsoft continuity without a name never do. Field data
+ *   (one day, ~6.500 rotating addresses) showed own devices like a phone advertising its name
+ *   rotating every 8–9 min with a 2–10 s handover: 199 links, 2 of them doubtful. An all-zero
+ *   payload is shared by many devices, hence the variety rule. Same scope as above: within one
+ *   movement, never across days.
  *
  * Not thread-safe. State is in memory; [seed] restores address mappings from storage.
  */
@@ -58,6 +68,9 @@ class EntityResolver(
      * rejects gross mismatches (a device clearly at another distance), not normal fading.
      */
     private val wifiRssiTolDb: Int = 20,
+    private val handoverMinGapMs: Long = 1_000,
+    private val handoverMaxGapMs: Long = 30_000,
+    private val handoverRssiTolDb: Int = 8,
 ) {
     class Resolution(val entityId: String, val linkedToExisting: Boolean)
 
@@ -72,12 +85,17 @@ class EntityResolver(
     private val byAddress = HashMap<Key, AddrState>()
     private val trailsByFingerprint = HashMap<String, MutableList<Trail>>()
     private val bleTrailsByShape = HashMap<String, MutableList<BleTrail>>()
+    private val handoverTrails = HashMap<String, MutableList<BleTrail>>()
 
     var linksMade: Long = 0
         private set
 
     /** Rotation carry-overs stitched on the BLE side (for diagnostics). */
     var bleLinksMade: Long = 0
+        private set
+
+    /** Rotations linked by an identical advert right after the old address went quiet. */
+    var handoverLinksMade: Long = 0
         private set
 
     fun seed(radio: Radio, mac: MacAddress, entityId: String, lastSeenMs: Long) {
@@ -90,11 +108,13 @@ class EntityResolver(
         val fp = fingerprint ?: s.wifi?.takeIf { it.kind == WifiKind.PROBE_REQ }?.let { WifiFingerprint.of(it.ies) }
 
         val bleShape = if (s.radio == Radio.BLE) bleShape(s) else null
+        val handover = if (s.radio == Radio.BLE && bleShape == null && rotatingBle(s)) handoverKeyOf(s) else null
 
         if (known != null) {
             known.lastSeenMs = maxOf(known.lastSeenMs, s.timeMs)
             updateTrail(fp, known.entityId, s)
-            if (bleShape != null) updateBleTrail(bleShape, known.entityId, s)
+            if (bleShape != null) updateBleTrail(bleTrailsByShape, bleShape, known.entityId, s)
+            if (handover != null) updateBleTrail(handoverTrails, handover, known.entityId, s)
             return Resolution(known.entityId, linkedToExisting = false)
         }
 
@@ -115,7 +135,7 @@ class EntityResolver(
                 linked = true
                 linksMade++
             }
-        } else if (bleShape != null && s.address.isLocallyAdministered) {
+        } else if (bleShape != null && rotatingBle(s)) {
             // Carry-over across a BLE MAC rotation, within one movement.
             val candidates = bleTrailsByShape[bleShape].orEmpty().filter { t ->
                 val dt = s.timeMs - t.lastMs
@@ -127,10 +147,23 @@ class EntityResolver(
                 linked = true
                 bleLinksMade++
             }
+        } else if (handover != null) {
+            // Handover: the same advert, from a new address, just after the old one went quiet.
+            val candidates = handoverTrails[handover].orEmpty().filter { t ->
+                val gap = s.timeMs - t.lastMs
+                val rssiOk = t.lastRssi == 0 || s.rssi == 0 || abs(s.rssi - t.lastRssi) <= handoverRssiTolDb
+                t.mac != s.address && gap in handoverMinGapMs..handoverMaxGapMs && rssiOk
+            }
+            if (candidates.size == 1) {
+                entityId = candidates[0].entityId
+                linked = true
+                handoverLinksMade++
+            }
         }
         byAddress[key] = AddrState(entityId, s.timeMs)
         updateTrail(fp, entityId, s)
-        if (bleShape != null) updateBleTrail(bleShape, entityId, s)
+        if (bleShape != null) updateBleTrail(bleTrailsByShape, bleShape, entityId, s)
+        if (handover != null) updateBleTrail(handoverTrails, handover, entityId, s)
         return Resolution(entityId, linked)
     }
 
@@ -146,8 +179,7 @@ class EntityResolver(
         if (b.advType == BleAdvType.SCAN_RSP) return null
         val info = AdvertisementInfo.of(b.advData)
         val name = info.name?.trim().orEmpty()
-        val distinctive = name.length >= 10 || (name.length >= 4 && name.any { it.isDigit() })
-        if (!distinctive) return null
+        if (!isDistinctiveName(name)) return null
         val uuids = (info.serviceUuids16 + info.serviceData16.keys).toSortedSet()
         val sb = StringBuilder(48)
         sb.append('n').append(name)
@@ -157,8 +189,25 @@ class EntityResolver(
         return sb.toString()
     }
 
-    private fun updateBleTrail(shape: String, entityId: String, s: Sighting) {
-        val list = bleTrailsByShape.getOrPut(shape) { ArrayList(2) }
+    /**
+     * A BLE address that rotates. The 802.11 U/L bit means nothing for BLE (a random address's top
+     * bits carry its sub-type), so the advertised address kind decides; only an unknown kind falls
+     * back to the U/L bit. Before this, about half of real rotations were never considered.
+     */
+    private fun rotatingBle(s: Sighting): Boolean = when (s.ble?.addressKind) {
+        BleAddressKind.RANDOM_RESOLVABLE, BleAddressKind.RANDOM_NON_RESOLVABLE -> true
+        BleAddressKind.PUBLIC, BleAddressKind.RANDOM_STATIC -> false
+        else -> s.address.isLocallyAdministered
+    }
+
+    private fun handoverKeyOf(s: Sighting): String? {
+        val b = s.ble ?: return null
+        if (b.advType == BleAdvType.SCAN_RSP) return null
+        return handoverKey(b.advData)
+    }
+
+    private fun updateBleTrail(map: HashMap<String, MutableList<BleTrail>>, shape: String, entityId: String, s: Sighting) {
+        val list = map.getOrPut(shape) { ArrayList(2) }
         val t = list.firstOrNull { it.entityId == entityId }
         if (t == null) {
             list += BleTrail(entityId, s.address, s.timeMs, s.rssi)
@@ -199,10 +248,67 @@ class EntityResolver(
             list.removeAll { nowMs - it.lastMs > bleLinkWindowMs }
             if (list.isEmpty()) bt.remove()
         }
+        val ht = handoverTrails.values.iterator()
+        while (ht.hasNext()) {
+            val list = ht.next()
+            list.removeAll { nowMs - it.lastMs > handoverMaxGapMs }
+            if (list.isEmpty()) ht.remove()
+        }
     }
 
     companion object {
         fun defaultId(radio: Radio, mac: MacAddress): String =
             (if (radio == Radio.WIFI) "wifi:" else "ble:") + mac
+
+        /** A serial-like local name: long enough, or short with digits ("5AM0452823", "TAG12345"). */
+        fun isDistinctiveName(name: String): Boolean {
+            val n = name.trim()
+            return n.length >= 10 || (n.length >= 4 && n.any { it.isDigit() })
+        }
+
+        private const val APPLE = 0x004C
+        private const val MICROSOFT = 0x0006
+
+        /**
+         * Key for a handover link: the advert without its Flags, as hex, or null when the advert is
+         * too generic to tell two devices apart. Qualifies: a local name that is not serial-like
+         * (those use the name path), or ≥ 6 bytes of manufacturer/service data with at least 4
+         * different byte values. Apple/Microsoft continuity without a name never qualifies.
+         */
+        fun handoverKey(advData: ByteArray): String? {
+            val parts = AdParser.parse(advData)
+            if (parts.isEmpty()) return null
+            var name: String? = null
+            var manufacturer: Int? = null
+            var payload = 0
+            for (p in parts) {
+                val d = p.data
+                when (p.type) {
+                    AdParser.SHORT_NAME, AdParser.COMPLETE_NAME -> name = String(d, Charsets.UTF_8).trim()
+                    AdParser.MANUFACTURER -> if (d.size >= 2) {
+                        manufacturer = (d[0].toInt() and 0xFF) or ((d[1].toInt() and 0xFF) shl 8)
+                        if (variety(d, 2) >= 4) payload = maxOf(payload, d.size - 2)
+                    }
+                    AdParser.SERVICE_DATA_16 -> if (d.size >= 2 && variety(d, 2) >= 4) payload = maxOf(payload, d.size - 2)
+                }
+            }
+            val named = !name.isNullOrEmpty()
+            if (named && isDistinctiveName(name!!)) return null
+            if (!named && (manufacturer == APPLE || manufacturer == MICROSOFT)) return null
+            if (!named && payload < 6) return null
+            val sb = StringBuilder(advData.size * 2)
+            for (p in parts) {
+                if (p.type == AdParser.FLAGS) continue
+                sb.append("%02x%02x".format(p.data.size + 1, p.type))
+                for (x in p.data) sb.append("%02x".format(x.toInt() and 0xFF))
+            }
+            return sb.toString()
+        }
+
+        private fun variety(d: ByteArray, from: Int): Int {
+            val seen = HashSet<Byte>()
+            for (i in from until d.size) seen += d[i]
+            return seen.size
+        }
     }
 }
