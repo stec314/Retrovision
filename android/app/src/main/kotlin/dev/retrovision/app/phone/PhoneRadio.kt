@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -14,6 +15,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.ParcelUuid
 import android.os.SystemClock
 import dev.retrovision.core.model.BleAddressKind
 import dev.retrovision.core.model.BleAdvType
@@ -31,7 +33,11 @@ const val PHONE_SOURCE = "phone"
  * The phone's own Bluetooth LE radio as a second receiver. It sees full advertisements, like the
  * probe, so trackers, Remote ID over Bluetooth, BLE spam and notable devices work without a
  * probe. On phones with LE Coded PHY it also hears Bluetooth 5 Long Range, which the probe doesn't.
- * Limits: Android throttles scans and may pause unfiltered scans with the screen off.
+ * Limits: Android throttles scans and pauses UNFILTERED scans while the screen is off. So a second,
+ * filtered scan runs alongside, for what matters most (trackers, Remote ID, pop-up spam): Android
+ * keeps filtered scans going with the screen off. Field data: with the phone in a pocket at night and
+ * the only probe on a Bluetooth link (which does not scan), nothing listened to Bluetooth for 30% of
+ * the recorded time.
  */
 class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> Unit) {
     val active = MutableStateFlow(false)
@@ -55,6 +61,34 @@ class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> U
         }
     }
 
+    /** The screen-off scan: same handling, its own callback (a failure here keeps the main scan). */
+    private val filteredCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult) = handle(result)
+        override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::handle)
+        override fun onScanFailed(errorCode: Int) { filteredActive = false }
+    }
+    @Volatile private var filteredActive = false
+
+    /**
+     * What keeps being heard with the screen off. Kept under ~16 filters (the controller's
+     * hardware filter table on many phones): Apple and Samsung by company id (Find My, SmartThings
+     * Find, iPhones, Galaxy devices), and service data of the tracker networks, drone Remote ID and
+     * Fast Pair (the pop-up spam vector).
+     */
+    private fun trackerFilters(): List<ScanFilter> {
+        fun uuid16(u: Int) = ParcelUuid.fromString("0000%04x-0000-1000-8000-00805f9b34fb".format(u))
+        val out = ArrayList<ScanFilter>()
+        for (company in intArrayOf(0x004C, 0x0075)) out += ScanFilter.Builder().setManufacturerData(company, ByteArray(0)).build()
+        // FEAA Google Find Hub/Eddystone, FD5A SmartTag, FD69 Samsung Find, FEED Tile, FE33 Chipolo,
+        // FA25 Pebblebee, FCB2 DULT (any compliant tag), FFFA drone Remote ID, FE2C Fast Pair.
+        for (u in intArrayOf(0xFEAA, 0xFD5A, 0xFD69, 0xFEED, 0xFE33, 0xFA25, 0xFCB2, 0xFFFA, 0xFE2C)) {
+            out += ScanFilter.Builder().setServiceData(uuid16(u), ByteArray(0)).build()
+        }
+        // Tile and Chipolo also list their UUID without service data.
+        for (u in intArrayOf(0xFEED, 0xFE33)) out += ScanFilter.Builder().setServiceUuid(uuid16(u)).build()
+        return out
+    }
+
     @SuppressLint("MissingPermission")
     fun start(): Boolean {
         if (active.value) return true
@@ -74,15 +108,23 @@ class PhoneBle(private val ctx: Context, private val onSighting: (Sighting) -> U
                 }
             }
             .build()
-        return runCatching { scanner.startScan(null, settings, callback) }
+        val ok = runCatching { scanner.startScan(null, settings, callback) }
             .onSuccess { active.value = true; codedPhy.value = coded }
             .isSuccess
+        // Duplicates with the main scan while the screen is on are dropped by [handle] (same
+        // address and bytes within 1 s).
+        if (ok && !filteredActive) {
+            filteredActive = runCatching { scanner.startScan(trackerFilters(), settings, filteredCallback) }.isSuccess
+        }
+        return ok
     }
 
     @SuppressLint("MissingPermission")
     fun stop() {
         if (!active.value) return
         runCatching { adapter?.bluetoothLeScanner?.stopScan(callback) }
+        if (filteredActive) runCatching { adapter?.bluetoothLeScanner?.stopScan(filteredCallback) }
+        filteredActive = false
         active.value = false
     }
 

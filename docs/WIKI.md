@@ -334,7 +334,7 @@ The phone can be a receiver too (Settings → Phone sensors):
 
 | Sensor | What it adds | Limits |
 |---|---|---|
-| **Bluetooth LE** (off / only without probe / always; default always) | Full advertisements like the probe: trackers, Bluetooth Remote ID, BLE spam and notable devices **work without a probe**. Phones with LE Coded PHY also hear **Bluetooth 5 Long Range**, which the probe doesn't | Android throttles scanning and may pause it with the screen off. Uses battery |
+| **Bluetooth LE** (off / only without probe / always; default always) | Full advertisements like the probe: trackers, Bluetooth Remote ID, BLE spam and notable devices **work without a probe**. Phones with LE Coded PHY also hear **Bluetooth 5 Long Range**, which the probe doesn't | Android pauses unfiltered scans while the screen is off. A second, filtered scan keeps listening then for Apple and Samsung devices, Find Hub, SmartTag, Tile, Chipolo, Pebblebee, any DULT tag, drone Remote ID and Fast Pair (pop-up spam); other devices are heard again when the screen turns on. Field data: before this, nothing listened to Bluetooth for 30% of a 3-day recording (phone in a pocket, the only probe on a Bluetooth link, which does not scan). Uses battery |
 | **Accelerometer** | GPS drift check (see below) | None worth noting: it is the cheapest sensor |
 | **Bluetooth Classic** (button, ~12 s) | Discoverable Classic devices, e.g. **HC-05/HC-06 serial modules** used in card skimmers. The probe has no Classic radio | Only devices in discoverable mode answer; it occupies the phone's Bluetooth while it runs |
 | **Wi-Fi connection** | Being connected to one of your networks counts as being at a routine place, even indoors without GPS | Needs location permission to read the network name |
