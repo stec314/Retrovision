@@ -62,6 +62,9 @@ void rv_link_init(rv_link_rx_cb_t on_envelope)
     s_on_envelope = on_envelope;
     s_tx_lock = xSemaphoreCreateMutex();
     rv_link_usb_init();
+    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_RELAY) {
+        rv_link_uart_init();
+    }
     // The BLE transport registers itself from the NimBLE init path (see capture/ble_scanner),
     // and only when the stored link mode is BLE.
 }
@@ -136,6 +139,7 @@ retrovision_v1_LinkKind rv_link_kind(rv_transport_t t)
     switch (t) {
     case RV_T_BLE: return retrovision_v1_LinkKind_LINK_KIND_BLE;
     case RV_T_TCP: return retrovision_v1_LinkKind_LINK_KIND_WIFI;
+    case RV_T_UART: return retrovision_v1_LinkKind_LINK_KIND_RELAY;
     default: return retrovision_v1_LinkKind_LINK_KIND_USB;
     }
 }

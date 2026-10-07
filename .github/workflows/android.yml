@@ -142,7 +142,7 @@ jobs:
         run: |
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           cp "$apk" "Retrovision-${RV_VERSION_NAME}.apk"
-          for t in esp32s3 esp32 esp32c5; do
+          for t in esp32s3 esp32 esp32c5 esp32s3-relay; do
             b=$(find fw -name "retrovision-$t-merged.bin" | head -1)
             [ -n "$b" ] && cp "$b" "retrovision-$t-${RV_VERSION_NAME}.bin"
           done

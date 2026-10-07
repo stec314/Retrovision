@@ -35,7 +35,8 @@ void rv_link_cfg_load(void)
         tmp.ssid[sizeof tmp.ssid - 1] = 0;
         tmp.password[sizeof tmp.password - 1] = 0;
         bool wireless = tmp.mode == retrovision_v1_LinkKind_LINK_KIND_BLE ||
-                        tmp.mode == retrovision_v1_LinkKind_LINK_KIND_WIFI;
+                        tmp.mode == retrovision_v1_LinkKind_LINK_KIND_WIFI ||
+                        tmp.mode == retrovision_v1_LinkKind_LINK_KIND_RELAY;
         if (!wireless || tmp.key_len >= 16) {
             s_cfg = tmp;
         }
@@ -52,7 +53,8 @@ const rv_link_cfg_t *rv_link_cfg(void)
 bool rv_link_cfg_wireless(void)
 {
     return s_cfg.mode == retrovision_v1_LinkKind_LINK_KIND_BLE ||
-           s_cfg.mode == retrovision_v1_LinkKind_LINK_KIND_WIFI;
+           s_cfg.mode == retrovision_v1_LinkKind_LINK_KIND_WIFI ||
+           s_cfg.mode == retrovision_v1_LinkKind_LINK_KIND_RELAY;
 }
 
 bool rv_link_cfg_save(const retrovision_v1_SetLink *in, char *msg, size_t cap)
@@ -66,6 +68,7 @@ bool rv_link_cfg_save(const retrovision_v1_SetLink *in, char *msg, size_t cap)
         c.mode = retrovision_v1_LinkKind_LINK_KIND_USB;
         break;
     case retrovision_v1_LinkKind_LINK_KIND_BLE:
+    case retrovision_v1_LinkKind_LINK_KIND_RELAY:
         break;
     case retrovision_v1_LinkKind_LINK_KIND_WIFI:
         if (in->wifi_ssid[0] == 0) {

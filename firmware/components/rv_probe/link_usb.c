@@ -49,9 +49,10 @@ static bool usb_write(const uint8_t *data, size_t len, TickType_t timeout)
 
 static bool usb_connected(void)
 {
-    // With a BLE host attached, give up on a silent cable sooner (the host time-syncs every
-    // 30 s), so unplugging hands over to BLE within ~40 s instead of 2 minutes.
-    const int64_t window_us = (rv_link_connected(RV_T_BLE) ? 40LL : 120LL) * 1000 * 1000;
+    // With a wireless host attached (BLE or relay), give up on a silent cable sooner (the host
+    // time-syncs every 30 s), so unplugging hands over within ~40 s instead of 2 minutes.
+    const bool other = rv_link_connected(RV_T_BLE) || rv_link_connected(RV_T_UART);
+    const int64_t window_us = (other ? 40LL : 120LL) * 1000 * 1000;
     const bool talking = esp_timer_get_time() - s_last_rx_us < window_us;
 #if CONFIG_IDF_TARGET_ESP32
     // A UART cannot tell whether anyone listens: silence is the only signal.

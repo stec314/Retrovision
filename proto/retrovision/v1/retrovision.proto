@@ -71,6 +71,7 @@ enum Capability {
   CAPABILITY_GNSS = 20;            // probe has its own GNSS receiver
   CAPABILITY_LINK_BLE = 30;        // can talk to the host over a BLE GATT link (1.2)
   CAPABILITY_LINK_WIFI = 31;       // can talk to the host over Wi-Fi/TCP (1.2)
+  CAPABILITY_LINK_RELAY = 32;      // can talk to the host through a UART-wired BLE relay (1.3)
   CAPABILITY_CUSTOM = 100;         // emits CustomObservation, see schema_ids
 }
 
@@ -122,6 +123,10 @@ enum LinkKind {
   LINK_KIND_USB = 1;    // cable (USB-Serial-JTAG or USB-UART bridge); also "wireless off"
   LINK_KIND_BLE = 2;    // GATT, Nordic UART Service layout
   LINK_KIND_WIFI = 3;   // TCP over Wi-Fi (usually the phone's hotspot)
+  // 1.3 — BLE through a relay board (an ESP32-S3 running the relay firmware) wired to the
+  // probe's UART. The relay only forwards bytes; the probe keeps its own Bluetooth radio for
+  // scanning and still authenticates the host (auth_nonce/auth_mac) end to end.
+  LINK_KIND_RELAY = 4;
 }
 
 message HelloAck {

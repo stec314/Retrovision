@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 stec314 and the Retrovision contributors
 // Host links. One protocol (COBS frames carrying protobuf Envelopes) over up to
-// three transports: the cable (always on), plus a BLE GATT link when configured.
+// three transports: the cable (always on), plus a BLE GATT link or a UART to a BLE relay
+// board when configured.
 // The session talks to one "active" transport: the one it handshook on.
 #pragma once
 
@@ -16,6 +17,7 @@ typedef enum {
     RV_T_USB = 0,   // USB-Serial-JTAG (ESP32-S3/C5) or UART0 via USB bridge (classic ESP32)
     RV_T_BLE = 1,   // GATT, Nordic UART Service layout
     RV_T_TCP = 2,   // reserved for a future Wi-Fi/TCP link
+    RV_T_UART = 3,  // second UART wired to a BLE relay board (relay link mode only)
     RV_T_COUNT
 } rv_transport_t;
 
@@ -56,6 +58,8 @@ void rv_link_reset_rx(rv_transport_t t);
 
 // Transport entry points.
 void rv_link_usb_init(void);
+void rv_link_uart_init(void);           // relay link mode only
+uint32_t rv_link_uart_breaks(void);     // relay "phone connected/left" signals since boot
 void rv_link_ble_register_gatt(void);   // before the NimBLE host starts (BLE link mode only)
 void rv_link_ble_on_sync(void);         // NimBLE host synced: start advertising
 // RSSI of the connected BLE host (dBm), 0 if none.

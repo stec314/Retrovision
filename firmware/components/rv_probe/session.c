@@ -100,7 +100,7 @@ typedef enum { ST_HELLO, ST_REJECTED, ST_ACTIVE } state_t;
 static volatile state_t s_state = ST_HELLO;
 static uint32_t s_boot_id;
 // Transport the current handshake/session runs on. USB is preferred whenever the cable is
-// connected; BLE is used only when configured and no cable is present.
+// connected; BLE or the relay UART is used only when configured and no cable is present.
 static rv_transport_t s_link = RV_T_USB;
 // Challenge sent in the last wireless Hello; a wireless HelloAck must answer it with a valid MAC.
 static uint8_t s_nonce[16];
@@ -149,6 +149,7 @@ static void send_hello(void)
 #if CONFIG_BT_NIMBLE_ENABLED
         retrovision_v1_Capability_CAPABILITY_LINK_BLE,
 #endif
+        retrovision_v1_Capability_CAPABILITY_LINK_RELAY,
     };
     h->capabilities_count = sizeof caps / sizeof caps[0];
     memcpy(h->capabilities, caps, sizeof caps);
@@ -170,6 +171,17 @@ static void send_hello(void)
          h->supported_wifi_channels_count < (sizeof h->supported_wifi_channels / sizeof h->supported_wifi_channels[0]);
          i++) {
         h->supported_wifi_channels[h->supported_wifi_channels_count++] = rv_cfg_5ghz_channels[i];
+    }
+    if (s_link == RV_T_UART && !rv_link_connected(RV_T_UART)) {
+        // Relay link: the relay forwards a Hello only while a phone is connected to it, so keep
+        // announcing; the phone answers and that makes the link "connected".
+        rv_link_send_to_unchecked(RV_T_UART, e, pdMS_TO_TICKS(20));
+#if CONFIG_IDF_TARGET_ESP32
+        // No cable detection on a UART bridge: announce there too, so a phone that plugs in to
+        // re-pair hears us and starts talking (that switches the session to the cable).
+        rv_link_send_to_unchecked(RV_T_USB, e, pdMS_TO_TICKS(20));
+#endif
+        return;
     }
     if (s_link == RV_T_USB && !rv_link_connected(RV_T_USB)) {
         // Nobody has talked on the cable yet (a probe set up for BLE does not assume a host at
@@ -211,6 +223,7 @@ static void fill_status(retrovision_v1_Envelope *e)
     if (s_link == RV_T_BLE) {
         s->link_rssi = rv_link_ble_rssi();
     }
+    // Relay link: the relay knows the phone's RSSI, the probe does not (link_rssi stays 0).
 }
 
 static void send_ack(uint32_t command_seq, retrovision_v1_AckResult res, const char *msg)
@@ -403,20 +416,30 @@ static void session_task(void *arg)
 
         xSemaphoreTake(s_lock, portMAX_DELAY);
 
-        // Pick the transport: the cable wins whenever it is connected, else BLE if it is.
+        // Pick the transport: the cable wins whenever it is connected, else BLE or the relay.
         // Plugging or unplugging the cable restarts the handshake on the new transport.
         const bool usb = rv_link_connected(RV_T_USB);
         const bool ble = rv_link_connected(RV_T_BLE);
+        const bool uart = rv_link_connected(RV_T_UART);
         // With no host anywhere, fall back to the cable: Hellos then reach a phone that plugs in
-        // later (a dropped BLE host has to reconnect and handshake again anyway).
-        const rv_transport_t want = usb ? RV_T_USB : (ble ? RV_T_BLE : RV_T_USB);
-        if (want != s_link && (usb || ble || s_link != RV_T_USB)) {
+        // later (a dropped BLE host has to reconnect and handshake again anyway). In relay mode
+        // fall back to the relay instead, unless a USB host is there: the phone only hears the
+        // probe through the relay's Hellos.
+        const bool relay_mode = rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_RELAY;
+#if CONFIG_IDF_TARGET_ESP32
+        const bool usb_host_there = false; // a UART bridge cannot tell; Hellos go to both (send_hello)
+#else
+        const bool usb_host_there = rv_link_usb_present();
+#endif
+        const rv_transport_t idle = relay_mode && !usb_host_there ? RV_T_UART : RV_T_USB;
+        const rv_transport_t want = usb ? RV_T_USB : (ble ? RV_T_BLE : (uart ? RV_T_UART : idle));
+        if (want != s_link && (usb || ble || uart || s_link != idle)) {
             ESP_LOGI(TAG, "link switch %d -> %d", s_link, want);
             s_link = want;
             rv_link_set_active(want);
             go_idle(ST_HELLO);
             usb_gone_since = 0;
-        } else if (!usb && !ble) {
+        } else if (!usb && !ble && !uart) {
             // Host detached on every transport: restart the handshake after a short grace.
             if (usb_gone_since == 0) {
                 usb_gone_since = now;

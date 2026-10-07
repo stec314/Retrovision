@@ -41,7 +41,7 @@ jobs:
         run: python3 -m unittest -v firmware/components/rv_core/test/test_rv_core.py
 
   build:
-    name: Build ${{ matrix.target }} firmware
+    name: Build ${{ matrix.dir || matrix.target }} firmware
     runs-on: ubuntu-24.04
     needs: host-tests
     strategy:
@@ -60,6 +60,13 @@ jobs:
           - target: esp32c5
             offset: "0x0"
             app_offset: "0x2000"
+          # BLE relay for a XIAO ESP32-S3 wired to a probe's UART (relay link mode). Not a probe:
+          # flashed from the web flasher's relay button, never by the app's chip auto-detect.
+          - target: esp32s3
+            dir: relay-esp32s3
+            image: esp32s3-relay
+            project: retrovision_relay_esp32s3
+            offset: "0x0"
     steps:
       - uses: actions/checkout@v5
         with:
@@ -69,20 +76,20 @@ jobs:
         with:
           esp_idf_version: v5.5.5
           target: ${{ matrix.target }}
-          path: firmware/${{ matrix.target }}
+          path: firmware/${{ matrix.dir || matrix.target }}
           command: >-
             set -o pipefail;
             idf.py build 2>&1 | tee build.log &&
             (cd build && python -m esptool --chip ${{ matrix.target }} merge_bin
             --target-offset ${{ matrix.offset }}
-            -o retrovision-${{ matrix.target }}-merged.bin @flash_args) &&
+            -o retrovision-${{ matrix.image || matrix.target }}-merged.bin @flash_args) &&
             ${{ matrix.app_offset && format('(cd build && python -m esptool --chip {0} merge_bin --target-offset {1} -o retrovision-{0}-app.bin @flash_args) &&', matrix.target, matrix.app_offset) || '' }}
             idf.py size | tee -a build.log
       # Surface compiler errors as annotations (readable without log access).
       - name: Report build errors
         if: failure()
         run: |
-          f=firmware/${{ matrix.target }}/build.log
+          f=firmware/${{ matrix.dir || matrix.target }}/build.log
           [ -f "$f" ] || { echo "::error::no build.log (failed before build)"; exit 0; }
           grep -nE "error:|Error:|CMake Error|FAILED:|undefined reference|ninja: build stopped|overflow" "$f" \
             | head -40 | while IFS= read -r l; do echo "::error::${l//%/%25}"; done
@@ -90,13 +97,13 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v5
         with:
-          name: retrovision-${{ matrix.target }}
+          name: retrovision-${{ matrix.image || matrix.target }}
           path: |
-            firmware/${{ matrix.target }}/build/retrovision-${{ matrix.target }}-merged.bin
-            firmware/${{ matrix.target }}/build/retrovision-${{ matrix.target }}-app.bin
-            firmware/${{ matrix.target }}/build/retrovision_${{ matrix.target }}.bin
-            firmware/${{ matrix.target }}/build/retrovision_${{ matrix.target }}.elf
-            firmware/${{ matrix.target }}/build/bootloader/bootloader.bin
-            firmware/${{ matrix.target }}/build/partition_table/partition-table.bin
-            firmware/${{ matrix.target }}/build/flash_args
+            firmware/${{ matrix.dir || matrix.target }}/build/retrovision-${{ matrix.image || matrix.target }}-merged.bin
+            firmware/${{ matrix.dir || matrix.target }}/build/retrovision-${{ matrix.target }}-app.bin
+            firmware/${{ matrix.dir || matrix.target }}/build/${{ matrix.project || format('retrovision_{0}', matrix.target) }}.bin
+            firmware/${{ matrix.dir || matrix.target }}/build/${{ matrix.project || format('retrovision_{0}', matrix.target) }}.elf
+            firmware/${{ matrix.dir || matrix.target }}/build/bootloader/bootloader.bin
+            firmware/${{ matrix.dir || matrix.target }}/build/partition_table/partition-table.bin
+            firmware/${{ matrix.dir || matrix.target }}/build/flash_args
           if-no-files-found: error

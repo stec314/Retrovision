@@ -5,6 +5,7 @@
 | `esp32s3/` | ESP-IDF app for the **Seeed Studio XIAO ESP32-S3** (native USB link) |
 | `esp32/` | ESP-IDF app for **classic ESP32** boards: NodeMCU-32S, ESP32-DevKitC, WROOM-32 (UART link at 921600 baud via CP210x/CH340) |
 | `esp32c5/` | ESP-IDF app for the **Waveshare ESP32-C5** (dual-band Wi-Fi 6, RISC-V, native USB). Adds 5 GHz sniffing. Needs ESP-IDF v5.4+ |
+| `relay-esp32s3/` | **BLE relay** for a second XIAO ESP32-S3 wired to a probe's UART: carries the link so the probe keeps scanning Bluetooth. Not a probe (see below) |
 | `components/rv_probe/` | The probe firmware itself, shared by both boards |
 | `components/rv_core/` | Portable C core: framing, 802.11 parser, BLE helpers, dedup. Host-tested |
 | `components/rv_proto/` | nanopb code generated from `proto/`. **Do not edit**; run `tools/gen_proto.sh` |
@@ -29,6 +30,27 @@ CI (`.github/workflows/firmware.yml`) builds all boards on every push and publis
 - No on-die temperature sensor in ESP-IDF 5 for this chip: `chip_temp_c` stays 0.
 - Download mode only via the GPIO0 strap: the app uses the DTR/RTS auto-reset circuit; if that fails, hold BOOT, press EN/RST, release BOOT.
 - LED on GPIO2 (NodeMCU-32S).
+
+## BLE relay (relay-esp32s3)
+
+In BLE link mode a probe's only Bluetooth radio carries the link and cannot scan. The relay moves the link to a second board, so the probe (typically the dual-band C5) scans 2.4 + 5 GHz Wi-Fi **and** BLE while on a power bank.
+
+```
+ ESP32-C5 probe                    XIAO ESP32-S3 relay               phone
+ GPIO23 (TX) ───────────────────> D7 / GPIO44 (RX)
+ GPIO24 (RX) <─────────────────── D6 / GPIO43 (TX)      ))) BLE NUS (((   app
+ GND ──────────────────────────── GND
+ 5V (from power bank) ─────────── 5V
+```
+
+- 921600 baud 8N1, 3.3 V logic on both sides. Pins are Kconfig options (`RV_RELAY_UART_*` on the probe, `RV_RELAY_*` on the relay); classic ESP32 defaults to UART2 on GPIO17/16, ESP32-S3 probes to GPIO5/6.
+- Pair the probe on the cable with *Pair for a relay board* (stores the key and `LINK_KIND_RELAY`), or *Switch to a relay board* on an already paired probe (keeps name and key). The probe reboots, starts the second UART and keeps BLE scanning on.
+- The relay learns the probe's name from its `Hello`, stores it, and advertises `RV-<name>` with the same NUS service as a probe: the app finds it unchanged. It forwards whole frames and drops whole frames when BLE cannot keep up (the app counts them as lost). Every 60 s it adds a `Log` (tag `relay`) with phone RSSI, MTU, forwarded/dropped frames and seconds since the probe last spoke.
+- On BLE connect/disconnect the relay sends a UART break; the probe ends its session at once and restarts the handshake (no 2-minute silence timeout).
+- The relay never holds the pairing key: the HMAC challenge is end to end between probe and phone.
+- Console and logs of the relay go to its USB port; its UART0 pads carry the link. Its ROM prints a boot banner on GPIO43 at power-on: the probe discards it as a bad frame, and the relay's break right after resets the probe's link state.
+- LED (GPIO21): fast blink = no probe name yet (check the wires), slow blink = advertising, solid = phone connected.
+- Flash it from the web flasher's *Install relay firmware* button, or `cd firmware/relay-esp32s3 && idf.py set-target esp32s3 build flash`. Do not flash it with the app: the app picks the probe image by chip type.
 
 ## How it works
 

@@ -62,6 +62,8 @@ class ProbeInfo(
     val linkName: String = "",
     /** Firmware can carry the session over BLE. */
     val bleLinkCapable: Boolean = false,
+    /** Firmware can carry the session through a BLE relay board wired to its UART (keeps scanning BLE). */
+    val relayLinkCapable: Boolean = false,
 )
 
 /** Last CommandAck from the probe. */
@@ -92,6 +94,9 @@ data class SessionState(
     /** BLE-link self-report the probe sends over the cable ("st=adv rc=0 name=… heap=a/b/c"). */
     val bleReport: String = "",
     val bleReportMs: Long = 0,
+    /** Relay link: the relay board's own counters ("rssi=-61 mtu=247 fwd=… drop=… probe=0s …"). */
+    val relayReport: String = "",
+    val relayReportMs: Long = 0,
 )
 
 /**
@@ -232,6 +237,7 @@ class ProbeSession(
             }
             Envelope.PayloadCase.LOG -> update {
                 if (env.log.tag == "blelink") it.copy(bleReport = env.log.text, bleReportMs = System.currentTimeMillis())
+                else if (env.log.tag == "relay") it.copy(relayReport = env.log.text, relayReportMs = System.currentTimeMillis())
                 else it.copy(lastLog = "${env.log.tag}: ${env.log.text}")
             }
             Envelope.PayloadCase.TIME_SYNC_RESPONSE -> env.timeSyncResponse.let {
@@ -289,8 +295,9 @@ class ProbeSession(
         }
         bootId = h.bootId
         probeId = h.hardwareId.toByteArray().joinToString("") { "%02x".format(it) }
-        // A wireless probe challenges us: prove we hold the pairing key, or it streams nothing.
-        if (h.link == LinkKind.LINK_KIND_BLE) {
+        // A wireless probe challenges us: prove we hold the pairing key, or it streams nothing. Through
+        // a relay the challenge still comes from the probe itself: the relay never holds the key.
+        if (h.link == LinkKind.LINK_KIND_BLE || h.link == LinkKind.LINK_KIND_RELAY) {
             val key = pairingKey(h.name)
             if (key == null || h.authNonce.size() != 16) {
                 update { it.copy(phase = Phase.REJECTED, rejectReason = "This phone has no pairing key for this probe: pair again with the cable") }
@@ -321,6 +328,7 @@ class ProbeSession(
                     "${h.protocolMajor}.${h.protocolMinor}",
                     link = h.link, configuredLink = h.configuredLink, linkName = h.name,
                     bleLinkCapable = h.capabilitiesList.contains(Capability.CAPABILITY_LINK_BLE),
+                    relayLinkCapable = h.capabilitiesList.contains(Capability.CAPABILITY_LINK_RELAY),
                 ),
             )
         }
@@ -506,7 +514,7 @@ class ProbeSession(
 
     companion object {
         const val PROTOCOL_MAJOR = 1
-        const val PROTOCOL_MINOR = 2
+        const val PROTOCOL_MINOR = 3
         private const val KICK_EVERY_MS = 12_000L
         private const val DEAD_AFTER_MS = 45_000L
     }

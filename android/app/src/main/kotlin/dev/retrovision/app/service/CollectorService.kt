@@ -288,7 +288,7 @@ class CollectorService : Service() {
         var probeGoneSince = 0L
         while (scope.isActive) {
             // A probe on a BLE link does not scan Bluetooth (its radio carries the link): only a probe
-            // that does lets the phone's own scanner rest.
+            // that does lets the phone's own scanner rest. A probe behind a relay board does scan.
             val streaming = Collector.allSessions().any {
                 val st = it.state.value
                 st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
@@ -620,6 +620,7 @@ class CollectorService : Service() {
             val started = System.currentTimeMillis()
             var phase: dev.retrovision.app.probe.Phase? = null
             var lastReport = ""
+            var lastRelayReport = ""
             var n = 0
             // Data flow, for Status: last observation and the rate over the last minute.
             var lastTotal = -1L
@@ -643,6 +644,10 @@ class CollectorService : Service() {
                 if (st.bleReport != lastReport && st.bleReport.isNotEmpty()) {
                     lastReport = st.bleReport
                     Diag.i("ble", "$pairName: probe says ${st.bleReport}")
+                }
+                if (st.relayReport != lastRelayReport && st.relayReport.isNotEmpty()) {
+                    lastRelayReport = st.relayReport
+                    Diag.i("ble", "$pairName: relay says ${st.relayReport}")
                 }
                 if (st.phase != phase) {
                     phase = st.phase

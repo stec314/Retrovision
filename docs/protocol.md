@@ -22,6 +22,8 @@ v1 targets **USB CDC-ACM**: ESP32-S3 native USB (VID `0x303A`) connected to the 
 
 The byte stream is full-duplex, and each direction carries a sequence of frames.
 
+The same frames also travel over a BLE GATT link (1.2, Nordic UART Service layout) and, from 1.3, over a **relay**: a second board (XIAO ESP32-S3, `firmware/relay-esp32s3`) wired to a UART of the probe (921600 8N1, probe GPIO23 TX / GPIO24 RX on the C5) that forwards whole frames between that UART and the same NUS GATT service. The relay reads the probe's `Hello` only to learn its name and advertise as `RV-<name>`; it is otherwise transparent. It signals "phone connected / phone left" to the probe with a UART **break** (out of band), on which the probe drops its session and goes back to `Hello`. It may insert its own `Log` frames (tag `relay`, `seq` 0) with link counters.
+
 ## 3. Framing
 
 ```
@@ -159,6 +161,8 @@ Because the BLE key includes the payload, a tracker that rotates its payload but
 |---|---|---|
 | 1.0 | Initial protocol | — |
 | 1.1 | `WifiFrame.tsf_us` (field 10): beacon / probe-response timestamp, the AP's uptime | Additive. A 1.0 probe never sends it (reads as 0 = absent); a 1.0 host ignores it |
+| 1.2 | BLE GATT link: `Hello.link/auth_nonce/name/configured_link`, `HelloAck.auth_mac`, `SetLink`, `Status.link/link_rssi` | Additive |
+| 1.3 | `LINK_KIND_RELAY` (4) and `CAPABILITY_LINK_RELAY` (32): BLE through a UART-wired relay board; the probe keeps scanning BLE | Additive. A 1.2 host sees an unknown link kind and does not answer the challenge, so the probe streams nothing to it |
 
 The experimental branch `wip/wireless-links` once used "1.1" for its own additions. That branch is not part of the mainline; if any of it is ever revived, it must take the next free minor (1.2 or later), never 1.1.
 
@@ -166,6 +170,7 @@ The experimental branch `wip/wireless-links` once used "1.1" for its own additio
 
 - **USB (v1)**: physical access equals trust. There is no authentication, and that is deliberate.
 - **Wireless transports**: a BLE GATT link shipped in protocol 1.2. It is wrapped in an authenticated, encrypted channel: LE Secure Connections bonding for confidentiality, plus an HMAC-SHA256 challenge (`Hello.auth_nonce` / `HelloAck.auth_mac`) keyed by a pairing key set over USB (`SetLink`, USB-only). The probe streams nothing until the host answers the challenge, so a nearby attacker cannot spoof observations or reconfigure the probe. A Wi-Fi/TCP transport remains reserved (`LINK_KIND_WIFI`) but is not implemented.
+- **Relay (1.3)**: the challenge comes from the probe and is answered by the phone through the relay, so the relay never holds the pairing key and cannot make the probe stream to anyone else. What it can do is what any wire can: drop, delay or reorder frames, and inject frames toward the phone. The phone does not authenticate the probe's data today (on the BLE link either): the HMAC proves the phone to the probe, not the other way round. A host-side check of the probe (a MAC over the stream, or the probe answering a host nonce) is the missing half.
 - The probe is receive-only by default. Only an explicit `BleConfig.active_scan` makes it transmit anything other than its USB traffic.
 - Observations contain third-party identifiers (MAC addresses, SSIDs). The host should store them encrypted at rest and apply a retention period (see the app design).
 
