@@ -40,6 +40,16 @@ data class AnalysisConfig(
     /** A place you are at all the time counts this much, relative to an unfamiliar one. */
     val familiarWeight: Double = 0.3,
     /**
+     * Count places as your STOPS (≥ [Route.Config.minStopMs]) where the device was heard, plus one
+     * place per distinct [movingMinutesPerPlace]-minute period in which it was heard while you were
+     * on the move (a follower on foot or behind you on the motorway keeps adding periods). Driving
+     * crosses a 100 m place every few seconds, so counting those let any car next to you for four
+     * minutes reach six "places" (field data: 82% of alerts were devices heard < 20 min, almost all
+     * on the road). Off = the old geometric count.
+     */
+    val stopBasedPlaces: Boolean = true,
+    val movingMinutesPerPlace: Int = 10,
+    /**
      * Retrospective mode. When set, the "presence" sub-score counts the number of DISTINCT
      * time buckets of this size in which the entity reappeared (recurrence across the span),
      * instead of the recency windows anchored to "now". Use for offline review of saved data.
@@ -605,6 +615,10 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                     hints.add(info)
                     if (companyId == null) companyId = info.manufacturerId
                     facts.tracker?.let { m ->
+                        // Apple Find My near its owner uses a random static address that changes
+                        // about every 15 min: it rotates like any private address (field data:
+                        // iPhones in the same car scored as followers in 12-minute pieces).
+                        if (b.addressKind == BleAddressKind.RANDOM_STATIC && m.separated != true && m.kind.vendor == "Apple") lower(MacTrust.ROTATING)
                         if (tracker == null || TrackerClassifier.isTag(m.kind)) tracker = m.kind
                         if (m.separated == true) separated = true
                         else if (m.separated == false && separated == null) separated = false
@@ -644,7 +658,11 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         val nFamiliar = places.count { it in familiarIds }
         val nUnfamiliar = nPlaces - nFamiliar
         // Familiar places still count (a stalker knows where you live) but for less.
-        val effPlaces = nUnfamiliar + config.familiarWeight * nFamiliar
+        val effPlaces = if (config.stopBasedPlaces) {
+            stopPlaces(list, route, familiarIds, timeline, placeOfFix)
+        } else {
+            nUnfamiliar + config.familiarWeight * nFamiliar
+        }
         val sPlaces = ((effPlaces - 1) / 3.0).coerceIn(0.0, 1.0)
         val sWindows = if (config.periodBucketMs != null) {
             (windows.size.toDouble() / config.periodBucketTarget).coerceIn(0.0, 1.0)
@@ -916,6 +934,43 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         reports.sortWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
     }
 
+    /**
+     * Effective places from your stops: each stop where it was heard (≥ 2 sightings within it)
+     * counts 1, or [AnalysisConfig.familiarWeight] at a routine place; while you moved between
+     * stops, each distinct [AnalysisConfig.movingMinutesPerPlace]-minute period it was heard in adds 1.
+     */
+    private fun stopPlaces(list: List<EntitySighting>, route: RouteContext, familiarIds: Set<Int>, timeline: FixTimeline, placeOfFix: Map<GeoFix, Place>): Double {
+        var eff = 0.0
+        val inStop = BooleanArray(list.size)
+        // Stops where it was heard, grouped into sites: indoor GPS drift splits one stay into
+        // several stops a few dozen metres apart, which must not count as separate places.
+        val sites = ArrayList<Triple<Double, Double, Double>>() // lat, lon, weight
+        for (st in route.stops) {
+            var n = 0
+            for (i in list.indices) {
+                val t = list[i].sighting.timeMs
+                if (t in st.arriveMs..st.leaveMs) { n++; inStop[i] = true }
+            }
+            if (n < 2) continue
+            val w = if (st.placeId in familiarIds) config.familiarWeight else 1.0
+            val k = sites.indexOfFirst { Geo.distanceM(it.first, it.second, st.lat, st.lon) <= SAME_SITE_M }
+            if (k < 0) sites += Triple(st.lat, st.lon, w) else if (w > sites[k].third) sites[k] = Triple(sites[k].first, sites[k].second, w)
+        }
+        for (s in sites) eff += s.third
+        // Moving periods: a period spent only inside routine places counts for less, like a stop there.
+        val period = config.movingMinutesPerPlace * 60_000L
+        val movingPeriods = HashMap<Long, Boolean>() // period -> heard somewhere unfamiliar
+        for (i in list.indices) {
+            if (inStop[i]) continue
+            val t = list[i].sighting.timeMs
+            val fix = timeline.nearest(t) ?: continue
+            val unfamiliar = placeOfFix[fix]?.id?.let { it !in familiarIds } ?: true
+            movingPeriods[t / period] = (movingPeriods[t / period] ?: false) || unfamiliar
+        }
+        for (u in movingPeriods.values) eff += if (u) 1.0 else config.familiarWeight
+        return eff
+    }
+
     class RouteContext(
         val stops: List<Route.Stop>,
         val turns: List<Route.Turn>,
@@ -1020,6 +1075,8 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
     }
 
     private companion object {
+        /** Stops closer than this are one site for [AnalysisConfig.stopBasedPlaces]. */
+        const val SAME_SITE_M = 300.0
         const val COMOVE_GAP_MS = 90_000L
         const val COMOVE_MIN_M = 400.0
         const val COMOVE_MAX_STD = 7.5

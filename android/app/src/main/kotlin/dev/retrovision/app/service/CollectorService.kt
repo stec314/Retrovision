@@ -998,7 +998,9 @@ class CollectorService : Service() {
         val recent = synchronized(recentRaw) { recentRaw.toList() }.filter { now - it.timeMs <= RECENT_RAW_MS }
         val recentWifi = recent.filter { it.radio == dev.retrovision.core.model.Radio.WIFI && now - it.timeMs <= 3 * 60_000L }
         val recentBle = recent.filter { it.radio == dev.retrovision.core.model.Radio.BLE && now - it.timeMs <= 60_000L }
-        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
+        // Your confirmed access points are never the twin (a dual-band router has two BSSIDs).
+        val trustedBssids = prefs.trustedAps.mapNotNull { e -> runCatching { dev.retrovision.core.model.MacAddress.parse(e.substringAfter('|')) }.getOrNull() }.toSet()
+        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet(), trustedBssids = trustedBssids) +
             dev.retrovision.core.analysis.WifiThreats.detectBle(recentBle)
         Collector.threats.value = threats
 

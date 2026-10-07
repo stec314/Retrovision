@@ -97,8 +97,9 @@ object WifiThreats {
     /**
      * @param wifi recent Wi-Fi sightings (the caller passes a short window, e.g. the last 2–5 min).
      * @param ownSsids the user's own network names (so a clone of one is a strong signal).
+     * @param trustedBssids access points you confirmed for your networks: never counted as twins.
      */
-    fun detect(wifi: List<Sighting>, ownSsids: Set<String>, cfg: Config = Config()): List<Threat> {
+    fun detect(wifi: List<Sighting>, ownSsids: Set<String>, cfg: Config = Config(), trustedBssids: Set<MacAddress> = emptySet()): List<Threat> {
         val out = ArrayList<Threat>()
 
         // ---- DEAUTH / DISASSOC flood: judged by concentration on one targeted network ----
@@ -141,24 +142,40 @@ object WifiThreats {
         }
 
         // ---- Evil twin of one of your own networks ----
+        // Matched on the normalised name too: beacon-spam tools clone a network with trailing
+        // spaces or invisible characters, which phones display as the same name (field data: 25
+        // padded copies of the user's SSID from 144 random BSSIDs in one minute).
         if (ownSsids.isNotEmpty()) {
-            val aps = wifi.filter {
-                val w = it.wifi ?: return@filter false
-                (w.kind == WifiKind.BEACON || w.kind == WifiKind.PROBE_RESP) && w.ssidText in ownSsids
+            val byNorm = ownSsids.associateBy { normaliseSsid(it) }
+            val aps = wifi.mapNotNull { s ->
+                val w = s.wifi ?: return@mapNotNull null
+                if (w.kind != WifiKind.BEACON && w.kind != WifiKind.PROBE_RESP) return@mapNotNull null
+                val own = if (w.ssidText in ownSsids) w.ssidText else byNorm[normaliseSsid(w.ssidText)] ?: return@mapNotNull null
+                own to s
             }
-            aps.groupBy { it.wifi!!.ssidText }.forEach { (ssid, list) ->
-                val bssids = list.mapNotNull { it.wifi?.bssid ?: it.address.takeIf { _ -> it.wifi?.bssid == null } }
-                    .ifEmpty { list.map { it.address } }
-                    .distinct()
-                if (bssids.size >= 2) {
+            aps.groupBy({ it.first }, { it.second }).forEach { (ssid, list) ->
+                val bssids = list.map { it.wifi?.bssid ?: it.address }.distinct()
+                // Your own access points for this name (confirmed in Settings) are never the twin.
+                val untrusted = bssids.filter { it !in trustedBssids }
+                val lookalikes = list.mapNotNull { it.wifi?.ssidText }.filter { it != ssid }.distinct()
+                val trustedKnown = bssids.any { it in trustedBssids }
+                val fire = when {
+                    lookalikes.isNotEmpty() -> true
+                    trustedBssids.isEmpty() -> bssids.size >= 2 // nothing confirmed yet: the old rule
+                    else -> untrusted.isNotEmpty() && (trustedKnown || untrusted.size >= 2)
+                }
+                if (fire) {
                     out += Threat(
                         Kind.EVIL_TWIN_OWN,
                         severity = 1.0,
                         count = list.sumOf { maxOf(1, it.mergedCount) },
                         ssid = ssid,
-                        bssids = bssids,
+                        bssids = untrusted.ifEmpty { bssids },
                         firstMs = list.minOf { it.timeMs },
                         lastMs = list.maxOf { it.timeMs },
+                        ssids = lookalikes.take(5).map { "“$it”" },
+                        rssi = median(list.map { it.rssi }),
+                        channel = list.mapNotNull { it.wifi?.channel }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key ?: 0,
                     )
                 }
             }
@@ -167,6 +184,11 @@ object WifiThreats {
         beaconFlood(wifi, cfg)?.let { out += it }
         return out.sortedByDescending { it.severity }
     }
+
+    /** How a phone shows a network name: surrounding spaces, invisible characters and case don't count. */
+    fun normaliseSsid(s: String): String =
+        s.filterNot { it == '\u200B' || it == '\u200C' || it == '\u200D' || it == '\uFEFF' || it == '\u00A0' || it.isISOControl() }
+            .trim().lowercase()
 
     private fun median(v: List<Int>): Int {
         val x = v.filter { it != 0 }.sorted()

@@ -62,4 +62,35 @@ class WifiThreatsTest {
         val frames = listOf(w(WifiKind.BEACON, 0xDD1L, "CasaMia", bssid = 0xDD1L))
         assertTrue(WifiThreats.detect(frames, setOf("CasaMia")).isEmpty())
     }
+
+    // ---- Evil twin: confirmed access points, and padded look-alike names ----
+    private fun mac(v: Long) = dev.retrovision.core.model.MacAddress(v)
+
+    @Test fun dualBandRouterYouConfirmedIsNotATwin() {
+        // Field case: one router, 2.4 and 5 GHz, both confirmed: flagged on every run before.
+        val frames = listOf(w(WifiKind.BEACON, 0x141459549ccL, "Home", 0x141459549ccL), w(WifiKind.BEACON, 0x141459549cdL, "Home", 0x141459549cdL))
+        val t = WifiThreats.detect(frames, setOf("Home"), trustedBssids = setOf(mac(0x141459549ccL), mac(0x141459549cdL)))
+        assertTrue(t.none { it.kind == WifiThreats.Kind.EVIL_TWIN_OWN })
+    }
+
+    @Test fun unconfirmedAccessPointNextToYoursIsATwin() {
+        val frames = listOf(w(WifiKind.BEACON, 0x141459549ccL, "Home", 0x141459549ccL), w(WifiKind.BEACON, 0x02AABBCCDDEEL, "Home", 0x02AABBCCDDEEL))
+        val t = WifiThreats.detect(frames, setOf("Home"), trustedBssids = setOf(mac(0x141459549ccL)))
+        val twin = t.single { it.kind == WifiThreats.Kind.EVIL_TWIN_OWN }
+        assertEquals(listOf(mac(0x02AABBCCDDEEL)), twin.bssids)
+    }
+
+    @Test fun paddedCopiesOfYourNetworkAreCaught() {
+        // Field case: "SecRip", "SecRip  ", "SecRip       " from random BSSIDs (beacon spam cloning).
+        val frames = listOf("Home  ", "Home       ", "Home\u200B").mapIndexed { i, s -> w(WifiKind.BEACON, 0x020000000010L + i, s, 0x020000000010L + i) }
+        val t = WifiThreats.detect(frames, setOf("Home"), trustedBssids = setOf(mac(0x141459549ccL)))
+        val twin = t.single { it.kind == WifiThreats.Kind.EVIL_TWIN_OWN }
+        assertEquals("Home", twin.ssid)
+        assertEquals(3, twin.bssids.size)
+        assertEquals(3, twin.ssids.size)
+    }
+
+    @Test fun normalisedNamesIgnoreSpacesInvisiblesAndCase() {
+        assertEquals("secrip", WifiThreats.normaliseSsid(" SecRip \u200B  "))
+    }
 }

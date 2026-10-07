@@ -90,6 +90,8 @@ The probe and app speak the Retrovision wire protocol v1 (see [protocol.md](prot
 
 **Time sync.** The app sends 8 time-sync requests 60 ms apart (a "burst"), right after the handshake and every 30 s after that. From each round trip, offset ≈ (t1 + t3)/2 − t2, with error ≤ RTT/2. Within a burst only the fastest round trip is kept. Across bursts a line `wall = a·probe + b` is fitted, which absorbs crystal drift (±20 ppm ≈ 72 ms per hour). Observations that arrive before the clock is synced are dropped and counted ("dropped (no clock)"), never stamped with a guess.
 
+**The phone's own clock keeps counting in sleep.** The host side of the sync uses Android's elapsed real time, which keeps running while the phone sleeps. Before this fix it used a monotonic clock that stops in deep sleep, so every probe sighting was stamped as early as the phone had slept since the app started, and matched to where you were back then. In field data that was 35–37 minutes on one evening and over 10 minutes for 23% of probe sightings: routers at a place you drove to looked as if they had been at home and then "followed" you 3.7 km. The beacon uptime (TSF) of the access points you pass is a free reference for this: the app's sync can be checked against it.
+
 **Status.** Every 10 s the probe reports free memory, chip temperature, the current channel and frames it had to drop (its queue was full). These numbers fill the probe card on the Status screen.
 
 **Link watchdog (recovery without unplugging).** The probe can get stuck without the cable ever leaving:
@@ -185,7 +187,7 @@ Field data (one day, ~9,800 BLE addresses): a phone advertising its name took a 
 
 **MAC trust.** Each entity shows how much its address can be trusted over time:
 - **Stable**: a vendor or public address. Same device, every time.
-- **Until reboot**: a BLE random static address.
+- **Until reboot**: a BLE random static address. Exception: Apple's Find My frame near its owner uses a random static address that changes about every 15 minutes, so those count as rotating (iPhones in your car are not followers because they stayed for one leg of the trip).
 - **Rotating**: a randomised address. The entity may be a fragment of a device, and the same device may appear as several entities.
 
 ## Device categories, trackers and moving access points
@@ -216,6 +218,7 @@ Each entity heard within the analysis window gets a score from 0 to 1 and a list
 ### Inputs
 
 - **Places.** Your GPS fixes are grouped into places by leader clustering with a 100 m radius: the first fix starts a place, and any later fix within 100 m of it belongs to it. Each sighting is matched to your nearest fix in time (gaps up to 60 s), and so to a place.
+- **Effective places (what the score and the alert rule count).** Driving crosses a 100 m place every few seconds, so counting those let any car next to you for four minutes reach six "places" (field data: 82% of alerts were devices heard for under 20 minutes, almost all on the road). The score counts instead: each **site where you stopped** (a stop of ≥ 5 minutes; stops within **300 m** of each other are one site, because indoor GPS drift splits one stay into several) where the device was heard, plus one for each **10-minute period** in which it was heard while you were on the move. A follower on foot or behind you on the motorway keeps adding periods; a car alongside for a few minutes adds one or two. Routine places, and moving periods spent only inside them, count 0.3.
 - **Windows** (live mode). Following Chasing Your Tail, the last 20 minutes are split into four windows: 0–5, 5–10, 10–15 and 15–20 minutes ago. The window sub-score is the share of these in which the entity was heard.
 - **Span.** Time between the first and last sighting.
 - **Travel.** The largest distance between any two of the places where the entity was heard.
@@ -224,7 +227,7 @@ Each entity heard within the analysis window gets a score from 0 to 1 and a list
 ### Formula
 
 ```
-effPlaces = unfamiliarPlaces + 0.3 × familiarPlaces
+effPlaces = sites stopped at (routine ones × 0.3) + 10-min periods heard while moving
 
 places  = clamp((effPlaces − 1) / 3)            # 1 place → 0, 4+ → 1
 windows = windowsPresent / 4                    # live mode
@@ -322,7 +325,7 @@ Being "often near you" does not separate a follower from someone who simply take
   - Your own phone does this too. **Settings → Identify my phone**: with the probe close, the phone runs a Wi-Fi scan and the loudest probe requests are saved as your phone's fingerprint, then ignored for this signal. Phones of the same model share the fingerprint, so theirs are ignored too.
   - Modern phones ask by name mostly for **hidden** networks, so this fires rarely. When it does, it is meaningful.
 - **Rotating addresses linked by rare networks.** If two randomised addresses both ask for **≥ 2** networks that at most **3** devices in the window ask for, and their lists overlap by at least half, they are merged into one entity. Common names (eduroam, airport and chain hotspots) never link anything, and neither do names that are only your own networks (your household shares those).
-- **One access point, new name.** Every beacon carries the AP's uptime (TSF timer). *Reception time − uptime* is the moment it booted, constant until it reboots. When one AP goes silent and another appears within **30 min** with the same boot moment (**± 2 s**), it is the same radio renamed or with a new address: typically a phone hotspot or car Wi-Fi. Radios serving several names *at the same time* are not merged. This needs probe firmware from this build or newer (protocol 1.1).
+- **One access point, new name.** Every beacon carries the AP's uptime (TSF timer). *Reception time − uptime* is the moment it booted, constant until it reboots. When one AP goes silent and another appears within **30 min** with the same boot moment (**± 2 s**), it is the same radio renamed or with a new address: typically a phone hotspot or car Wi-Fi. Radios serving several names *at the same time* are not merged. Nothing is linked when **3 or more different radios booted within 60 s** of each other (a neighbourhood power cut restarts every router within seconds: in field data dozens of routers of four providers chained into one "renamed AP"; a beacon-spam tool does the same from one radio), or when more than one AP could have taken over. This needs probe firmware from this build or newer (protocol 1.1).
 - **Groups.** Devices seen at **≥ 3** places, sharing **≥ 75%** of their places and **≥ 40%** of their 5-minute time slots, form a group: a phone, watch, earbuds and car moving as one person or vehicle. A group survives one member rotating its address. **+0.05** each.
 
 ## Your phone's own sensors
@@ -427,7 +430,7 @@ Every analysis cycle checks the **last 3 minutes** of Wi-Fi management frames an
 |---|---|---|
 | **Deauth / disassoc flood** | ≥ **40** deauth+disassoc frames aimed at **one** BSSID within 3 min. Severity grows to 400 | Normal networks send a few deauths, spread across many BSSIDs (roaming, idle timeouts). An attack hammers one target. An earlier rule ("≥ 12 in total") fired on ordinary city traffic |
 | **Karma / MANA access point** | One AP answers probe responses for **≥ 5 different SSIDs** (severity saturates at 15) | A real AP has one name. A Karma AP says "yes" to every network your phone asks for, to lure it in |
-| **Evil twin of your network** | One of **your own SSIDs** (Settings → My networks) advertised from **≥ 2 BSSIDs** | Your home network should have one known AP. Add every BSSID of a mesh by listing it, or expect this to fire |
+| **Evil twin of your network** | One of **your own SSIDs** advertised from an access point you have **not confirmed** (Settings → your network's access points), or by **≥ 2 BSSIDs** while none is confirmed yet. Also a **look-alike name**: the same name with extra spaces, invisible characters or another case, which phones display the same | Confirmed access points (a dual-band router has two BSSIDs) are never the twin: before, a dual-band router alerted on every run. Beacon-spam tools clone a network with padded names (field data: 25 padded copies of the user's SSID from 144 random BSSIDs in one minute), which the exact-name rule missed |
 | **Beacon flood** (mdk4, ESP32 Marauder / Deauther "beacon spam") | **≥ 25** networks first heard within the last minute, on **one channel**, with ≥ 12 different names, a signal spread (std dev) **≤ 6 dB**, and all of: median signal **≥ −80 dBm** (the transmitter is near you); **≥ 60 %** of them with the **same beacon template** (the information elements and their sizes, without name, channel and TIM: one tool sends one template); and either **many radios** (BSSIDs with different middle bytes for ≥ 60 % of them: random fake addresses) or **≥ 20 counted up from one base address** (more names than any real router serves). Needs ≥ 2 min of history first | Walking into range of city and shop Wi-Fi brings many new networks at once, all equally **weak** at the edge of reception, from a few multi-SSID routers. That fooled the first version in a field test (Ferrara old town). The signal, template and radio checks were added for it |
 | **BLE spam** (Flipper Zero / ESP32 "pop-up" attacks) | **≥ 25** random addresses within 1 min, each alive **≤ 10 s**, sending pairing pop-up adverts (Apple Proximity Pairing / Nearby Action, Google Fast Pair, Microsoft Swift Pair, Samsung EasySetup), with a signal spread **≤ 6 dB** | Real earbuds keep an address for minutes, and a crowd's signals spread widely. A spammer cycles a new address every advert from one spot |
 

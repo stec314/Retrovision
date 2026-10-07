@@ -513,7 +513,26 @@ class ProbeSession(
 }
 
 /** Microsecond wall clock with sub-millisecond resolution, monotonic between NTP steps. */
+/**
+ * Host wall clock in µs, monotonic between corrections. It must keep counting while the phone
+ * sleeps: System.nanoTime() (CLOCK_MONOTONIC) stops in deep sleep, so a clock built on it fell
+ * behind by every minute the phone had slept, and every probe sighting was stamped that much too
+ * early and matched to where you were back then (field data: 35-37 min late on one evening, 23% of
+ * probe sightings off by more than 10 min, fixed routers "following" you 3.7 km). elapsedRealtime
+ * counts sleep. If the system clock is corrected (network time, time zone travel) by more than 2 s,
+ * the base follows it.
+ */
 object WallClock {
-    private val baseUs: Long = System.currentTimeMillis() * 1000 - System.nanoTime() / 1000
-    fun nowUs(): Long = baseUs + System.nanoTime() / 1000
+    @Volatile private var baseUs: Long = System.currentTimeMillis() * 1000 - android.os.SystemClock.elapsedRealtimeNanos() / 1000
+
+    fun nowUs(): Long {
+        val elapsed = android.os.SystemClock.elapsedRealtimeNanos() / 1000
+        val t = baseUs + elapsed
+        val wall = System.currentTimeMillis() * 1000
+        if (kotlin.math.abs(t - wall) > 2_000_000L) {
+            baseUs = wall - elapsed
+            return wall
+        }
+        return t
+    }
 }
