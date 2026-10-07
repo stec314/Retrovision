@@ -75,25 +75,25 @@ static void rx_task(void *arg)
     }
 }
 
-static bool uart_write(const uint8_t *data, size_t len, TickType_t timeout)
+static bool relay_write(const uint8_t *data, size_t len, TickType_t timeout)
 {
     (void)timeout;
     return uart_write_bytes(RV_RELAY_UART, data, len) == (int)len;
 }
 
-static bool uart_connected(void)
+static bool relay_connected(void)
 {
     // The host time-syncs every 30 s; the relay drops a silent phone after 90 s and breaks.
     const int64_t last = s_last_rx_us;
     return last != 0 && esp_timer_get_time() - last < 100LL * 1000 * 1000;
 }
 
-static void uart_flush(TickType_t timeout)
+static void relay_flush(TickType_t timeout)
 {
     uart_wait_tx_done(RV_RELAY_UART, timeout);
 }
 
-static const rv_transport_ops_t s_ops = {uart_write, uart_connected, uart_flush};
+static const rv_transport_ops_t s_ops = {relay_write, relay_connected, relay_flush};
 
 uint32_t rv_link_uart_breaks(void)
 {
