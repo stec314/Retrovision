@@ -1,0 +1,27 @@
+menu "Retrovision relay"
+
+    config RV_RELAY_TX_GPIO
+        int "Relay TX pin (to the probe's RX)"
+        default 43
+        help
+            XIAO ESP32-S3: GPIO43 is the pad labelled D6/TX.
+
+    config RV_RELAY_RX_GPIO
+        int "Relay RX pin (from the probe's TX)"
+        default 44
+        help
+            XIAO ESP32-S3: GPIO44 is the pad labelled D7/RX.
+
+    config RV_RELAY_BAUD
+        int "UART baud rate (must match the probe)"
+        default 921600
+
+    config RV_RELAY_LED_GPIO
+        int "Status LED GPIO (-1 = none)"
+        default 21
+
+    config RV_RELAY_LED_ACTIVE_LOW
+        bool "Status LED is active low"
+        default y
+
+endmenu

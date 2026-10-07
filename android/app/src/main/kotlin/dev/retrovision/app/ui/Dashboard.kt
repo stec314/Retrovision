@@ -12,6 +12,7 @@ enum class Widget(val id: String, private val en: String, private val itText: St
     OVERVIEW("overview", "Overview", "Panoramica"),
     RADAR("radar", "Radar", "Radar"),
     SENSORS("sensors", "Sensors", "Sensori"),
+    PROBES("probes", "Bluetooth probes", "Sonde Bluetooth"),
     ROUTE("route", "Route check", "Verifica percorso"),
     DRONES("drones", "Drones", "Droni"),
     COMPANIONS("companions", "Is this yours?", "È tuo?"),
@@ -38,7 +39,7 @@ object Dashboard {
         companion object {
             val DEFAULT = Layout(
                 listOf(
-                    Widget.VERDICT, Widget.CONTROLS, Widget.ATTACKS, Widget.OVERVIEW, Widget.RADAR, Widget.SENSORS,
+                    Widget.VERDICT, Widget.CONTROLS, Widget.PROBES, Widget.ATTACKS, Widget.OVERVIEW, Widget.RADAR, Widget.SENSORS,
                     Widget.ROUTE, Widget.DRONES, Widget.COMPANIONS, Widget.CLIENTS, Widget.REVIEW,
                 ),
                 emptySet(),
@@ -49,8 +50,15 @@ object Dashboard {
     fun load(p: Prefs): Layout {
         val saved = p.dashboardOrder.split(',').mapNotNull { id -> Widget.entries.firstOrNull { it.id == id } }
         if (saved.isEmpty()) return Layout.DEFAULT
-        // Widgets added in a later version go at the end, visible.
-        val order = saved.distinct() + Widget.entries.filter { it !in saved }
+        // Widgets added in a later version go where the default layout has them (after the widget
+        // that precedes them there), visible; at the end if that one is not in the saved layout.
+        val order = saved.distinct().toMutableList()
+        for (w in Layout.DEFAULT.order) {
+            if (w in order) continue
+            val before = Layout.DEFAULT.order.takeWhile { it != w }.lastOrNull { it in order }
+            if (before == null) order.add(0, w) else order.add(order.indexOf(before) + 1, w)
+        }
+        Widget.entries.filter { it !in order }.forEach { order += it }
         val hidden = p.dashboardHidden.mapNotNull { id -> Widget.entries.firstOrNull { it.id == id } }.toSet()
         return Layout(order, hidden)
     }

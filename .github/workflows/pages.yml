@@ -37,14 +37,17 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p site/firmware
-          cp web/index.html web/manifest.json site/
+          cp web/index.html web/manifest.json web/manifest-relay.json site/
           for t in esp32s3 esp32 esp32c5; do
             f=$(find site-fw -name "retrovision-$t-merged.bin" | head -1)
             [ -n "$f" ] || { echo "::error::merged $t image not found"; exit 1; }
             cp "$f" site/firmware/
           done
+          # The BLE relay image is optional: a missing one only hides that button's firmware.
+          f=$(find site-fw -name "retrovision-esp32s3-relay-merged.bin" | head -1)
+          if [ -n "$f" ]; then cp "$f" site/firmware/; else echo "::warning::relay image not found"; fi
           sha=$(git rev-parse --short HEAD)
-          sed -i "s/\"version\": \"dev\"/\"version\": \"$sha\"/" site/manifest.json
+          sed -i "s/\"version\": \"dev\"/\"version\": \"$sha\"/" site/manifest.json site/manifest-relay.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

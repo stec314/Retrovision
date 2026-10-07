@@ -148,6 +148,11 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("mutedTypes", emptySet()) ?: emptySet()
         set(v) = p.edit().putStringSet("mutedTypes", v).apply()
 
+    /** Wireless probes paused from Status (by pairing name): not connected until resumed. */
+    var blePaused: Set<String>
+        get() = p.getStringSet("blePaused", emptySet())?.toSet() ?: emptySet()
+        set(v) = p.edit().putStringSet("blePaused", v).apply()
+
     /** Split the Wi-Fi channels between probes when several stream at once. */
     var splitChannels: Boolean
         get() = p.getBoolean("splitChannels", true)
@@ -185,6 +190,11 @@ class Prefs(ctx: Context) {
     var channelPlan: Int
         get() = p.getInt("channelPlan", 0)
         set(v) = p.edit().putInt("channelPlan", v).apply()
+
+    /** True once the inflated day counts from before the day-count fix were reset (one time). */
+    var dayCountFixed: Boolean
+        get() = p.getBoolean("dayCountFixed", false)
+        set(v) = p.edit().putBoolean("dayCountFixed", v).apply()
 
     /** Local day the routine-place baseline started (0 = not yet). */
     var baselineStartDay: Long

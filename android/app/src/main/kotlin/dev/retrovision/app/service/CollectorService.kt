@@ -127,6 +127,7 @@ class CollectorService : Service() {
         scope.launch { probeWatchLoop() }
         scope.launch { phoneLoop() }
         Collector.reconfigureAll = ::reconfigureAll
+        Collector.blePaused.value = prefs.blePaused
         scope.launch { bleConnectionLoop() }
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             while (isActive) {
@@ -287,7 +288,7 @@ class CollectorService : Service() {
         var probeGoneSince = 0L
         while (scope.isActive) {
             // A probe on a BLE link does not scan Bluetooth (its radio carries the link): only a probe
-            // that does lets the phone's own scanner rest.
+            // that does lets the phone's own scanner rest. A probe behind a relay board does scan.
             val streaming = Collector.allSessions().any {
                 val st = it.state.value
                 st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
@@ -503,11 +504,16 @@ class CollectorService : Service() {
                     System.currentTimeMillis() - Collector.usbSinceMs < 8_000L) { bleWait(1000); continue }
                 val onCable = if (Collector.usbConnected) usbProbeName() else ""
                 names.forEach { n -> if (n == onCable) bleUi(n) { it.copy(stage = BleStage.CABLE) } }
+                // Paused from Status: drop the link and stop looking for it until resumed.
+                val paused = Collector.blePaused.value
+                running.keys.filter { it in paused }.forEach { running.remove(it)?.cancel() }
+                names.forEach { n -> if (n in paused && n != onCable) bleUi(n) { it.copy(stage = BleStage.PAUSED, connectedSinceMs = 0, obsPerMin = 0) } }
+                if (names.all { it in paused || it == onCable }) { bleWait(2000); continue }
                 if (!hasBlePermissions()) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.NO_PERMISSION) } }; bleWait(5000); continue }
                 val ad = (getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
                 if (ad?.isEnabled != true) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.BT_OFF) } }; bleWait(3000); continue }
 
-                val missing = names.filter { it != onCable && !running.containsKey(it) }.toSet()
+                val missing = names.filter { it != onCable && it !in paused && !running.containsKey(it) }.toSet()
                 if (missing.isEmpty()) { bleWait(2000); continue }
                 missing.forEach { n -> bleUi(n) { it.copy(stage = BleStage.SCANNING, attempts = it.attempts + 1) } }
                 val scanner = BleChannel(this)
@@ -572,7 +578,7 @@ class CollectorService : Service() {
             if (fresh.lastError.isNotEmpty()) bleUi(name) { it.copy(lastError = fresh.lastError) }
         } finally {
             fresh.close()
-            bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, connectedSinceMs = 0) }
+            bleUi(name) { it.copy(stage = if (name in Collector.blePaused.value) BleStage.PAUSED else BleStage.RETRY_WAIT, connectedSinceMs = 0, obsPerMin = 0) }
         }
     }
 
@@ -609,17 +615,39 @@ class CollectorService : Service() {
         val writer = scope.launch { runCatching { channel.writerLoop() } }
         session.start()
         Diag.i("ble", "connected: $name")
+        val sessionStart = System.currentTimeMillis()
         val watcher = scope.launch {
             val started = System.currentTimeMillis()
             var phase: dev.retrovision.app.probe.Phase? = null
             var lastReport = ""
+            var lastRelayReport = ""
             var n = 0
+            // Data flow, for Status: last observation and the rate over the last minute.
+            var lastTotal = -1L
+            var lastDataMs = 0L
+            val rate = ArrayDeque<Pair<Long, Long>>()
+            var warnedSilent = false
             while (isActive) {
                 val st = session.state.value
+                val nowMs = System.currentTimeMillis()
+                val total = st.wifiObs + st.bleObs
+                if (total != lastTotal) { if (lastTotal >= 0) lastDataMs = nowMs; lastTotal = total; warnedSilent = false }
+                rate.addLast(nowMs to total)
+                while (rate.size > 1 && nowMs - rate.first().first > 60_000) rate.removeFirst()
+                val span = nowMs - rate.first().first
+                val perMin = if (span >= 5_000) ((total - rate.first().second) * 60_000 / span).toInt() else 0
+                if (st.phase == dev.retrovision.app.probe.Phase.STREAMING && lastDataMs > 0 && nowMs - lastDataMs > SILENT_PROBE_MS && !warnedSilent) {
+                    warnedSilent = true
+                    Diag.w("ble", "$pairName: streaming but no observation for ${(nowMs - lastDataMs) / 1000} s")
+                }
                 if (Collector.session === session) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
                 if (st.bleReport != lastReport && st.bleReport.isNotEmpty()) {
                     lastReport = st.bleReport
                     Diag.i("ble", "$pairName: probe says ${st.bleReport}")
+                }
+                if (st.relayReport != lastRelayReport && st.relayReport.isNotEmpty()) {
+                    lastRelayReport = st.relayReport
+                    Diag.i("ble", "$pairName: relay says ${st.relayReport}")
                 }
                 if (st.phase != phase) {
                     phase = st.phase
@@ -640,6 +668,7 @@ class CollectorService : Service() {
                 }
                 bleUi(pairName) {
                     it.copy(
+                        lastDataMs = if (lastDataMs > 0) lastDataMs else it.lastDataMs, obsPerMin = perMin,
                         stage = stage, rssi = channel.rssi.takeIf { r -> r != 0 } ?: it.rssi, mtu = channel.currentMtu,
                         connectedSinceMs = if (stage == BleStage.STREAMING && it.connectedSinceMs == 0L) System.currentTimeMillis() else it.connectedSinceMs,
                         lastError = err ?: if (stage == BleStage.STREAMING) "" else it.lastError,
@@ -656,6 +685,8 @@ class CollectorService : Service() {
                     !channel.connected -> "link lost: ${channel.lastError.ifEmpty { "no reason given" }}"
                     usbProbeName() == pairName -> "probe moved to the cable"
                     prefs.blePairKey(pairName) == null -> "pairing forgotten"
+                    pairName in Collector.blePaused.value -> "paused from Status"
+                    (Collector.bleReconnect.value[pairName] ?: 0L) >= sessionStart -> "reconnect asked from Status"
                     else -> ""
                 }
                 if (endReason.isNotEmpty()) break
@@ -958,7 +989,7 @@ class CollectorService : Service() {
             now,
             window,
             fixes,
-            IgnoreList(entityIds = ignoreIds, apSsids = prefs.ownSsidSet(), ownFingerprints = prefs.ownFingerprints),
+            IgnoreList.fromRows(ignoreIds, prefs.ownSsidSet(), prefs.ownFingerprints),
             familiar = familiar,
             residents = dao.residents(BASELINE_MIN_DAYS).toSet(),
         )
@@ -972,7 +1003,9 @@ class CollectorService : Service() {
         val recent = synchronized(recentRaw) { recentRaw.toList() }.filter { now - it.timeMs <= RECENT_RAW_MS }
         val recentWifi = recent.filter { it.radio == dev.retrovision.core.model.Radio.WIFI && now - it.timeMs <= 3 * 60_000L }
         val recentBle = recent.filter { it.radio == dev.retrovision.core.model.Radio.BLE && now - it.timeMs <= 60_000L }
-        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet()) +
+        // Your confirmed access points are never the twin (a dual-band router has two BSSIDs).
+        val trustedBssids = prefs.trustedAps.mapNotNull { e -> runCatching { dev.retrovision.core.model.MacAddress.parse(e.substringAfter('|')) }.getOrNull() }.toSet()
+        val threats = dev.retrovision.core.analysis.WifiThreats.detect(recentWifi, prefs.ownSsidSet(), trustedBssids = trustedBssids) +
             dev.retrovision.core.analysis.WifiThreats.detectBle(recentBle)
         Collector.threats.value = threats
 
@@ -1050,14 +1083,31 @@ class CollectorService : Service() {
     private var lastLearn = 0L
     private var warmedLookbackMs = -1L
 
-    /** A device seen only at your routine places gains a "day" once per local day; residents are damped. */
+    /** Local calendar day of [ms] (days since the epoch, in this phone's time zone). */
+    private fun localDay(ms: Long): Long = (ms + java.util.TimeZone.getDefault().getOffset(ms)) / 86_400_000L
+
+    /**
+     * A device seen only at your routine places gains a "day" once per local day it was SEEN on;
+     * residents are damped. The day comes from the device's own last sighting, not from the clock:
+     * an analysis just after midnight still covers the evening before (lookback up to 12 h), and
+     * counting by the clock gave every device of that evening a second day (field data: 1,247
+     * devices at 2 days, only 41 of them actually seen after midnight).
+     */
     private suspend fun learnBaseline(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
-        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
+        if (!prefs.dayCountFixed) {
+            // Counts learnt before the fix are inflated: start them over, keep your answers.
+            dao.wipeBaseline()
+            dao.resetCompanionCounts()
+            prefs.baselineStartDay = 0L
+            prefs.dayCountFixed = true
+            Diag.i("baseline", "day counts reset after the day-count fix")
+        }
+        val today = localDay(now)
         // When the baseline started: "new near your places" only means something after a week of it.
-        if (prefs.baselineStartDay == 0L) prefs.baselineStartDay = day
-        // Ids already counted today: the rest of the day's runs have nothing to write for them.
-        if (baselineDay != day) { baselineDay = day; baselineDone.clear() }
+        if (prefs.baselineStartDay == 0L) prefs.baselineStartDay = today
+        // Ids already handled today: the rest of the day's runs have nothing to write for them.
+        if (baselineDay != today) { baselineDay = today; baselineDone.clear() }
         val todo = result.routineOnlyIds.filter { it !in baselineDone }
         if (todo.isEmpty()) return
         val full = result.entities.associateBy { it.entityId }
@@ -1074,11 +1124,13 @@ class CollectorService : Service() {
             val label = r?.let { Texts.entityLabel(it) } ?: st?.let { dev.retrovision.app.ui.stubLabel(it) } ?: ""
             val category = r?.category ?: st?.category
             val mobile = category != dev.retrovision.core.identity.DeviceCategory.ROUTER
+            val seenMs = r?.lastSeenMs ?: st?.lastSeenMs
+            val day = localDay(seenMs ?: now)
             if (b == null) {
-                out += dev.retrovision.app.data.BaselineRow(id, 1, day, now, firstDay = day, label = label, mobile = mobile)
-            } else if (b.lastDay != day) {
+                out += dev.retrovision.app.data.BaselineRow(id, 1, day, seenMs ?: now, firstDay = day, label = label, mobile = mobile)
+            } else if (seenMs != null && day > b.lastDay) {
                 out += dev.retrovision.app.data.BaselineRow(
-                    id, (b.days + 1).coerceAtMost(30), day, now,
+                    id, (b.days + 1).coerceAtMost(30), day, seenMs,
                     firstDay = b.firstDay, label = label.ifEmpty { b.label }, mobile = mobile,
                 )
             }
@@ -1096,14 +1148,15 @@ class CollectorService : Service() {
      */
     private suspend fun learnCompanions(result: dev.retrovision.core.analysis.AnalysisResult, now: Long) {
         val dao = app.db.dao()
-        val day = (now + java.util.TimeZone.getDefault().getOffset(now)) / 86_400_000L
         for (e in result.entities) {
             if (e.kind == dev.retrovision.core.analysis.EntityKind.BLE_TRACKER || e.tracker != null) continue
             if (e.isDrone) continue
             val travelled = e.reasons.any { it is dev.retrovision.core.analysis.Reason.MovedWithYou } && e.placeIds.size >= 2
             if (!travelled) continue
+            // The day it travelled with you, from its own sightings (see learnBaseline).
+            val day = localDay(e.lastSeenMs)
             val c = dao.companion(e.entityId)
-            if (c != null && (c.state >= 2 || c.lastDay == day)) continue
+            if (c != null && (c.state >= 2 || day <= c.lastDay)) continue
             val days = (c?.days ?: 0) + 1
             val state = if (days >= COMPANION_DAYS) 1 else 0
             dao.putCompanion(dev.retrovision.app.data.CompanionRow(e.entityId, days, day, state, Texts.entityLabel(e), now))
@@ -1347,6 +1400,8 @@ class CollectorService : Service() {
     )
 
     companion object {
+        /** A streaming probe with no observation for this long is flagged on Status. */
+        const val SILENT_PROBE_MS = 120_000L
         /** BLE stages during which the BLE loop owns the connection line. */
         private val BLE_BUSY = setOf(BleStage.CONNECTING, BleStage.BONDING, BleStage.HANDSHAKE, BleStage.STREAMING)
         const val ACTION_STOP = "dev.retrovision.app.STOP"

@@ -23,6 +23,7 @@ typedef enum _retrovision_v1_Capability {
     retrovision_v1_Capability_CAPABILITY_GNSS = 20, /* probe has its own GNSS receiver */
     retrovision_v1_Capability_CAPABILITY_LINK_BLE = 30, /* can talk to the host over a BLE GATT link (1.2) */
     retrovision_v1_Capability_CAPABILITY_LINK_WIFI = 31, /* can talk to the host over Wi-Fi/TCP (1.2) */
+    retrovision_v1_Capability_CAPABILITY_LINK_RELAY = 32, /* can talk to the host through a UART-wired BLE relay (1.3) */
     retrovision_v1_Capability_CAPABILITY_CUSTOM = 100 /* emits CustomObservation, see schema_ids */
 } retrovision_v1_Capability;
 
@@ -32,7 +33,11 @@ typedef enum _retrovision_v1_LinkKind {
     retrovision_v1_LinkKind_LINK_KIND_UNSPECIFIED = 0,
     retrovision_v1_LinkKind_LINK_KIND_USB = 1, /* cable (USB-Serial-JTAG or USB-UART bridge); also "wireless off" */
     retrovision_v1_LinkKind_LINK_KIND_BLE = 2, /* GATT, Nordic UART Service layout */
-    retrovision_v1_LinkKind_LINK_KIND_WIFI = 3 /* TCP over Wi-Fi (usually the phone's hotspot) */
+    retrovision_v1_LinkKind_LINK_KIND_WIFI = 3, /* TCP over Wi-Fi (usually the phone's hotspot) */
+    /* 1.3 — BLE through a relay board (an ESP32-S3 running the relay firmware) wired to the
+ probe's UART. The relay only forwards bytes; the probe keeps its own Bluetooth radio for
+ scanning and still authenticates the host (auth_nonce/auth_mac) end to end. */
+    retrovision_v1_LinkKind_LINK_KIND_RELAY = 4
 } retrovision_v1_LinkKind;
 
 typedef enum _retrovision_v1_Sensor {
@@ -420,8 +425,8 @@ extern "C" {
 #define _retrovision_v1_Capability_ARRAYSIZE ((retrovision_v1_Capability)(retrovision_v1_Capability_CAPABILITY_CUSTOM+1))
 
 #define _retrovision_v1_LinkKind_MIN retrovision_v1_LinkKind_LINK_KIND_UNSPECIFIED
-#define _retrovision_v1_LinkKind_MAX retrovision_v1_LinkKind_LINK_KIND_WIFI
-#define _retrovision_v1_LinkKind_ARRAYSIZE ((retrovision_v1_LinkKind)(retrovision_v1_LinkKind_LINK_KIND_WIFI+1))
+#define _retrovision_v1_LinkKind_MAX retrovision_v1_LinkKind_LINK_KIND_RELAY
+#define _retrovision_v1_LinkKind_ARRAYSIZE ((retrovision_v1_LinkKind)(retrovision_v1_LinkKind_LINK_KIND_RELAY+1))
 
 #define _retrovision_v1_Sensor_MIN retrovision_v1_Sensor_SENSOR_UNSPECIFIED
 #define _retrovision_v1_Sensor_MAX retrovision_v1_Sensor_SENSOR_CUSTOM

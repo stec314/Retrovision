@@ -1,0 +1,25 @@
+menu "Retrovision probe"
+
+    config RV_RELAY_UART_TX_GPIO
+        int "Relay link: probe TX pin (to the relay's RX)"
+        default 23 if IDF_TARGET_ESP32C5
+        default 17 if IDF_TARGET_ESP32
+        default 5
+        help
+            Used only when the probe is paired for a relay link (LINK_KIND_RELAY).
+            ESP32-C5 DevKitC/Waveshare: GPIO23 is free (not strapping, USB or console).
+
+    config RV_RELAY_UART_RX_GPIO
+        int "Relay link: probe RX pin (from the relay's TX)"
+        default 24 if IDF_TARGET_ESP32C5
+        default 16 if IDF_TARGET_ESP32
+        default 6
+
+    config RV_RELAY_UART_BAUD
+        int "Relay link baud rate"
+        default 921600
+        help
+            Must match the relay firmware. The BLE side (~20-60 kB/s) is the bottleneck,
+            not the wire.
+
+endmenu

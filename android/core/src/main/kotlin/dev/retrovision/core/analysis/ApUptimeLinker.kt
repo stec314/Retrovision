@@ -16,11 +16,26 @@ import dev.retrovision.core.model.WifiKind
  * are linked only when one REPLACES the other: the second appears after the first went silent,
  * within [maxHandoverMs], never overlapping. Several SSIDs served by one radio at the same time
  * share a TSF but overlap in time, so they are not merged.
+ *
+ * Shared boot moments are not rare: after a neighbourhood power cut every router restarts within
+ * seconds (field data: dozens of routers of four providers in one city centre booted within 25 s,
+ * and chained ±2 s links merged them into one "renamed AP" that seemed to follow you), and a
+ * beacon-spam tool sends hundreds of BSSIDs from one radio. So no link is made when 3 or more
+ * different radios booted within [CROWD_WINDOW_MS] of each other, or when an AP could be replaced
+ * by more than one candidate.
  */
 object ApUptimeLinker {
     const val MAX_BOOT_DIFF_MS = 2_000L
     const val MAX_HANDOVER_MS = 30 * 60_000L
     const val MAX_OVERLAP_MS = 60_000L
+    const val CROWD_WINDOW_MS = 60_000L
+    const val CROWD_RADIOS = 3
+
+    /** One physical radio's BSSIDs differ in the first and last octet; the middle three stay. */
+    private fun radioFamily(id: String): String {
+        val h = id.substringAfter(':').split(':')
+        return if (h.size == 6) h[2] + h[3] + h[4] else id
+    }
 
     class Links(val root: Map<String, String>, val renamed: Map<String, Pair<String, String>>)
 
@@ -65,10 +80,33 @@ object ApUptimeLinker {
             }
         }
         pairs.sort()
+        // Crowded boot moments: how many different radios booted within the crowd window.
+        val crowded = BooleanArray(aps.size)
+        var lo = 0
+        for (x in byBoot.indices) {
+            val bx = aps[byBoot[x]].boot
+            while (bx - aps[byBoot[lo]].boot > CROWD_WINDOW_MS) lo++
+            var hi = x
+            while (hi + 1 < byBoot.size && aps[byBoot[hi + 1]].boot - bx <= CROWD_WINDOW_MS) hi++
+            val fams = HashSet<String>()
+            for (k in lo..hi) fams += radioFamily(aps[byBoot[k]].id)
+            if (fams.size >= CROWD_RADIOS) crowded[byBoot[x]] = true
+        }
+        val candidates = HashMap<Int, Int>()
+        val valid = ArrayList<Long>()
         for (p in pairs) {
-            val a = aps[(p ushr 32).toInt()]; val b = aps[(p and 0xFFFFFFFFL).toInt()]
-            val replaces = b.first >= a.last - MAX_OVERLAP_MS && b.first - a.last <= MAX_HANDOVER_MS
-            if (!replaces) continue
+            val i = (p ushr 32).toInt(); val j = (p and 0xFFFFFFFFL).toInt()
+            if (crowded[i] || crowded[j]) continue
+            val a = aps[i]; val b = aps[j]
+            if (b.first >= a.last - MAX_OVERLAP_MS && b.first - a.last <= MAX_HANDOVER_MS) {
+                valid += p
+                candidates[i] = (candidates[i] ?: 0) + 1
+            }
+        }
+        for (p in valid) {
+            val i = (p ushr 32).toInt()
+            if ((candidates[i] ?: 0) > 1) continue // ambiguous: more than one AP could have replaced it
+            val a = aps[i]; val b = aps[(p and 0xFFFFFFFFL).toInt()]
             val ra = find(a.id); val rb = find(b.id)
             if (ra == rb) continue
             root[rb] = ra

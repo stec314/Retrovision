@@ -40,6 +40,17 @@
   </section>
 
   <section>
+    <h2>Optional: BLE relay (second board)</h2>
+    <p>A probe on a Bluetooth link cannot scan Bluetooth: its radio carries the link. A second <strong>XIAO ESP32-S3</strong> wired to the probe takes over the link, so the probe keeps scanning Wi-Fi and Bluetooth. Flash this only on the relay board, never on the probe.</p>
+    <p>Wiring (3 wires): probe GPIO23 (TX) → relay D7/RX (GPIO44), probe GPIO24 (RX) ← relay D6/TX (GPIO43), GND ↔ GND. Power both from one power bank (probe 5V → relay 5V). Then pair the probe in the app with “Pair for the relay”.</p>
+    <esp-web-install-button manifest="manifest-relay.json">
+      <button slot="activate">Install relay firmware</button>
+      <span slot="unsupported">Web Serial is not available in this browser.</span>
+      <span slot="not-allowed">Web Serial needs HTTPS.</span>
+    </esp-web-install-button>
+  </section>
+
+  <section>
     <h2>If the board is not detected</h2>
     <p>Hold <strong>BOOT</strong>, tap <strong>RESET</strong>, release BOOT, then try again. The board then enters the ROM bootloader and always appears as a serial port.</p>
   </section>

@@ -325,6 +325,10 @@ interface AppDao {
     @Query("DELETE FROM companions")
     suspend fun wipeCompanions()
 
+    /** Drops the learnt day counts but keeps your answers ("mine" = 2, "not mine" = 3). */
+    @Query("DELETE FROM companions WHERE state < 2")
+    suspend fun resetCompanionCounts()
+
     @Query("DELETE FROM feedback")
     suspend fun wipeFeedback()
 

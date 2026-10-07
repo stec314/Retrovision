@@ -1,0 +1,16 @@
+{
+  "name": "Retrovision BLE relay",
+  "version": "dev",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "firmware/retrovision-esp32s3-relay-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

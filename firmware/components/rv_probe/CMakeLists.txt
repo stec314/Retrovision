@@ -14,7 +14,7 @@ if(target STREQUAL "esp32c5")
 endif()
 
 idf_component_register(
-    SRCS "probe_main.c" "link.c" "link_usb.c" "link_ble.c" "link_cfg.c"
+    SRCS "probe_main.c" "link.c" "link_usb.c" "link_ble.c" "link_uart.c" "link_cfg.c"
          "session.c" "capture.c" "wifi_sniffer.c"
          "ble_scanner.c" "config.c" "log_forward.c"
     INCLUDE_DIRS "."

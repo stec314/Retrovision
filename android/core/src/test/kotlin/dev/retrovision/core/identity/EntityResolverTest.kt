@@ -133,4 +133,90 @@ class EntityResolverTest {
         val b = r.resolve(ble(rnd(0x02), 10 * 60_000L + 1000, -50, band))
         assertFalse(b.linkedToExisting)
     }
+
+    // ---- BLE: handover (identical advert, new address, seconds after the old one went quiet) ----
+    private fun uuids16(vararg u: Int) =
+        byteArrayOf((u.size * 2 + 1).toByte(), 0x03) + u.flatMap { listOf((it and 0xFF).toByte(), (it shr 8).toByte()) }.toByteArray()
+
+    private fun serviceData(uuid: Int, vararg bytes: Int) =
+        byteArrayOf((bytes.size + 3).toByte(), 0x16, (uuid and 0xFF).toByte(), (uuid shr 8).toByte()) + bytes.map { it.toByte() }.toByteArray()
+
+    /** Field case: a phone advertising "Stefano " + Current Time Service, new RPA every ~8 min. */
+    private val phoneName = adv(name("Stefano "), uuids16(0x1805))
+
+    @Test fun handoverLinksPlainNamedRotation() {
+        val r = EntityResolver()
+        val a = r.resolve(ble(rnd(0x01), 0, -45, phoneName))
+        r.resolve(ble(rnd(0x01), 60_000, -46, phoneName))
+        val b = r.resolve(ble(rnd(0x02), 65_000, -44, phoneName)) // 5 s handover
+        assertEquals(a.entityId, b.entityId)
+        assertTrue(b.linkedToExisting)
+        assertEquals(1L, r.handoverLinksMade)
+        assertEquals(0L, r.bleLinksMade)
+    }
+
+    @Test fun handoverNeedsTheOldAddressToGoQuiet() {
+        val r = EntityResolver()
+        r.resolve(ble(rnd(0x01), 10_000, -45, phoneName))
+        val b = r.resolve(ble(rnd(0x02), 10_400, -45, phoneName)) // both talking: two devices
+        assertFalse(b.linkedToExisting)
+    }
+
+    @Test fun handoverExpiresAfter30s() {
+        val r = EntityResolver()
+        r.resolve(ble(rnd(0x01), 0, -45, phoneName))
+        val b = r.resolve(ble(rnd(0x02), 31_000, -45, phoneName))
+        assertFalse(b.linkedToExisting)
+    }
+
+    @Test fun handoverRespectsTighterRssiTolerance() {
+        val r = EntityResolver()
+        r.resolve(ble(rnd(0x01), 0, -45, phoneName))
+        val b = r.resolve(ble(rnd(0x02), 5_000, -55, phoneName)) // 10 dB: beyond 8
+        assertFalse(b.linkedToExisting)
+    }
+
+    @Test fun handoverLinksIdenticalVariedPayloadWithoutName() {
+        val r = EntityResolver()
+        val sd = adv(serviceData(0xFCF1, 0x04, 0x53, 0xE9, 0xBD, 0x2E, 0x70, 0x83, 0xB9, 0xF5, 0xAC, 0x18, 0x96))
+        val a = r.resolve(ble(rnd(0x01), 0, -33, sd))
+        val b = r.resolve(ble(rnd(0x02), 4_000, -32, sd))
+        assertEquals(a.entityId, b.entityId)
+    }
+
+    @Test fun handoverRefusesLowVarietyPayload() {
+        // Field case: Google FE9F service data of all zeros, identical on many devices.
+        val r = EntityResolver()
+        val zeros = adv(serviceData(0xFE9F, *IntArray(20)))
+        r.resolve(ble(rnd(0x01), 0, -60, zeros))
+        val b = r.resolve(ble(rnd(0x02), 3_000, -60, zeros))
+        assertFalse(b.linkedToExisting)
+    }
+
+    @Test fun handoverDeclinesWhenAmbiguous() {
+        val r = EntityResolver()
+        r.resolve(ble(rnd(0x01), 0, -45, phoneName))
+        r.resolve(ble(rnd(0x02), 0, -47, phoneName))
+        val c = r.resolve(ble(rnd(0x03), 5_000, -46, phoneName)) // fits both quiet trails
+        assertFalse(c.linkedToExisting)
+    }
+
+    @Test fun handoverKeyRules() {
+        assertEquals(null, EntityResolver.handoverKey(adv(name("5AM0452823")))) // serial: name path
+        assertEquals(null, EntityResolver.handoverKey(adv(manuf(0x4C, 0x00, 0x10, 0x05, 0x01, 0x22, 0x33, 0x44, 0x55))))
+        assertEquals(null, EntityResolver.handoverKey(adv(uuids16(0xFEF3)))) // nothing distinctive
+        val k = EntityResolver.handoverKey(phoneName)!!
+        assertFalse(k.startsWith("0201")) // Flags dropped: a probe that adds or drops them still matches
+    }
+
+    @Test fun rotatingBleIsDecidedByAddressKindNotTheWifiBit() {
+        // Field case: RPAs like 4d:39:21:… have the 802.11 U/L bit clear; they still rotate.
+        val r = EntityResolver()
+        val a = r.resolve(ble(MacAddress(0x4D_3921_B8AD_1FL), 0, -45, phoneName))
+        val b = r.resolve(ble(MacAddress(0x51_3CD2_2E4B_33L), 5_000, -45, phoneName))
+        assertEquals(a.entityId, b.entityId)
+        val c = r.resolve(ble(MacAddress(0x4D_0000_0000_01L), 0, -60, adv(name("5AM0452823"))))
+        val d = r.resolve(ble(MacAddress(0x51_0000_0000_02L), 10_000, -61, adv(name("5AM0452823"))))
+        assertEquals(c.entityId, d.entityId)
+    }
 }
