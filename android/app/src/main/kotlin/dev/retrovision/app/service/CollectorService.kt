@@ -570,10 +570,11 @@ class CollectorService : Service() {
                 prefs.setBleAddress(name, found.first.address)
                 found.first
             } else {
-                BleChannel.deviceFor(this, addr) ?: run {
-                    policy.onFailure(step.mode, ReconnectPolicy.Failure.TRANSIENT)
-                    continue
-                }
+                BleChannel.deviceFor(this, addr)
+            }
+            if (device == null) {
+                policy.onFailure(step.mode, ReconnectPolicy.Failure.TRANSIENT)
+                continue
             }
 
             val background = step.mode == ReconnectPolicy.Mode.BACKGROUND
