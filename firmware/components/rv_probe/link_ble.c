@@ -416,6 +416,11 @@ void rv_link_ble_tick(void)
     }
 }
 
+uint32_t rv_link_ble_conn_count(void)
+{
+    return s_conns;
+}
+
 void rv_link_ble_report(char *buf, size_t cap)
 {
     // Kept under 127 chars: it travels as a Log frame. Parsed by the app (keys before '=').

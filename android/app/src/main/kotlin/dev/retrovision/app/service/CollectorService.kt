@@ -287,8 +287,9 @@ class CollectorService : Service() {
         scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
         var probeGoneSince = 0L
         while (scope.isActive) {
-            // A probe on a BLE link does not scan Bluetooth (its radio carries the link): only a probe
-            // that does lets the phone's own scanner rest. A probe behind a relay board does scan.
+            // A probe on a BLE link scans Bluetooth only a quarter of the time (its radio also carries
+            // the link): only a probe that scans fully lets the phone's own scanner rest. A probe
+            // behind a relay board does.
             val streaming = Collector.allSessions().any {
                 val st = it.state.value
                 st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
