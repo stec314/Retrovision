@@ -59,6 +59,8 @@ fun bleStageText(s: BleStage): String = when (s) {
     BleStage.REJECTED -> Texts.tr("refused: pairing key mismatch", "rifiutata: chiave di abbinamento diversa")
     BleStage.RETRY_WAIT -> Texts.tr("not reached, retrying", "non raggiunta, riprovo")
     BleStage.PAUSED -> Texts.tr("paused: not connecting until you resume it", "in pausa: non si collega finché non la riprendi")
+    BleStage.STANDBY -> Texts.tr("on the cable · Bluetooth ready: unplug and it carries on", "sul cavo · Bluetooth pronto: scollega e prosegue")
+    BleStage.AWAY -> Texts.tr("out of range · reconnects by itself when the probe is near", "fuori portata · si ricollega da sola quando la sonda è vicina")
 }
 
 private fun linkName(k: LinkKind) = when (k) {
@@ -139,7 +141,8 @@ private fun PairedProbeRow(name: String, ui: BleLinkUi?, session: SessionState?,
     val (dot, color) = when (stage) {
         BleStage.STREAMING -> "●" to MaterialTheme.colorScheme.primary
         BleStage.REJECTED, BleStage.NO_PERMISSION, BleStage.BT_OFF -> "●" to MaterialTheme.colorScheme.error
-        BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
+        BleStage.STANDBY -> "●" to MaterialTheme.colorScheme.primary
+        BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED, BleStage.AWAY -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
         else -> "◐" to MaterialTheme.colorScheme.tertiary
     }
     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -151,8 +154,10 @@ private fun PairedProbeRow(name: String, ui: BleLinkUi?, session: SessionState?,
         Text(bleStageText(stage), style = MaterialTheme.typography.bodySmall)
         if (ui != null && running) {
             val parts = buildList {
-                if (stage != BleStage.CABLE) add(Texts.tr("for ", "da ") + ago(ui.sinceMs))
-                if (ui.attempts > 0) add(Texts.tr("attempts ", "tentativi ") + ui.attempts)
+                if (stage != BleStage.CABLE && stage != BleStage.STANDBY) add(Texts.tr("for ", "da ") + ago(ui.sinceMs))
+                if (ui.attempts > 0 && stage != BleStage.STREAMING && stage != BleStage.STANDBY) add(Texts.tr("attempts ", "tentativi ") + ui.attempts)
+                if (ui.reconnects > 0) add(Texts.tr("reconnected ", "ricollegata ") + ui.reconnects + "×")
+                if (ui.phy.isNotEmpty() && (stage == BleStage.STREAMING || stage == BleStage.STANDBY)) add("PHY ${ui.phy}")
                 if (ui.rssi != 0) add(Texts.tr("phone hears ", "il telefono sente ") + "${ui.rssi} dBm")
                 if (stage == BleStage.STREAMING && session != null) {
                     if (session.linkRssi != 0) add(Texts.tr("probe hears ", "la sonda sente ") + "${session.linkRssi} dBm")
@@ -188,8 +193,11 @@ private fun PairedProbeRow(name: String, ui: BleLinkUi?, session: SessionState?,
                         color = if (bad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (ui.lastError.isNotEmpty() && stage != BleStage.STREAMING && stage != BleStage.CABLE) {
+            if (ui.lastError.isNotEmpty() && stage !in setOf(BleStage.STREAMING, BleStage.CABLE, BleStage.STANDBY, BleStage.AWAY)) {
                 Text(ui.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+            if (ui.lastDrop.isNotEmpty() && ui.reconnects > 0) {
+                Text(Texts.tr("last drop: ", "ultima caduta: ") + ui.lastDrop, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -293,7 +301,7 @@ fun ProbeLinkCard() {
                     when {
                         BleStage.NO_PERMISSION in stages -> Button(onClick = { askPerms() }) { Text(Texts.tr("Grant Bluetooth permission", "Concedi permesso Bluetooth")) }
                         BleStage.BT_OFF in stages -> Button(onClick = { btSettings() }) { Text(Texts.tr("Turn Bluetooth on", "Attiva il Bluetooth")) }
-                        stages.any { it != BleStage.STREAMING && it != BleStage.CABLE && it != BleStage.PAUSED } ->
+                        stages.any { it !in setOf(BleStage.STREAMING, BleStage.CABLE, BleStage.PAUSED, BleStage.STANDBY) } ->
                             OutlinedButton(onClick = { Collector.bleKick.value = System.nanoTime() }) { Text(Texts.tr("Retry now", "Riprova ora")) }
                     }
                     if (pairs.any { bleLinks[it]?.lastError?.contains("Bluetooth settings") == true }) TextButton(onClick = { btSettings() }) { Text(Texts.tr("Bluetooth settings", "Impostazioni Bluetooth")) }
@@ -431,8 +439,8 @@ fun ProbeLinkCard() {
             }
             Text(
                 Texts.tr(
-                    "Trade-offs: in Bluetooth mode a probe stops hearing Bluetooth devices (its radio carries the link; the phone's Bluetooth covers them, and less well with the screen off), Wi-Fi keeps working, and it needs power (power bank or car USB). With a relay board (a second XIAO ESP32-S3 wired to the probe's UART, see the wiki) the probe keeps scanning Bluetooth too. A probe left in a parked car only sends while the phone is within Bluetooth range (~10–30 m). Plugging the cable in always takes over.",
-                    "Compromessi: in modalità Bluetooth una sonda smette di sentire i dispositivi Bluetooth (la sua radio porta il collegamento; li copre il Bluetooth del telefono, peggio a schermo spento), il Wi-Fi resta attivo e serve alimentazione (power bank o USB dell'auto). Con una scheda ponte (un secondo XIAO ESP32-S3 collegato alla UART della sonda, vedi wiki) la sonda continua a scansionare anche il Bluetooth. Una sonda lasciata nell'auto parcheggiata trasmette solo quando il telefono è nel raggio Bluetooth (~10–30 m). Collegando il cavo, il cavo ha sempre la precedenza.",
+                    "Trade-offs: in Bluetooth mode a probe hears Bluetooth devices only a quarter of the time (its radio also carries the link; turn on the phone's Bluetooth sensor to cover the rest), Wi-Fi keeps working, and it needs power (power bank or car USB). With a relay board (a second XIAO ESP32-S3 wired to the probe's UART, see the wiki) the probe keeps scanning Bluetooth too. A probe left in a parked car only sends while the phone is within Bluetooth range (~10–30 m). Plugging the cable in always takes over.",
+                    "Compromessi: in modalità Bluetooth una sonda ascolta i dispositivi Bluetooth solo un quarto del tempo (la sua radio porta anche il collegamento; attiva il sensore Bluetooth del telefono per coprire il resto), il Wi-Fi resta attivo e serve alimentazione (power bank o USB dell'auto). Con una scheda ponte (un secondo XIAO ESP32-S3 collegato alla UART della sonda, vedi wiki) la sonda continua a scansionare anche il Bluetooth. Una sonda lasciata nell'auto parcheggiata trasmette solo quando il telefono è nel raggio Bluetooth (~10–30 m). Collegando il cavo, il cavo ha sempre la precedenza.",
                 ),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -553,7 +561,8 @@ fun ProbeStatusPanel() {
             val (dot, color) = when (stage) {
                 BleStage.STREAMING -> if (n in silent) "●" to MaterialTheme.colorScheme.error else "●" to MaterialTheme.colorScheme.primary
                 BleStage.REJECTED, BleStage.NO_PERMISSION, BleStage.BT_OFF -> "●" to MaterialTheme.colorScheme.error
-                BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
+                BleStage.STANDBY -> "●" to MaterialTheme.colorScheme.primary
+                BleStage.OFF, BleStage.CABLE, BleStage.STOPPED, BleStage.PAUSED, BleStage.AWAY -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
                 else -> "◐" to MaterialTheme.colorScheme.tertiary
             }
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -563,11 +572,11 @@ fun ProbeStatusPanel() {
                         Text("RV-$n", style = MaterialTheme.typography.bodyMedium)
                         Text(bleStageText(stage), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    if (running && stage != BleStage.CABLE) {
+                    if (running && stage != BleStage.CABLE && stage != BleStage.STANDBY) {
                         when {
                             isPaused -> TextButton(onClick = { setPaused(n, false) }) { Text(Texts.tr("Resume", "Riprendi")) }
                             stage == BleStage.STREAMING || stage == BleStage.HANDSHAKE -> TextButton(onClick = { reconnect(n) }) { Text(Texts.tr("Reconnect", "Riconnetti")) }
-                            stage == BleStage.RETRY_WAIT || stage == BleStage.SCANNING || stage == BleStage.REJECTED ->
+                            stage == BleStage.RETRY_WAIT || stage == BleStage.SCANNING || stage == BleStage.REJECTED || stage == BleStage.AWAY ->
                                 TextButton(onClick = { Collector.bleKick.value = System.nanoTime() }) { Text(Texts.tr("Retry", "Riprova")) }
                         }
                         if (!isPaused) TextButton(onClick = { setPaused(n, true) }) { Text(Texts.tr("Pause", "Pausa")) }
@@ -583,6 +592,7 @@ fun ProbeStatusPanel() {
                         if (session != null && session.linkRssi != 0) add(Texts.tr("probe hears ", "la sonda sente ") + "${session.linkRssi} dBm")
                         if (seen + lost > 0) add(Texts.tr("lost ", "persi ") + "%.1f%%".format(100.0 * lost / (seen + lost)))
                         if (ui.connectedSinceMs > 0) add(Texts.tr("up ", "attiva da ") + ago(ui.connectedSinceMs))
+                        if (ui.reconnects > 0) add(Texts.tr("reconnected ", "ricollegata ") + ui.reconnects + "×")
                     }
                     Text(parts.joinToString(" · "), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     if (n in silent) Text(
@@ -596,7 +606,7 @@ fun ProbeStatusPanel() {
                         Texts.tr("Over 5% lost: move the phone closer to the probe.", "Oltre il 5% perso: avvicina il telefono alla sonda."),
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
                     )
-                } else if (ui != null && running && !isPaused && ui.lastError.isNotEmpty() && stage != BleStage.CABLE) {
+                } else if (ui != null && running && !isPaused && ui.lastError.isNotEmpty() && stage !in setOf(BleStage.CABLE, BleStage.STANDBY, BleStage.AWAY)) {
                     Text(ui.lastError, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }

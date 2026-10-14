@@ -104,16 +104,27 @@ static void on_ext(const struct ble_gap_ext_disc_desc *d)
 
 // Thermal throttle: 0 normal, 1 half the scan window, 2 no BLE scanning (Wi-Fi keeps going).
 static volatile int s_throttle;
+// Held while a phone connection is being set up (BLE link mode).
+static volatile bool s_hold;
 
 static void start_scan(void)
 {
-    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
-        return; // the radio carries the host link: never scan (it would starve advertising)
-    }
-    if (s_throttle >= 2) {
+    if (s_throttle >= 2 || s_hold) {
         return;
     }
-    const uint16_t window = s_throttle == 1 ? (uint16_t)(s_cfg->ble_window / 2 < 4 ? 4 : s_cfg->ble_window / 2) : s_cfg->ble_window;
+    uint16_t window = s_throttle == 1 ? (uint16_t)(s_cfg->ble_window / 2 < 4 ? 4 : s_cfg->ble_window / 2) : s_cfg->ble_window;
+    // BLE link mode: the same radio also carries the phone link (and Wi-Fi). Scan at most a
+    // quarter of the time, passively (no scan requests: nothing transmitted, nothing revealed),
+    // so connection events and advertising keep their slots. The controller gives connection
+    // events priority over the scan window.
+    const bool link = rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE;
+    if (link) {
+        const uint16_t cap = s_cfg->ble_itvl / 4 < 4 ? 4 : s_cfg->ble_itvl / 4;
+        if (window > cap) {
+            window = cap;
+        }
+    }
+    const bool passive = link || !s_cfg->ble_active;
     uint8_t own_addr_type;
     if (ble_hs_id_infer_auto(0, &own_addr_type) != 0) {
         own_addr_type = BLE_OWN_ADDR_RANDOM;
@@ -124,12 +135,21 @@ static void start_scan(void)
         const struct ble_gap_ext_disc_params p = {
             .itvl = s_cfg->ble_itvl,
             .window = window,
-            .passive = !s_cfg->ble_active,
+            .passive = passive,
         };
-        // duration 0 = forever; no controller duplicate filtering, we dedup
-        // ourselves; 1M PHY only (Coded PHY would halve Wi-Fi air time).
-        rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
-                              gap_cb, NULL);
+        // 1M PHY only (Coded PHY would halve Wi-Fi air time).
+        if (link) {
+            // Link mode: scan 1.2 s of every 1.28 s period with the controller's duplicate
+            // filter reset each period, so each device reaches the host about once a second
+            // (the pipeline merges adverts per second anyway). A crowd would otherwise flood
+            // the host task with reports and it would answer the phone too late.
+            rc = ble_gap_ext_disc(own_addr_type, 120, 1, 2, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
+                                  gap_cb, NULL);
+        } else {
+            // duration 0 = forever; no controller duplicate filtering, we dedup ourselves.
+            rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
+                                  gap_cb, NULL);
+        }
     } else
 #endif
     {
@@ -137,16 +157,18 @@ static void start_scan(void)
             .itvl = s_cfg->ble_itvl,
             .window = window,
             .filter_policy = BLE_HCI_SCAN_FILT_NO_WL,
-            .passive = !s_cfg->ble_active,
-            .filter_duplicates = 0,
+            .passive = passive,
+            // Link mode on a legacy-only chip: controller duplicate filter, so a crowd does not
+            // flood the host (each device then reports once per scan start).
+            .filter_duplicates = link ? 1 : 0,
         };
         rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &p, gap_cb, NULL);
     }
     if (rc != 0) {
         ESP_LOGE(TAG, "scan start failed: %d", rc);
     } else {
-        ESP_LOGI(TAG, "scanning (%s, %s)", s_cfg->ble_extended ? "extended" : "legacy",
-                 s_cfg->ble_active ? "active" : "passive");
+        ESP_LOGI(TAG, "scanning (%s, %s, window %u/%u)", s_cfg->ble_extended ? "extended" : "legacy",
+                 passive ? "passive" : "active", window, s_cfg->ble_itvl);
     }
 }
 
@@ -183,9 +205,9 @@ static void on_sync(void)
 {
     s_synced = true;
     if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
-        // The Bluetooth radio carries the host link: advertise the GATT service, do not scan.
+        // The Bluetooth radio carries the host link: advertise the GATT service, and scan
+        // on a reduced duty cycle next to it (see start_scan).
         rv_link_ble_on_sync();
-        return;
     }
     if (s_want) {
         start_scan();
@@ -230,6 +252,21 @@ void rv_ble_scanner_stop(void)
     s_want = false;
     if (ble_gap_disc_active()) {
         ble_gap_disc_cancel();
+    }
+}
+
+void rv_ble_scanner_hold(bool hold)
+{
+    if (hold == s_hold) {
+        return;
+    }
+    s_hold = hold;
+    if (hold) {
+        if (ble_gap_disc_active()) {
+            ble_gap_disc_cancel();
+        }
+    } else if (s_want && s_synced) {
+        start_scan();
     }
 }
 

@@ -39,7 +39,7 @@ import dev.retrovision.app.data.FamiliarRow
 import dev.retrovision.app.data.toRow
 import dev.retrovision.app.data.toSighting
 import dev.retrovision.app.probe.BleChannel
-import dev.retrovision.app.probe.removeBond
+import dev.retrovision.core.wire.ReconnectPolicy
 import dev.retrovision.app.BleLinkUi
 import dev.retrovision.app.BleStage
 import kotlinx.coroutines.flow.first
@@ -287,8 +287,9 @@ class CollectorService : Service() {
         scope.launch { ble.codedPhy.collect { Collector.phoneCodedPhy.value = it } }
         var probeGoneSince = 0L
         while (scope.isActive) {
-            // A probe on a BLE link does not scan Bluetooth (its radio carries the link): only a probe
-            // that does lets the phone's own scanner rest. A probe behind a relay board does scan.
+            // A probe on a BLE link scans Bluetooth only a quarter of the time (its radio also carries
+            // the link): only a probe that scans fully lets the phone's own scanner rest. A probe
+            // behind a relay board does.
             val streaming = Collector.allSessions().any {
                 val st = it.state.value
                 st.phase == dev.retrovision.app.probe.Phase.STREAMING && st.info?.link != LinkKind.LINK_KIND_BLE
@@ -460,9 +461,11 @@ class CollectorService : Service() {
     }
 
     /**
-     * Wireless link: when the probe is paired for BLE and no cable is connected, find it over BLE
-     * and run the same session on top. USB always wins; this loop stands down whenever the cable is up.
-     * Unverified on hardware; BLE pairing/bonding/MTU vary by phone.
+     * Wireless links. Every paired probe gets its own long-lived loop ([bleProbeLoop]) that keeps
+     * it connected: straight to its known address, with Android's background connect while it is
+     * out of range, and a scan only when the address is unknown. The protocol session runs on top
+     * exactly as over USB. While the probe is on the cable its Bluetooth link stays connected but
+     * idle ("standby"), so unplugging hands over in a couple of seconds.
      */
     private fun bleUi(name: String, f: (BleLinkUi) -> BleLinkUi) {
         synchronized(Collector.bleLinks) {
@@ -483,55 +486,29 @@ class CollectorService : Service() {
     private fun usbProbeName(): String = Collector.usbSession?.state?.value?.info?.linkName.orEmpty()
 
     /**
-     * Wireless links: every paired probe that is not on the cable is looked for with one shared scan
-     * and run in its own session, in parallel. Each runs the same protocol as over USB.
+     * A probe on the cable has not said who it is yet: it may be one of ours, so its Bluetooth
+     * session waits. Only briefly: a probe that never says Hello on the cable must not block.
      */
+    private fun cableHelloPending(): Boolean =
+        Collector.usbConnected && Collector.usbSession?.state?.value?.info == null &&
+            System.currentTimeMillis() - Collector.usbSinceMs < 8_000L
+
+    private fun btAdapterOn(): Boolean =
+        (getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true
+
+    /** Starts and stops one [bleProbeLoop] per paired probe as pairings come and go. */
     private suspend fun bleConnectionLoop() {
         val running = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
-        var failures = 0
         try {
             while (scope.isActive) {
-                val pairs = prefs.blePairs()
-                val names = pairs.map { it.name }.toSet()
-                // Forgotten pairings: drop their state and stop their sessions.
+                val names = prefs.blePairs().map { it.name }.toSet()
+                // Forgotten pairings: drop their state and stop their links.
                 synchronized(Collector.bleLinks) { Collector.bleLinks.value = Collector.bleLinks.value.filterKeys { it in names } }
                 running.keys.filter { it !in names }.forEach { running.remove(it)?.cancel() }
-                if (pairs.isEmpty()) { failures = 0; bleWait(2000); continue }
-
-                // The cable wins for the probe on it; while its Hello is pending, hold off (it may be one of ours).
-                // Only briefly: a probe that never says Hello on the cable must not block the others.
-                if (Collector.usbConnected && Collector.usbSession?.state?.value?.info == null &&
-                    System.currentTimeMillis() - Collector.usbSinceMs < 8_000L) { bleWait(1000); continue }
-                val onCable = if (Collector.usbConnected) usbProbeName() else ""
-                names.forEach { n -> if (n == onCable) bleUi(n) { it.copy(stage = BleStage.CABLE) } }
-                // Paused from Status: drop the link and stop looking for it until resumed.
-                val paused = Collector.blePaused.value
-                running.keys.filter { it in paused }.forEach { running.remove(it)?.cancel() }
-                names.forEach { n -> if (n in paused && n != onCable) bleUi(n) { it.copy(stage = BleStage.PAUSED, connectedSinceMs = 0, obsPerMin = 0) } }
-                if (names.all { it in paused || it == onCable }) { bleWait(2000); continue }
-                if (!hasBlePermissions()) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.NO_PERMISSION) } }; bleWait(5000); continue }
-                val ad = (getSystemService(android.content.Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
-                if (ad?.isEnabled != true) { names.forEach { n -> bleUi(n) { it.copy(stage = BleStage.BT_OFF) } }; bleWait(3000); continue }
-
-                val missing = names.filter { it != onCable && it !in paused && !running.containsKey(it) }.toSet()
-                if (missing.isEmpty()) { bleWait(2000); continue }
-                missing.forEach { n -> bleUi(n) { it.copy(stage = BleStage.SCANNING, attempts = it.attempts + 1) } }
-                val scanner = BleChannel(this)
-                val hit = scanner.scanMany(missing)
-                for (n in missing) {
-                    val found = hit.found[n]
-                    if (found == null) {
-                        bleUi(n) { it.copy(stage = BleStage.RETRY_WAIT, lastError = scanner.lastError.ifEmpty { "“RV-$n” not heard" }, others = hit.others, rssi = 0) }
-                        continue
-                    }
-                    bleUi(n) { it.copy(stage = BleStage.CONNECTING, rssi = found.second, others = hit.others) }
-                    running[n] = scope.launch {
-                        try { connectBle(n, found.first) } finally { running.remove(n) }
-                    }
+                for (n in names) {
+                    if (running[n]?.isActive != true) running[n] = scope.launch { bleProbeLoop(n) }
                 }
-                failures = if (hit.found.isEmpty()) failures + 1 else 0
-                // Back off while the probes are away, so a forgotten one does not drain the battery.
-                bleWait(if (failures < 5) 2000 else 15_000)
+                bleWait(2000)
             }
         } finally {
             running.values.forEach { it.cancel() }
@@ -539,46 +516,120 @@ class CollectorService : Service() {
         }
     }
 
-    /** Consecutive setup failures per probe: past 3 the GATT cache is cleared and the card suggests a power cycle. */
-    private val bleFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
-    private val bondFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    /**
+     * Keeps one paired probe connected for as long as collection runs. [ReconnectPolicy] decides
+     * the next attempt; this carries it out and reports each stage to the UI.
+     */
+    private suspend fun bleProbeLoop(name: String) {
+        val policy = ReconnectPolicy()
+        var hadLink = false
+        var others: Map<String, Int> = emptyMap()
+        while (scope.isActive && prefs.blePairKey(name) != null) {
+            if (name in Collector.blePaused.value) {
+                bleUi(name) { it.copy(stage = BleStage.PAUSED, connectedSinceMs = 0, obsPerMin = 0) }
+                policy.onDropped()
+                bleWait(2000)
+                continue
+            }
+            if (!hasBlePermissions()) { bleUi(name) { it.copy(stage = BleStage.NO_PERMISSION) }; bleWait(5000); continue }
+            if (!btAdapterOn()) { bleUi(name) { it.copy(stage = BleStage.BT_OFF) }; bleWait(3000); continue }
 
-    private suspend fun connectBle(name: String, dev: android.bluetooth.BluetoothDevice) {
-        val fresh = BleChannel(this)
-        val fails = bleFailures[name] ?: 0
-        fresh.clearCache = fails >= 3 && fails % 3 == 0
-        fresh.onStage = { st -> bleUi(name) { it.copy(stage = if (st == "bonding") BleStage.BONDING else BleStage.CONNECTING) } }
-        try {
-            if (!fresh.open(dev)) {
-                val n = (bleFailures[name] ?: 0) + 1
-                bleFailures[name] = n
-                Diag.w("ble", "$name: open failed: ${fresh.lastError}")
-                // A stale bond (the probe forgot it after a reboot, or the phone kept an old one) makes
-                // every setup hang at the encrypted step. Twice in a row: forget it on the phone, so the
-                // next attempt pairs afresh (the probe accepts a repeat pairing).
-                if (fresh.bondProblem || fresh.lastError.contains("status 5") || fresh.lastError.contains("status 15")) {
-                    val bondFails = (bondFailures[name] ?: 0) + 1
-                    bondFailures[name] = bondFails
-                    if (bondFails >= 2) {
-                        bondFailures.remove(name)
-                        val ok = removeBond(dev)
-                        Diag.w("ble", "$name: stale bond suspected, " + if (ok) "forgot it on the phone: pairing again" else "phone refused to forget it")
+            val addr = prefs.bleAddress(name)
+            policy.setAddressKnown(addr.isNotEmpty())
+            val step = policy.next()
+            if (step.repairBond && addr.isNotEmpty()) {
+                // Two encryption failures in a row: one side lost the keys (re-flash, reinstall).
+                // Forget the phone's half; the next connection pairs afresh ("just works", and the
+                // probe deletes its old keys for a repeat pairing).
+                val dev = BleChannel.deviceFor(this, addr)
+                val removed = dev != null && BleChannel.removeBond(dev)
+                Diag.w("ble", "$name: stale Bluetooth pairing, bond removed=$removed")
+                bleUi(name) {
+                    it.copy(lastError = if (removed) Texts.tr("The Bluetooth pairing was stale: pairing again…", "L'abbinamento Bluetooth era scaduto: lo rifaccio…")
+                    else Texts.tr("The Bluetooth pairing is stale: remove “RV-$name” in the phone's Bluetooth settings", "L'abbinamento Bluetooth è scaduto: rimuovi “RV-$name” nelle impostazioni Bluetooth del telefono"))
+                }
+                delay(1500)
+            }
+            if (step.delayMs > 0) {
+                bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT) }
+                bleWait(step.delayMs)
+            }
+            if (cableHelloPending()) { bleWait(1000); continue }
+
+            val device = if (step.mode == ReconnectPolicy.Mode.SCAN) {
+                bleUi(name) { it.copy(stage = BleStage.SCANNING, attempts = it.attempts + 1) }
+                val scanner = BleChannel(this)
+                val hit = scanner.scanMany(setOf(name))
+                others = hit.others
+                val found = hit.found[name]
+                if (found == null) {
+                    policy.onFailure(step.mode, ReconnectPolicy.Failure.NOT_FOUND)
+                    bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = scanner.lastError.ifEmpty { "“RV-$name” not heard" }, others = others, rssi = 0) }
+                    continue
+                }
+                bleUi(name) { it.copy(rssi = found.second, others = others) }
+                prefs.setBleAddress(name, found.first.address)
+                found.first
+            } else {
+                BleChannel.deviceFor(this, addr)
+            }
+            if (device == null) {
+                policy.onFailure(step.mode, ReconnectPolicy.Failure.TRANSIENT)
+                continue
+            }
+
+            val background = step.mode == ReconnectPolicy.Mode.BACKGROUND
+            val ch = BleChannel(this)
+            ch.onStage = { st ->
+                bleUi(name) { it.copy(stage = when (st) { "bonding" -> BleStage.BONDING; "waiting" -> BleStage.AWAY; else -> BleStage.CONNECTING }) }
+            }
+            bleUi(name) { it.copy(stage = if (background) BleStage.AWAY else BleStage.CONNECTING, attempts = if (background) it.attempts else it.attempts + 1) }
+            var interrupted = false
+            val ok = kotlinx.coroutines.coroutineScope {
+                // "Retry now" cuts a background wait short and goes for a direct attempt; pausing
+                // or forgetting the probe abandons it.
+                val k = Collector.bleKick.value
+                val watch = launch {
+                    while (true) {
+                        if (Collector.bleKick.value != k || name in Collector.blePaused.value || prefs.blePairKey(name) == null) {
+                            interrupted = true
+                            ch.close()
+                            break
+                        }
+                        delay(300)
                     }
                 }
-                val hint = if (n >= 6) " — " + Texts.tr("still failing after $n tries: switch the probe off and on (unplug its power for a few seconds)",
-                    "fallisce ancora dopo $n tentativi: spegni e riaccendi la sonda (stacca l'alimentazione per qualche secondo)") else ""
-                bleUi(name) { it.copy(stage = BleStage.RETRY_WAIT, lastError = fresh.lastError + hint) }
-                delay(3000)
-                return
+                try {
+                    ch.open(device, background, if (background) policy.backgroundWindowMs else 10_000L)
+                } finally {
+                    watch.cancel()
+                }
             }
-            bleFailures.remove(name)
-            bondFailures.remove(name)
-            bleUi(name) { it.copy(stage = BleStage.HANDSHAKE, mtu = fresh.currentMtu, lastError = "") }
-            runBleSession(name, fresh)
-            if (fresh.lastError.isNotEmpty()) bleUi(name) { it.copy(lastError = fresh.lastError) }
-        } finally {
-            fresh.close()
-            bleUi(name) { it.copy(stage = if (name in Collector.blePaused.value) BleStage.PAUSED else BleStage.RETRY_WAIT, connectedSinceMs = 0, obsPerMin = 0) }
+            if (!ok) {
+                if (interrupted) { policy.onDropped(); continue }
+                policy.onFailure(step.mode, ch.lastFailure)
+                Diag.w("ble", "$name: ${step.mode.name.lowercase()} attempt failed: ${ch.lastError}")
+                val n = policy.consecutiveFailures
+                val hint = if (!background && n >= 6) " — " + Texts.tr("still failing after $n tries: switch the probe off and on (unplug its power for a few seconds)",
+                    "fallisce ancora dopo $n tentativi: spegni e riaccendi la sonda (stacca l'alimentazione per qualche secondo)") else ""
+                bleUi(name) {
+                    if (background) it.copy(stage = BleStage.AWAY)
+                    else it.copy(stage = BleStage.RETRY_WAIT, lastError = ch.lastError + hint)
+                }
+                continue
+            }
+            if (!device.address.equals(addr, ignoreCase = true)) prefs.setBleAddress(name, device.address)
+            policy.onConnected()
+            val reason = runBleLink(name, ch, countReconnect = hadLink)
+            hadLink = true
+            policy.onDropped()
+            Diag.i("ble", "$name: link ended ($reason)")
+            bleUi(name) {
+                it.copy(
+                    stage = if (name in Collector.blePaused.value) BleStage.PAUSED else BleStage.RETRY_WAIT,
+                    connectedSinceMs = 0, obsPerMin = 0, lastDrop = reason,
+                )
+            }
         }
     }
 
@@ -588,120 +639,165 @@ class CollectorService : Service() {
             androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.BLUETOOTH_SCAN) == android.content.pm.PackageManager.PERMISSION_GRANTED
     }
 
-    private suspend fun runBleSession(pairName: String, channel: BleChannel) {
+    /**
+     * Runs an open Bluetooth link until it drops. While the probe is on the cable the link idles
+     * (standby: no session, no watchdog, a keep-alive byte every 30 s); otherwise the protocol
+     * session runs on it. Returns why the link ended, for the status card and the log.
+     */
+    private suspend fun runBleLink(pairName: String, channel: BleChannel, countReconnect: Boolean): String {
         val name = "BLE: $pairName"
         val key = "ble:$pairName"
-        val transport = object : ProbeTransport {
-            override fun write(data: ByteArray) { channel.write(data) }
-        }
-        val session = ProbeSession(
-            transport, scope, ::onSighting,
-            ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value },
-            channelPlan = { prefs.channelPlan }, pairingKey = { n -> prefs.blePairKey(n) },
-        )
+        val linkStart = System.currentTimeMillis()
         // Notifications arrive on a binder thread: hop onto a worker so decoding never blocks BLE.
         val inbox = java.util.concurrent.ArrayBlockingQueue<ByteArray>(INBOX_CHUNKS)
-        channel.onData = { if (!inbox.offer(it)) Diag.update { d -> d.copy(inboxDrops = d.inboxDrops + 1) } }
-        Collector.addLink(ProbeLinkInfo(key, name, session, usb = false))
+        val current = java.util.concurrent.atomic.AtomicReference<ProbeSession?>(null)
+        channel.onData = { if (current.get() != null && !inbox.offer(it)) Diag.update { d -> d.copy(inboxDrops = d.inboxDrops + 1) } }
         val worker = Thread({
             try {
                 while (!Thread.currentThread().isInterrupted) {
                     val chunk = inbox.poll(500, java.util.concurrent.TimeUnit.MILLISECONDS) ?: continue
-                    runCatching { session.onBytes(chunk) }.onFailure { Diag.e("decode", "ble frame handling failed", it) }
+                    val s = current.get() ?: continue
+                    runCatching { s.onBytes(chunk) }.onFailure { Diag.e("decode", "ble frame handling failed", it) }
                 }
             } catch (_: InterruptedException) {}
         }, "rv-ble-decode-$pairName")
         worker.start()
         val writer = scope.launch { runCatching { channel.writerLoop() } }
-        session.start()
-        Diag.i("ble", "connected: $name")
-        val sessionStart = System.currentTimeMillis()
-        val watcher = scope.launch {
-            val started = System.currentTimeMillis()
-            var phase: dev.retrovision.app.probe.Phase? = null
-            var lastReport = ""
-            var lastRelayReport = ""
-            var n = 0
-            // Data flow, for Status: last observation and the rate over the last minute.
-            var lastTotal = -1L
-            var lastDataMs = 0L
-            val rate = ArrayDeque<Pair<Long, Long>>()
-            var warnedSilent = false
-            while (isActive) {
-                val st = session.state.value
-                val nowMs = System.currentTimeMillis()
-                val total = st.wifiObs + st.bleObs
-                if (total != lastTotal) { if (lastTotal >= 0) lastDataMs = nowMs; lastTotal = total; warnedSilent = false }
-                rate.addLast(nowMs to total)
-                while (rate.size > 1 && nowMs - rate.first().first > 60_000) rate.removeFirst()
-                val span = nowMs - rate.first().first
-                val perMin = if (span >= 5_000) ((total - rate.first().second) * 60_000 / span).toInt() else 0
-                if (st.phase == dev.retrovision.app.probe.Phase.STREAMING && lastDataMs > 0 && nowMs - lastDataMs > SILENT_PROBE_MS && !warnedSilent) {
-                    warnedSilent = true
-                    Diag.w("ble", "$pairName: streaming but no observation for ${(nowMs - lastDataMs) / 1000} s")
-                }
-                if (Collector.session === session) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
-                if (st.bleReport != lastReport && st.bleReport.isNotEmpty()) {
-                    lastReport = st.bleReport
-                    Diag.i("ble", "$pairName: probe says ${st.bleReport}")
-                }
-                if (st.relayReport != lastRelayReport && st.relayReport.isNotEmpty()) {
-                    lastRelayReport = st.relayReport
-                    Diag.i("ble", "$pairName: relay says ${st.relayReport}")
-                }
-                if (st.phase != phase) {
-                    phase = st.phase
-                    Diag.i("ble", "$pairName: phase ${st.phase}" + (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
-                    if (st.phase == dev.retrovision.app.probe.Phase.STREAMING) Collector.reconfigureAll()
-                }
-                if (n++ % 5 == 0) channel.readRssi()
-                val stage = when (st.phase) {
-                    dev.retrovision.app.probe.Phase.STREAMING -> BleStage.STREAMING
-                    dev.retrovision.app.probe.Phase.REJECTED -> BleStage.REJECTED
-                    else -> BleStage.HANDSHAKE
-                }
-                val err = when {
-                    st.phase == dev.retrovision.app.probe.Phase.REJECTED -> st.rejectReason
-                    stage == BleStage.HANDSHAKE && System.currentTimeMillis() - started > 15_000 ->
-                        "Connected, but no handshake after 15 s: the probe may run old firmware or be set up for another phone"
-                    else -> null
-                }
-                bleUi(pairName) {
-                    it.copy(
-                        lastDataMs = if (lastDataMs > 0) lastDataMs else it.lastDataMs, obsPerMin = perMin,
-                        stage = stage, rssi = channel.rssi.takeIf { r -> r != 0 } ?: it.rssi, mtu = channel.currentMtu,
-                        connectedSinceMs = if (stage == BleStage.STREAMING && it.connectedSinceMs == 0L) System.currentTimeMillis() else it.connectedSinceMs,
-                        lastError = err ?: if (stage == BleStage.STREAMING) "" else it.lastError,
-                    )
-                }
-                delay(400)
-            }
-        }
-        var endReason = "service stopping"
-        try {
-            // Ends when the link drops, the probe goes onto the cable, or it is forgotten.
-            while (scope.isActive) {
-                endReason = when {
-                    !channel.connected -> "link lost: ${channel.lastError.ifEmpty { "no reason given" }}"
-                    usbProbeName() == pairName -> "probe moved to the cable"
-                    prefs.blePairKey(pairName) == null -> "pairing forgotten"
-                    pairName in Collector.blePaused.value -> "paused from Status"
-                    (Collector.bleReconnect.value[pairName] ?: 0L) >= sessionStart -> "reconnect asked from Status"
-                    else -> ""
-                }
-                if (endReason.isNotEmpty()) break
-                delay(500)
-                if (session.tick() == ProbeSession.Health.DEAD) { endReason = "no data for 45 s"; break }
-            }
-        } finally {
-            Diag.i("ble", "$pairName: session ended ($endReason)")
-            watcher.cancel()
-            writer.cancel()
-            session.stop()
+
+        fun stopSession() {
+            val s = current.getAndSet(null) ?: return
+            s.stop()
             Collector.removeLink(key)
-            worker.interrupt()
+            inbox.clear()
             Collector.reconfigureAll()
         }
+
+        var reason = ""
+        var started = 0L
+        var graceUntil = 0L
+        var lastKeepAlive = 0L
+        var phase: Phase? = null
+        var streamedOnce = false
+        var n = 0
+        // Data flow, for Status: last observation and the rate over the last minute.
+        var lastTotal = -1L
+        var lastDataMs = 0L
+        val rate = ArrayDeque<Pair<Long, Long>>()
+        var warnedSilent = false
+        var lastReport = ""
+        var lastRelayReport = ""
+        bleUi(pairName) { it.copy(stage = BleStage.HANDSHAKE, mtu = channel.currentMtu, lastError = "") }
+        try {
+            while (scope.isActive) {
+                reason = when {
+                    !channel.connected -> channel.lastError.ifEmpty { "link lost" }
+                    prefs.blePairKey(pairName) == null -> "pairing forgotten"
+                    pairName in Collector.blePaused.value -> "paused from Status"
+                    (Collector.bleReconnect.value[pairName] ?: 0L) >= linkStart -> "reconnect asked from Status"
+                    else -> ""
+                }
+                if (reason.isNotEmpty()) break
+                val now = System.currentTimeMillis()
+                val onCable = Collector.usbConnected && usbProbeName() == pairName
+
+                if (onCable) {
+                    if (current.get() != null) { Diag.i("ble", "$pairName: on the cable, Bluetooth on standby"); stopSession() }
+                    if (now - lastKeepAlive > 30_000) { channel.keepAlive(); lastKeepAlive = now }
+                } else if (current.get() == null && !cableHelloPending()) {
+                    val s = ProbeSession(
+                        object : ProbeTransport { override fun write(data: ByteArray) { channel.write(data) } },
+                        scope, ::onSighting,
+                        ledOn = { Collector.probeLedOn.value }, dataFrames = { Collector.captureDataFrames.value },
+                        channelPlan = { prefs.channelPlan }, pairingKey = { k -> prefs.blePairKey(k) },
+                    )
+                    current.set(s)
+                    Collector.addLink(ProbeLinkInfo(key, name, s, usb = false))
+                    s.start()
+                    started = now
+                    phase = null
+                    lastTotal = -1L
+                    rate.clear()
+                    // Handover from the cable: a probe on a serial bridge (classic ESP32) notices the
+                    // cable is gone only when it stops hearing it (up to ~40 s). Do not reboot it
+                    // for keeping quiet meanwhile.
+                    graceUntil = if (n > 0) now + 45_000 else 0
+                    Diag.i("ble", "connected: $name")
+                }
+
+                val s = current.get()
+                if (s == null) {
+                    bleUi(pairName) {
+                        it.copy(stage = if (onCable) BleStage.STANDBY else BleStage.HANDSHAKE, mtu = channel.currentMtu, phy = channel.phy,
+                            rssi = channel.rssi.takeIf { r -> r != 0 } ?: it.rssi, lastError = "", obsPerMin = 0, connectedSinceMs = 0)
+                    }
+                } else {
+                    val st = s.state.value
+                    val total = st.wifiObs + st.bleObs
+                    if (total != lastTotal) { if (lastTotal >= 0) lastDataMs = now; lastTotal = total; warnedSilent = false }
+                    rate.addLast(now to total)
+                    while (rate.size > 1 && now - rate.first().first > 60_000) rate.removeFirst()
+                    val span = now - rate.first().first
+                    val perMin = if (span >= 5_000) ((total - rate.first().second) * 60_000 / span).toInt() else 0
+                    if (st.phase == Phase.STREAMING && lastDataMs > 0 && now - lastDataMs > SILENT_PROBE_MS && !warnedSilent) {
+                        warnedSilent = true
+                        Diag.w("ble", "$pairName: streaming but no observation for ${(now - lastDataMs) / 1000} s")
+                    }
+                    if (Collector.session === s) Collector.connection.value = ConnectionUi(Link.CONNECTED, name, st)
+                    if (st.bleReport != lastReport && st.bleReport.isNotEmpty()) {
+                        lastReport = st.bleReport
+                        Diag.i("ble", "$pairName: probe says ${st.bleReport}")
+                    }
+                    if (st.relayReport != lastRelayReport && st.relayReport.isNotEmpty()) {
+                        lastRelayReport = st.relayReport
+                        Diag.i("ble", "$pairName: relay says ${st.relayReport}")
+                    }
+                    if (st.phase != phase) {
+                        phase = st.phase
+                        Diag.i("ble", "$pairName: phase ${st.phase}" + (if (st.rejectReason.isNotEmpty()) " · ${st.rejectReason}" else ""))
+                        if (st.phase == Phase.STREAMING) {
+                            channel.relax()
+                            Collector.reconfigureAll()
+                            if (!streamedOnce && countReconnect) bleUi(pairName) { it.copy(reconnects = it.reconnects + 1) }
+                            streamedOnce = true
+                            graceUntil = 0
+                        }
+                    }
+                    if (now >= graceUntil && s.tick() == ProbeSession.Health.DEAD) {
+                        reason = "no data from the probe for 45 s"
+                        Diag.w("ble", "$pairName: $reason: reconnecting")
+                        break
+                    }
+                    val stage = when (st.phase) {
+                        Phase.STREAMING -> BleStage.STREAMING
+                        Phase.REJECTED -> BleStage.REJECTED
+                        else -> BleStage.HANDSHAKE
+                    }
+                    val err = when {
+                        st.phase == Phase.REJECTED -> st.rejectReason
+                        stage == BleStage.HANDSHAKE && now - started > 15_000 && now >= graceUntil ->
+                            "Connected, but no handshake after 15 s: the probe may run old firmware or be set up for another phone"
+                        else -> null
+                    }
+                    bleUi(pairName) {
+                        it.copy(
+                            lastDataMs = if (lastDataMs > 0) lastDataMs else it.lastDataMs, obsPerMin = perMin,
+                            stage = stage, rssi = channel.rssi.takeIf { r -> r != 0 } ?: it.rssi, mtu = channel.currentMtu, phy = channel.phy,
+                            connectedSinceMs = if (stage == BleStage.STREAMING && it.connectedSinceMs == 0L) now else it.connectedSinceMs,
+                            lastError = err ?: if (stage == BleStage.STREAMING) "" else it.lastError,
+                        )
+                    }
+                }
+                if (n++ % 10 == 0) channel.readRssi()
+                delay(500)
+            }
+        } finally {
+            stopSession()
+            writer.cancel()
+            worker.interrupt()
+            channel.close()
+            Diag.i("ble", "$pairName: link closed (${reason.ifEmpty { "service stopping" }})")
+        }
+        return reason.ifEmpty { "service stopping" }
     }
 
     /**
@@ -1403,7 +1499,7 @@ class CollectorService : Service() {
         /** A streaming probe with no observation for this long is flagged on Status. */
         const val SILENT_PROBE_MS = 120_000L
         /** BLE stages during which the BLE loop owns the connection line. */
-        private val BLE_BUSY = setOf(BleStage.CONNECTING, BleStage.BONDING, BleStage.HANDSHAKE, BleStage.STREAMING)
+        private val BLE_BUSY = setOf(BleStage.CONNECTING, BleStage.BONDING, BleStage.HANDSHAKE, BleStage.STREAMING, BleStage.STANDBY)
         const val ACTION_STOP = "dev.retrovision.app.STOP"
         private const val CH_ONGOING = "ongoing"
         private const val CH_ALERTS = "alerts"

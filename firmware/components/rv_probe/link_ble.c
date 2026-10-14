@@ -9,6 +9,7 @@
 // sniffing; the HMAC challenge in Hello/HelloAck (pairing key) decides who gets data.
 #include "link.h"
 #include "link_cfg.h"
+#include "ble_scanner.h"
 
 #include <string.h>
 
@@ -53,6 +54,20 @@ static volatile TaskHandle_t s_host_task;
 static volatile uint32_t s_rx_dropped;
 static volatile int64_t s_conn_since_us;
 static volatile int64_t s_last_rx_us;
+static volatile int64_t s_subscribed_at_us; // when the phone subscribed (0 = not yet)
+static volatile int64_t s_fast_until_us;  // fast advertising until then (after boot or a drop)
+static volatile bool s_adv_fast;          // advertising currently runs at the fast interval
+
+// Advertising: fast for a while after boot or after losing the phone, so it reconnects within a
+// second or two; then slower, which still lets Android's background connect find us in seconds.
+#define ADV_FAST_MS 30000
+#define ADV_FAST_MIN BLE_GAP_ADV_ITVL_MS(40)
+#define ADV_FAST_MAX BLE_GAP_ADV_ITVL_MS(50)
+#define ADV_SLOW_MIN 244   /* 152.5 ms, in 0.625 ms units */
+#define ADV_SLOW_MAX 260   /* 162.5 ms */
+// A connection that never subscribes to notifications is not our app (or a stuck one). The app
+// subscribes after bonding, so this leaves time for a person to accept the pairing prompt.
+#define SUBSCRIBE_DEADLINE_US (45LL * 1000 * 1000)
 
 // Diagnostics, reported to the host over the cable (rv_link_ble_report).
 static volatile bool s_synced;
@@ -209,6 +224,7 @@ void rv_link_ble_register_gatt(void)
 
 static void advertise(void)
 {
+    const bool fast = esp_timer_get_time() < s_fast_until_us;
     struct ble_hs_adv_fields f;
     memset(&f, 0, sizeof f);
     f.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
@@ -233,8 +249,8 @@ static void advertise(void)
     p.own_addr_type = s_own_addr_type;
     p.primary_phy = BLE_HCI_LE_PHY_1M;
     p.secondary_phy = BLE_HCI_LE_PHY_1M;
-    p.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
-    p.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
+    p.itvl_min = fast ? ADV_FAST_MIN : ADV_SLOW_MIN;
+    p.itvl_max = fast ? ADV_FAST_MAX : ADV_SLOW_MAX;
     p.sid = 0;
     if (ble_gap_ext_adv_active(0)) {
         return;
@@ -278,16 +294,17 @@ static void advertise(void)
     memset(&p, 0, sizeof p);
     p.conn_mode = BLE_GAP_CONN_MODE_UND;
     p.disc_mode = BLE_GAP_DISC_MODE_GEN;
-    p.itvl_min = BLE_GAP_ADV_ITVL_MS(200);
-    p.itvl_max = BLE_GAP_ADV_ITVL_MS(300);
+    p.itvl_min = fast ? ADV_FAST_MIN : ADV_SLOW_MIN;
+    p.itvl_max = fast ? ADV_FAST_MAX : ADV_SLOW_MAX;
     int rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &p, gap_event, NULL);
 #endif
     if (rc != 0 && rc != BLE_HS_EALREADY) {
         ESP_LOGE(TAG, "adv start: %d", rc);
         s_adv_step = "fail-start"; s_adv_rc = rc;
     } else {
-        ESP_LOGI(TAG, "advertising as %s", name);
+        ESP_LOGI(TAG, "advertising as %s (%s)", name, fast ? "fast" : "slow");
         s_adv_step = "adv"; s_adv_rc = 0;
+        s_adv_fast = fast;
     }
 }
 
@@ -301,8 +318,19 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             s_mtu = 23;
             rv_link_reset_rx(RV_T_BLE);
             s_conn_since_us = s_last_rx_us = esp_timer_get_time();
+            s_subscribed_at_us = 0;
+            // Answer the phone's setup at once: no scan reports in the way until it subscribed.
+            rv_ble_scanner_hold(true);
             s_conns++;
             ESP_LOGI(TAG, "connected");
+            // Longest link-layer packets (fewer, fuller packets per connection event) and the
+            // 2M PHY (half the air time): both leave more radio time to the Wi-Fi sniffer.
+            // Failures are harmless: the link then stays at the defaults.
+            ble_gap_set_data_len(s_conn, 251, 2120);
+#if CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT
+            ble_gap_set_prefered_le_phy(s_conn, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK,
+                                        BLE_GAP_LE_PHY_CODED_ANY);
+#endif
         } else {
             advertise();
         }
@@ -313,6 +341,8 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_subscribed = false;
         rv_link_reset_rx(RV_T_BLE);
+        s_fast_until_us = esp_timer_get_time() + ADV_FAST_MS * 1000LL;
+        rv_ble_scanner_hold(false);
         advertise();
         return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -323,14 +353,31 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (ev->subscribe.attr_handle == s_tx_handle) {
             s_subscribed = ev->subscribe.cur_notify;
+            s_subscribed_at_us = s_subscribed ? esp_timer_get_time() : 0;
+            if (s_subscribed) {
+                // Ask for 30-50 ms connection events and a 6 s supervision timeout: Wi-Fi
+                // coexistence makes the probe skip some connection events, and the usual
+                // phone default (5 s or less) then drops a link that is actually fine.
+                const struct ble_gap_upd_params up = {
+                    .itvl_min = 24, .itvl_max = 40, .latency = 0,
+                    .supervision_timeout = 600, .min_ce_len = 0, .max_ce_len = 0,
+                };
+                ble_gap_update_params(ev->subscribe.conn_handle, &up);
+            }
         }
         return 0;
     case BLE_GAP_EVENT_MTU:
         s_mtu = ev->mtu.value;
         return 0;
-    case BLE_GAP_EVENT_REPEAT_PAIRING:
-        // The phone forgot the bond (e.g. "forget device"): pair again rather than fail.
+    case BLE_GAP_EVENT_REPEAT_PAIRING: {
+        // The phone forgot the bond (e.g. "forget device", reinstall) and pairs again. The old
+        // keys must be deleted first, or the retry fails the same way every time.
+        struct ble_gap_conn_desc desc;
+        if (ble_gap_conn_find(ev->repeat_pairing.conn_handle, &desc) == 0) {
+            ble_store_util_delete_peer(&desc.peer_id_addr);
+        }
         return BLE_GAP_REPEAT_PAIRING_RETRY;
+    }
     default:
         return 0;
     }
@@ -347,23 +394,42 @@ static bool adv_active(void)
 
 void rv_link_ble_tick(void)
 {
+    // Setup done (subscribed a few seconds ago): scanning resumes next to the link.
+    if (s_subscribed && s_subscribed_at_us && esp_timer_get_time() - s_subscribed_at_us > 3LL * 1000 * 1000) {
+        rv_ble_scanner_hold(false);
+    }
     // Advertising can stop on its own (a failed start, a controller reset, coexistence
     // hiccups): restart it whenever nobody is connected.
-    if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE && !adv_active()) {
-        advertise();
+    if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE) {
+        if (!adv_active()) {
+            advertise();
+        } else if (s_adv_fast && esp_timer_get_time() >= s_fast_until_us) {
+            // Fast window over: restart at the slow interval.
+#if MYNEWT_VAL(BLE_EXT_ADV)
+            ble_gap_ext_adv_stop(0);
+#else
+            ble_gap_adv_stop();
+#endif
+            advertise();
+        }
     }
     // A connection that never subscribes, or that has gone silent (the app time-syncs every
     // 30 s), is dead weight: with one connection allowed it would lock the real phone out.
     const uint16_t conn = s_conn;
     if (conn != BLE_HS_CONN_HANDLE_NONE) {
         const int64_t now = esp_timer_get_time();
-        const bool unsubscribed = !s_subscribed && now - s_conn_since_us > 20LL * 1000 * 1000;
+        const bool unsubscribed = !s_subscribed && now - s_conn_since_us > SUBSCRIBE_DEADLINE_US;
         const bool silent = now - s_last_rx_us > 90LL * 1000 * 1000;
         if (unsubscribed || silent) {
             ESP_LOGW(TAG, "dropping %s connection", unsubscribed ? "unsubscribed" : "silent");
             ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
         }
     }
+}
+
+uint32_t rv_link_ble_conn_count(void)
+{
+    return s_conns;
 }
 
 void rv_link_ble_report(char *buf, size_t cap)
@@ -384,6 +450,7 @@ void rv_link_ble_on_sync(void)
     s_host_task = xTaskGetCurrentTaskHandle(); // on_sync runs in the NimBLE host task
     s_synced = true;
     s_heap_at_sync = esp_get_free_heap_size();
+    s_fast_until_us = esp_timer_get_time() + ADV_FAST_MS * 1000LL;
     if (ble_hs_id_infer_auto(0, &s_own_addr_type) != 0) {
         s_own_addr_type = BLE_OWN_ADDR_PUBLIC;
     }

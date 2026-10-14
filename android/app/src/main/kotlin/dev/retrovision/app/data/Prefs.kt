@@ -138,7 +138,18 @@ class Prefs(ctx: Context) {
         setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
     }
 
+    /**
+     * Bluetooth address the paired probe was last reached at. Reconnecting goes straight to it
+     * (no scan, no scan quota, works with Android's background connect). "" = unknown: scan.
+     */
+    fun bleAddress(name: String): String = p.getString("bleAddr.$name", "") ?: ""
+
+    fun setBleAddress(name: String, address: String) {
+        p.edit().putString("bleAddr.$name", address).apply()
+    }
+
     fun removeBlePair(name: String) {
+        p.edit().remove("bleAddr.$name").apply()
         val all = blePairs().filter { it.name != name }
         setSecret("blePairs", all.joinToString("\n") { "${it.name}:" + android.util.Base64.encodeToString(it.key, android.util.Base64.NO_WRAP) })
     }

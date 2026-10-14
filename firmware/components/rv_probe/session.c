@@ -251,9 +251,6 @@ static retrovision_v1_AckResult apply_config(const retrovision_v1_Config *pb, ch
 {
     rv_cfg_t next;
     retrovision_v1_AckResult r = rv_cfg_from_pb(pb, &next, msg, cap);
-    if (rv_link_cfg()->mode == retrovision_v1_LinkKind_LINK_KIND_BLE) {
-        next.ble_enabled = false; // the Bluetooth radio carries the link, it cannot also scan
-    }
     s_cfg = next;
     rv_capture_start(&s_cfg);
     return r;
@@ -407,6 +404,7 @@ static void session_task(void *arg)
     int64_t last_thermal = 0;
     int thermal = 0;
     int64_t last_ble_report = 0;
+    uint32_t ble_conns = 0;
     bool was_active = false;
     bool led = false;
 
@@ -451,6 +449,20 @@ static void session_task(void *arg)
             usb_gone_since = 0;
         }
         rv_link_set_active(s_link);
+
+        // A new phone connection on the Bluetooth link always starts a fresh handshake. The app
+        // starts a new session on every connection and waits for a Hello; a quick reconnect
+        // (inside the 1 s grace above) used to find us still streaming, and the app then
+        // rebooted the probe to get its Hello.
+        const uint32_t bc = rv_link_ble_conn_count();
+        if (bc != ble_conns) {
+            ble_conns = bc;
+            if (s_link == RV_T_BLE && s_state != ST_HELLO) {
+                ESP_LOGI(TAG, "new Bluetooth connection: handshake again");
+                go_idle(ST_HELLO);
+                last_hello = -HELLO_REJECTED_PERIOD_MS * 1000LL;
+            }
+        }
 
         switch (s_state) {
         case ST_HELLO:

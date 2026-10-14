@@ -66,5 +66,7 @@ void rv_link_ble_on_sync(void);         // NimBLE host synced: start advertising
 int rv_link_ble_rssi(void);
 // Restarts advertising if it stopped while nobody is connected (BLE link mode only).
 void rv_link_ble_tick(void);
+// Connections accepted on the BLE link since boot (a change = a new phone connection).
+uint32_t rv_link_ble_conn_count(void);
 // One-line state of the BLE link for diagnostics.
 void rv_link_ble_report(char *buf, size_t cap);
