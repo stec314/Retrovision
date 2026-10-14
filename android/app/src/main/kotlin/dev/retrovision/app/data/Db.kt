@@ -123,6 +123,67 @@ class FamiliarRow(
     val createdMs: Long,
 )
 
+/**
+ * One device in the archive: a summary kept up to date from every analysis, so the archive can be
+ * listed, filtered and counted without scanning millions of encrypted sightings. Kept as long as
+ * its sightings are (same retention).
+ */
+@Entity(tableName = "catalog", indices = [Index("lastMs"), Index("category")])
+class CatalogRow(
+    @PrimaryKey val entityId: String,
+    /** EntityKind name. */
+    val kind: String,
+    /** DeviceCategory name. */
+    val category: String,
+    /** MacTrust name. */
+    val macTrust: String,
+    /** CatalogFlags bits. */
+    val flags: Int,
+    val bleName: String,
+    /** Networks it announces (access points), newline-separated, at most a few. */
+    val ssids: String,
+    /** Networks it asks for, newline-separated, at most a dozen. */
+    val probed: String,
+    /** Addresses, newline-separated, at most 8 (the first is the main one). */
+    val addresses: String,
+    /** Entity ids its sightings are stored under (merged devices have several), newline-separated. */
+    val members: String,
+    val vendor: String,
+    /** Lower-case text the search box matches. */
+    val search: String,
+    val firstMs: Long,
+    val lastMs: Long,
+    /** Distinct local days it was heard (counted as analyses see it). */
+    val days: Int,
+    val lastDay: Long,
+    val maxRssi: Int,
+    val maxScore: Double,
+    val maxPlaces: Int,
+    /** BLE advert signature, when it has one (for watching a device that rotates its address). */
+    @androidx.room.ColumnInfo(defaultValue = "''") val signature: String = "",
+)
+
+/** A device or name you asked to be told about ("tell me when it comes back"). */
+@Entity(tableName = "watches")
+class WatchRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val label: String,
+    /** Watchlist.Kind name. */
+    val kind: String,
+    val pattern: String,
+    val onReturn: Boolean,
+    val minAbsenceMin: Int,
+    val minRssi: Int,
+    val onAbsence: Boolean,
+    val absenceMin: Int,
+    /** Only alert away from your confirmed routine places. */
+    val awayOnly: Boolean,
+    val enabled: Boolean,
+    val lastHeardMs: Long,
+    val lastAlertMs: Long,
+    val createdMs: Long,
+)
+
 /** One device found by a search over everything stored (not just the analysis window). */
 class DbHit(
     val entityId: String,
@@ -246,6 +307,10 @@ interface AppDao {
     @Query("SELECT timeMs, rssi FROM sightings WHERE entityId = :id ORDER BY timeMs LIMIT :limit")
     suspend fun timesFor(id: String, limit: Int): List<TimeRssi>
 
+    /** Every sighting time of a device stored under several entity ids (a merged device). */
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId IN (:ids) ORDER BY timeMs LIMIT :limit")
+    suspend fun timesForAny(ids: List<String>, limit: Int): List<TimeRssi>
+
     @Query("SELECT * FROM fixes WHERE timeMs BETWEEN :from AND :to ORDER BY ABS(timeMs - :at) LIMIT 1")
     suspend fun fixNear(from: Long, to: Long, at: Long): FixRow?
 
@@ -335,6 +400,9 @@ interface AppDao {
     @Query("SELECT * FROM feedback ORDER BY timeMs DESC")
     fun feedback(): kotlinx.coroutines.flow.Flow<List<FeedbackRow>>
 
+    @Query("SELECT DISTINCT entityId FROM feedback WHERE label = 2")
+    suspend fun suspiciousIds(): List<String>
+
     @Query("SELECT entityId FROM feedback WHERE label = 0 AND timeMs >= :since")
     suspend fun falseAlarmsSince(since: Long): List<String>
 
@@ -349,14 +417,91 @@ interface AppDao {
 
     @Query("DELETE FROM enrichments")
     suspend fun wipeEnrichments()
+
+    // ---- catalog -------------------------------------------------------------------------
+
+    @Query("SELECT * FROM catalog WHERE entityId IN (:ids)")
+    suspend fun catalogRows(ids: List<String>): List<CatalogRow>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putCatalog(rows: List<CatalogRow>)
+
+    /**
+     * The archive: [cats] empty = any category; [flagsAll] = bits that must all be set;
+     * [unreliable] 1 = only addresses that are not stable; [q] = search ("%" = all).
+     */
+    @Query(
+        "SELECT * FROM catalog WHERE (:anyCat = 1 OR category IN (:cats)) AND (flags & :flagsAll) = :flagsAll " +
+            "AND (:unreliable = 0 OR macTrust != 'STABLE') AND search LIKE :q ORDER BY lastMs DESC LIMIT :limit OFFSET :offset",
+    )
+    suspend fun catalogPage(anyCat: Int, cats: List<String>, flagsAll: Int, unreliable: Int, q: String, limit: Int, offset: Int): List<CatalogRow>
+
+    /** Per-category and per-flag counts for the archive filter chips. */
+    @Query("SELECT category, flags, macTrust, COUNT(*) AS n FROM catalog WHERE search LIKE :q GROUP BY category, flags, macTrust")
+    suspend fun catalogCounts(q: String): List<CatalogCount>
+
+    @Query("SELECT COUNT(*) FROM catalog")
+    suspend fun catalogSize(): Int
+
+    @Query("SELECT * FROM catalog WHERE entityId = :id")
+    suspend fun catalogRow(id: String): CatalogRow?
+
+    @Query("DELETE FROM catalog WHERE lastMs < :before")
+    suspend fun pruneCatalog(before: Long): Int
+
+    @Query("DELETE FROM catalog")
+    suspend fun wipeCatalog()
+
+    /** Sighting summary for entities the catalog does not know yet (filling it from old data). */
+    @Query("SELECT MIN(timeMs) FROM sightings")
+    suspend fun oldestSighting(): Long?
+
+    // ---- watchlist -----------------------------------------------------------------------
+
+    @Query("SELECT * FROM watches ORDER BY createdMs DESC")
+    fun watches(): Flow<List<WatchRow>>
+
+    @Query("SELECT * FROM watches")
+    suspend fun watchesNow(): List<WatchRow>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putWatch(row: WatchRow): Long
+
+    @Query("UPDATE watches SET lastHeardMs = :ms WHERE id = :id AND lastHeardMs < :ms")
+    suspend fun setWatchHeard(id: Long, ms: Long)
+
+    @Query("UPDATE watches SET lastAlertMs = :ms WHERE id = :id")
+    suspend fun setWatchAlerted(id: Long, ms: Long)
+
+    @Query("UPDATE watches SET enabled = :on WHERE id = :id")
+    suspend fun setWatchEnabled(id: Long, on: Boolean)
+
+    @Query("DELETE FROM watches WHERE id = :id")
+    suspend fun deleteWatch(id: Long)
+
+    @Query("DELETE FROM watches")
+    suspend fun wipeWatches()
+}
+
+class CatalogCount(val category: String, val flags: Int, val macTrust: String, val n: Int)
+
+/** Bits of [CatalogRow.flags]. */
+object CatalogFlags {
+    const val TRACKER = 1
+    const val DRONE = 2
+    const val NOTABLE = 4
+    const val LINKED = 8
+    const val ALERTED = 16
+    const val SEARCHING = 32
+    const val SUSPICIOUS = 64
 }
 
 @Database(
     entities = [
         SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
-        CompanionRow::class, FeedbackRow::class,
+        CompanionRow::class, FeedbackRow::class, CatalogRow::class, WatchRow::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -411,6 +556,27 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `catalog` (`entityId` TEXT NOT NULL, `kind` TEXT NOT NULL, `category` TEXT NOT NULL, " +
+                        "`macTrust` TEXT NOT NULL, `flags` INTEGER NOT NULL, `bleName` TEXT NOT NULL, `ssids` TEXT NOT NULL, " +
+                        "`probed` TEXT NOT NULL, `addresses` TEXT NOT NULL, `members` TEXT NOT NULL, `vendor` TEXT NOT NULL, " +
+                        "`search` TEXT NOT NULL, `firstMs` INTEGER NOT NULL, `lastMs` INTEGER NOT NULL, `days` INTEGER NOT NULL, " +
+                        "`lastDay` INTEGER NOT NULL, `maxRssi` INTEGER NOT NULL, `maxScore` REAL NOT NULL, `maxPlaces` INTEGER NOT NULL, " +
+                        "`signature` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`entityId`))",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalog_lastMs` ON `catalog` (`lastMs`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalog_category` ON `catalog` (`category`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `watches` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`kind` TEXT NOT NULL, `pattern` TEXT NOT NULL, `onReturn` INTEGER NOT NULL, `minAbsenceMin` INTEGER NOT NULL, " +
+                        "`minRssi` INTEGER NOT NULL, `onAbsence` INTEGER NOT NULL, `absenceMin` INTEGER NOT NULL, `awayOnly` INTEGER NOT NULL, " +
+                        "`enabled` INTEGER NOT NULL, `lastHeardMs` INTEGER NOT NULL, `lastAlertMs` INTEGER NOT NULL, `createdMs` INTEGER NOT NULL)",
+                )
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -423,7 +589,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
         }
     }

@@ -285,6 +285,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var confirmMine by remember { mutableStateOf(false) }
     var muteType by remember { mutableStateOf(false) }
+    var watching by remember { mutableStateOf(false) }
     var showRaw by remember { mutableStateOf(false) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
     val lv = dev.retrovision.core.analysis.Levels.of(r)
@@ -324,6 +325,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
                 ),
             )
+            if (label == 2) dev.retrovision.app.data.Catalog.markSuspicious(app.db.dao(), m)
         }
         Collector.analyzeNow.value = System.nanoTime()
         onClose()
@@ -368,6 +370,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                                 onClose(); MapNav.device.value = r.entityId
                             },
                         )
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Notifications, null) }, Texts.tr("Tell me", "Avvisami")) { watching = true })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Warning, null) }, Texts.tr("Suspicious", "Sospetto"), tint = MaterialTheme.colorScheme.error) { verdict(2) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
@@ -459,6 +462,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     }
     if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
 
+    if (watching) WatchDialog(Texts.entityLabel(r), watchTargets(r), r.lastSeenMs) { watching = false }
     if (muteType) MuteTypeDialog(r, onClose = { muteType = false }, onDone = { muteType = false; onClose() })
 
     if (confirmMine) {
@@ -788,6 +792,13 @@ fun SettingsScreen(modifier: Modifier) {
             ).joinToString(" · "),
         ) { NotificationsSection() }
 
+        val watchRows by remember { app.db.dao().watches() }.collectAsState(initial = emptyList())
+        Expandable(
+            title = Texts.tr("Watchlist", "Lista di controllo"),
+            summary = if (watchRows.isEmpty()) Texts.tr("Nothing watched", "Niente sotto controllo")
+            else Texts.tr("${watchRows.count { it.enabled }} active of ${watchRows.size}", "${watchRows.count { it.enabled }} attive su ${watchRows.size}"),
+        ) { WatchlistSection() }
+
         Expandable(
             title = Texts.tr("My devices, networks and phone", "Miei dispositivi, reti e telefono"),
             summary = Texts.tr(
@@ -1045,7 +1056,8 @@ fun SettingsScreen(modifier: Modifier) {
                     scope.launch {
                         val dao = app.db.dao()
                         dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar(); dao.wipeBaseline()
-                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores()
+                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores(); dao.wipeCatalog(); dao.wipeWatches()
+                        prefs.catalogFilledUntil = 0L
                         dev.retrovision.app.data.SessionRecorder.dir(app).listFiles()?.forEach { it.delete() }
                         prefs.trustedAps = emptySet(); prefs.ownFingerprints = emptySet()
                         prefs.targets = emptySet(); prefs.testFirstAlerts = emptySet()

@@ -588,6 +588,25 @@ All of these are in Settings → Notifications:
 | Drone alerts | Notify when a drone is heard (first time, then at most every 30 min per drone) |
 | Probe disconnected | Notify if a streaming probe drops out for more than 15 s |
 
+## Watchlist: tell me when it comes back
+
+Settings → *Watchlist*, or *Tell me* in a device's detail (and in the archive). A rule follows one of:
+
+| Follows | Good for | Limit |
+|---|---|---|
+| **Address** | Cars, hotspots, routers, tags away from their owner, many wearables | Useless for addresses that rotate (most phones, earbuds): that address will not come back |
+| **Linked device** | What the app tied together (an address and the ones it rotated to) | After a long absence a rotating device usually returns under an address nothing ties to the old one |
+| **Advert** | Bluetooth devices that announce a name: name + coarse advert shape, never the rotating payload | Every device with the same name and shape matches too |
+| **Name** | A Bluetooth name, a network an access point announces, a network a phone asks for. Case and accents ignored; `*` matches anything (`RV-*`) | Phones rarely announce a name; most Wi-Fi phones ask for few networks by name |
+
+When to be told:
+- **Back after N of silence** (10 min to 12 h). A rule made from a device in sight starts its clock at its last sighting, so it does not fire at once; a name typed by hand fires the first time it is heard (*Nearby*).
+- **Signal at least** *in range* (−85 dBm), *near* (−75), *very near* (−65): weaker sightings are ignored, as if it were not there. Signal is only a rough guide to distance.
+- **Only away from my routine places.**
+- **When it is no longer heard** for 2–30 min: for your own things (bag, keys tag, bike). It fires only after the thing was heard since collection started, once, until it is heard again.
+
+The check runs on every sighting as it arrives (seconds, not the minute of an analysis). At most one alert per rule per minute. Alerts follow the notification settings (on/off, quiet hours, silent, discreet; the lock screen shows only "Something to check"). The last 10 events are listed under the rules; when each rule was last heard is saved every minute.
+
 ## Maps (offline)
 
 The map is drawn by **MapLibre Native** (GPU, the renderer behind many maps apps) directly from the offline file: **PMTiles** (vector, OpenStreetMap data via Protomaps) or **MBTiles**. Style, fonts (Noto Sans: Latin, Greek, Cyrillic) and icons are inside the app, and the renderer is marked offline, so **nothing is fetched from the network** and no map server sees where you look. You download the area you need once (menu → *Download the map of this area*), by a bounding-box extract that fetches only its tiles. Vector maps must use the Protomaps schema (the in-app download and the "offline map" workflow do); raster maps are dimmed for night use.
@@ -607,13 +626,19 @@ If one of these is a device of yours (it is with you everywhere, so it looks exa
 - **Session recordings** are **encrypted** (AES-256-GCM in independent chunks, key derived from the database passphrase), so a crash only loses the last seconds and a tampered or reordered file is rejected. Recordings made by older versions are encrypted the first time you open the Sessions screen. If the Keystore is unavailable, the app refuses to record rather than write in clear. **Export writes a plain copy** (so it can be replayed on another phone): it contains other people's device addresses and your track, so treat it like the database. Imports are encrypted on arrival.
 - **Sensitive settings** (your network names, trusted access points, your phone's fingerprint, WiGLE name and token) are **encrypted with a Keystore key**. Values stored in clear by older versions are migrated on first read. Other settings (thresholds, toggles) are plain.
 - **Backup and restore** (Settings → Backup and restore). **Uninstalling deletes everything, including the database key, and nothing can be recovered afterwards.** Updating does not need an uninstall: CI builds share one signing key, so a new APK installs over the old one and keeps the data. A backup is a single file sealed with a password you choose (PBKDF2-HMAC-SHA256, 600 000 rounds → AES-256-GCM in 1 MiB chunks, so tampering, reordering and truncation are detected): the SQLCipher database (still encrypted) with its key, every setting (secrets included), the recordings and optionally the offline maps. Restore checks the file first, asks for confirmation, then restarts the app and swaps the data in before anything opens the database; the secrets are re-sealed with the new install's Keystore. *Automatic backup* writes one every day or week into a folder you pick (e.g. Documents or a cloud-synced folder), keeps the last two, and survives an uninstall; after a reinstall or restore, choose the folder again (Android does not carry folder permissions over). The backup is as strong as its password, and it holds your places, routes and other people's device addresses.
-- **Delete all data** (Settings → Data and privacy) removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, your devices, your network names, trusted access points, your phone's fingerprint, WiGLE credentials, field-test targets, the crash log and the event log. Optionally the offline maps too, since they show which area you use.
+- **Delete all data** (Settings → Data and privacy) removes sightings, fixes, places, baseline, lookups, "is this yours?" suggestions, verdicts, session recordings, the device catalog, the watchlist, your devices, your network names, trusted access points, your phone's fingerprint, WiGLE credentials, field-test targets, the crash log and the event log. Optionally the offline maps too, since they show which area you use.
 - **Retention.** "Is this yours?" suggestions not touched for 30 days are dropped (confirmed ones are kept). Verdicts are kept for 180 days.
 - **Legal.** Passive radio reception is regulated differently by country. MAC addresses and SSIDs are personal data under GDPR. Keep data local and short-lived, and never publish captures.
 
 ## Devices: live window or full archive
 
-The Devices tab shows either the **live window** (the analysis, with scores and filters) or the **archive**: every device still stored, up to the retention period, newest first (at most 1000; type to search address, network names and Bluetooth names). Matching is on raw bytes, in three case forms (as typed, lower case, first letter capital). An archived device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If it is in the current window, *Open full details* opens the usual detail. The archive is a full scan of an encrypted table: seconds on a small database, longer on millions of rows. *Compact / Cards* switches between one-line rows and cards, in both modes.
+The Devices tab shows either the **live window** (the analysis, with scores and filters) or the **archive**: every device stored, up to the retention period, newest first.
+
+**The archive is a catalog.** Every analysis writes a one-line summary of each device it heard (category, flags, names, networks it asks for, addresses, vendor, first and last time, days heard, strongest signal, highest score, most places), so the archive lists, filters and counts in milliseconds and has no size limit (200 at a time, *Show more*). It has the **same filter chips as the live window** (trackers, drones, notable, phones, networks, vehicles, wearables, other Bluetooth, linked addresses, unreliable MAC, looking for a network) plus two that only make sense over time: **Alerted** (it raised an alert at least once) and **Marked suspicious** (your verdict). The search box matches names, networks, vendor and addresses in any notation. After an update, data stored before the catalog existed is catalogued once in the background, oldest first, in 6-hour slices (the archive says *still cataloguing older data* meanwhile). A catalog entry is deleted with its sightings at the end of the retention period.
+
+**Deep search.** With a query, *Search the raw sightings too* scans every stored sighting for the text in raw bytes (three case forms): slow on millions of rows, but it finds what no analysis named.
+
+An archived device opens on every stretch it was heard (gaps over 10 minutes split them), each with your GPS position at that time; tap one to see it on the Places map. If it is in the current window, *Open full details* opens the usual detail. *Tell me when it comes back* adds it to the watchlist. *Compact / Cards* switches between one-line rows and cards, in both modes.
 
 **Device detail.** Actions come first, as a grid of icon tiles: *Find it*, the online lookups (WiGLE, BeaconDB; one identifier per tap), *In Places* (for devices that may follow you), *Suspicious*, *False alarm*, *It's mine* (with confirmation) and *Test target*. Then the key numbers, the map (for devices that may follow you), *Why* (open), and folded: times heard, identity and addresses, networks, and what each action does.
 

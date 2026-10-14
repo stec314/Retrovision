@@ -92,6 +92,34 @@ object Texts {
         dev.retrovision.core.analysis.WifiThreats.Kind.BLE_SPAM -> tr("Bluetooth spam attack", "Attacco BLE spam")
     }
 
+    /** "3 h 20 min", "45 min", "2 d 4 h": an absence in words. */
+    fun span(ms: Long): String {
+        val m = ms / 60_000L
+        return when {
+            m < 1 -> tr("under a minute", "meno di un minuto")
+            m < 60 -> "$m min"
+            m < 48 * 60 -> "${m / 60} h" + (if (m % 60 != 0L) " ${m % 60} min" else "")
+            else -> "${m / 1440} " + tr("d", "g") + (if ((m % 1440) / 60 != 0L) " ${(m % 1440) / 60} h" else "")
+        }
+    }
+
+    /** Title and text of a watchlist notification. */
+    fun watchEvent(label: String, e: dev.retrovision.core.watch.Watchlist.Event): Pair<String, String> {
+        val sig = if (e.rssi != 0) " · ${e.rssi} dBm" else ""
+        val what = if (e.what.isNotBlank() && e.what != label) " (${e.what})" else ""
+        return when (e.kind) {
+            dev.retrovision.core.watch.Watchlist.EventKind.RETURNED ->
+                tr("Back nearby: $label", "Di nuovo vicino: $label") to
+                    tr("Heard again after ${span(e.absentMs)}$what$sig.", "Sentito di nuovo dopo ${span(e.absentMs)}$what$sig.")
+            dev.retrovision.core.watch.Watchlist.EventKind.FIRST_SEEN ->
+                tr("Nearby: $label", "Vicino: $label") to
+                    tr("Heard for the first time$what$sig.", "Sentito per la prima volta$what$sig.")
+            dev.retrovision.core.watch.Watchlist.EventKind.GONE ->
+                tr("Not heard any more: $label", "Non si sente più: $label") to
+                    tr("Silent for ${span(e.absentMs)}. Did you leave it behind?", "Silenzioso da ${span(e.absentMs)}. L'hai dimenticato?")
+        }
+    }
+
     fun drone(d: dev.retrovision.core.analysis.Drones.Drone): String {
         val ago = ((System.currentTimeMillis() - d.lastMs) / 60_000).let { if (it < 1) tr("now", "ora") else tr("$it min ago", "$it min fa") }
         if (!d.remoteId) return tr(

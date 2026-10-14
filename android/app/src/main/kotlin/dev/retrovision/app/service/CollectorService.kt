@@ -23,6 +23,7 @@ import androidx.core.content.ContextCompat
 import com.hoho.android.usbserial.util.SerialInputOutputManager
 import dev.retrovision.app.AnalysisLoad
 import dev.retrovision.app.Collector
+import dev.retrovision.app.WatchEventUi
 import dev.retrovision.app.Diag
 import dev.retrovision.app.RadarBlip
 import dev.retrovision.app.RadarFrame
@@ -129,6 +130,8 @@ class CollectorService : Service() {
         Collector.reconfigureAll = ::reconfigureAll
         Collector.blePaused.value = prefs.blePaused
         scope.launch { bleConnectionLoop() }
+        scope.launch { watchLoop() }
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) { fillCatalog() }
         scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             while (isActive) {
                 delay(3_600_000L)
@@ -382,6 +385,10 @@ class CollectorService : Service() {
             }
         }
         val res = synchronized(resolver) { resolver.resolve(s) }
+        if (!watchEmpty) {
+            val ev = synchronized(watch) { watch.onSighting(s, res.entityId) }
+            if (ev.isNotEmpty()) scope.launch { ev.forEach { onWatchEvent(it) } }
+        }
         if (s.rssi != 0 && res.entityId in Collector.findTarget) Collector.findSamples.tryEmit(s.timeMs to s.rssi)
         if (s.rssi != 0) {
             val fix = Collector.location.value
@@ -1093,6 +1100,12 @@ class CollectorService : Service() {
         learnBaseline(result, now)
         learnCompanions(result, now)
         recordFieldTest(result, now)
+        // Device catalog (the archive): every device heard since the last update.
+        runCatching {
+            val n = dev.retrovision.app.data.Catalog.update(dao, result, catalogSince - 120_000L, dao.suspiciousIds().toSet())
+            catalogSince = now
+            if (n > 5000) Diag.i("catalog", "$n devices catalogued")
+        }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it; Diag.e("catalog", "update failed", it) }
 
         // Attack and drone detection need every frame (deauth counts, drone tracks): a short,
         // unthinned window, small by construction.
@@ -1165,6 +1178,7 @@ class CollectorService : Service() {
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
         dao.pruneSightings(cutoff)
+        dao.pruneCatalog(cutoff)
         // Fixes are kept longer than sightings: learning routine places needs weeks, not days.
         dao.pruneFixes(minOf(cutoff, now - 30L * 24 * 3600_000L))
         dao.pruneCompanions(now - 30L * 24 * 3600_000L)
@@ -1178,6 +1192,115 @@ class CollectorService : Service() {
 
     private var lastLearn = 0L
     private var warmedLookbackMs = -1L
+    /** Devices heard since then are written to the catalog by the next analysis. */
+    private var catalogSince = 0L
+
+    /**
+     * Catalogues sightings stored before the catalog existed (or before this install's catalog
+     * caught up), oldest first, in 6-hour slices analysed like the live window. Runs once, in the
+     * background, and resumes where it stopped.
+     */
+    private suspend fun fillCatalog() {
+        val dao = app.db.dao()
+        delay(20_000) // let the live window load first
+        val prefs = app.prefs
+        val now = System.currentTimeMillis()
+        val until = now - prefs.lookbackMin * 60_000L // the live analyses cover the rest
+        var from = maxOf(prefs.catalogFilledUntil, dao.oldestSighting() ?: return, now - prefs.retentionDays * 24L * 3600_000L)
+        if (from >= until) return
+        val slice = 6 * 3600_000L
+        val suspicious = dao.suspiciousIds().toSet()
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        var total = 0
+        Diag.i("catalog", "cataloguing stored data from ${java.util.Date(from)}")
+        while (scope.isActive && from < until) {
+            val to = minOf(from + slice, until)
+            val rows = dao.sightingsThinned(from, to, WINDOW_BUCKET_MS, MAX_ANALYSIS_ROWS)
+            if (rows.isNotEmpty()) {
+                val cfg = AnalysisConfig(lookbackMs = to - from, maxFixAccuracyM = prefs.maxFixAccuracyM.toDouble(), maxReports = prefs.maxReports)
+                val result = kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    Analyzer(cfg).analyze(
+                        to, rows.asReversed().map { EntitySighting(it.entityId, it.toSighting()) },
+                        dao.fixesBetween(from, to).map { it.toFix() },
+                    )
+                }
+                total += dev.retrovision.app.data.Catalog.update(dao, result, 0L, suspicious)
+            }
+            prefs.catalogFilledUntil = to
+            from = to
+            delay(2_000) // a background job: leave the phone cool
+        }
+        Diag.i("catalog", "stored data catalogued: $total entries in ${(android.os.SystemClock.elapsedRealtime() - t0) / 1000} s")
+    }
+
+    // ---- watchlist ---------------------------------------------------------------
+
+    private val watch = dev.retrovision.core.watch.Watchlist.Engine(emptyList())
+    @Volatile private var watchEmpty = true
+    @Volatile private var watchRows: Map<Long, dev.retrovision.app.data.WatchRow> = emptyMap()
+
+    private fun dev.retrovision.app.data.WatchRow.toRule() = dev.retrovision.core.watch.Watchlist.Rule(
+        id = id, label = label,
+        kind = runCatching { dev.retrovision.core.watch.Watchlist.Kind.valueOf(kind) }.getOrDefault(dev.retrovision.core.watch.Watchlist.Kind.NAME),
+        pattern = pattern, onReturn = onReturn, minAbsenceMs = minAbsenceMin * 60_000L, minRssi = minRssi,
+        onAbsence = onAbsence, absenceMs = absenceMin * 60_000L, enabled = enabled, lastHeardMs = lastHeardMs,
+    )
+
+    /** Keeps the engine in step with the stored rules, checks absences, saves when each was last heard. */
+    private suspend fun watchLoop() {
+        val dao = app.db.dao()
+        scope.launch {
+            dao.watches().collect { rows ->
+                watchRows = rows.associateBy { it.id }
+                synchronized(watch) { watch.update(rows.map { it.toRule() }); watchEmpty = watch.isEmpty }
+            }
+        }
+        var lastSave = 0L
+        while (scope.isActive) {
+            delay(10_000)
+            val now = System.currentTimeMillis()
+            val gone = synchronized(watch) { watch.tick(now) }
+            gone.forEach { onWatchEvent(it) }
+            if (now - lastSave >= 60_000L) {
+                lastSave = now
+                val heard = synchronized(watch) { watch.lastHeard() }
+                for ((id, ms) in heard) if (ms > 0 && (watchRows[id]?.lastHeardMs ?: 0L) < ms) runCatching { dao.setWatchHeard(id, ms) }
+            }
+        }
+    }
+
+    private suspend fun onWatchEvent(e: dev.retrovision.core.watch.Watchlist.Event) {
+        val row = watchRows[e.rule.id] ?: return
+        val now = System.currentTimeMillis()
+        Diag.i("watch", "${e.kind.name.lowercase()}: ${row.label}")
+        Collector.watchEvents.value = (listOf(WatchEventUi(row.id, row.label, e.kind, e.timeMs, e.rssi, e.absentMs, e.what)) + Collector.watchEvents.value).take(50)
+        if (!prefs.alertsEnabled || inQuietHours(now)) return
+        if (row.awayOnly && e.kind != dev.retrovision.core.watch.Watchlist.EventKind.GONE) {
+            val here = Collector.location.value
+            val atRoutine = here != null && app.db.dao().familiarNow().map { it.toModel() }.any {
+                it.state == dev.retrovision.core.analysis.FamiliarPlace.State.CONFIRMED && it.contains(here.lat, here.lon)
+            }
+            if (atRoutine) return
+        }
+        // One alert per rule per minute at most (a crowd of matching names arrives at once).
+        if (now - row.lastAlertMs < 60_000L) return
+        runCatching { app.db.dao().setWatchAlerted(row.id, now) }
+        notifyWatch(row, e)
+    }
+
+    private fun notifyWatch(row: dev.retrovision.app.data.WatchRow, e: dev.retrovision.core.watch.Watchlist.Event) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val (title, text) = Texts.watchEvent(row.label, e)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+        ).build()
+        nm.notify(("w" + row.id).hashCode(), n)
+    }
 
     /** Local calendar day of [ms] (days since the epoch, in this phone's time zone). */
     private fun localDay(ms: Long): Long = (ms + java.util.TimeZone.getDefault().getOffset(ms)) / 86_400_000L

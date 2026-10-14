@@ -3,6 +3,8 @@
 package dev.retrovision.app.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,7 +15,9 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +37,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import dev.retrovision.app.Collector
 import dev.retrovision.app.RetrovisionApp
+import dev.retrovision.app.data.Catalog
+import dev.retrovision.app.data.CatalogCount
+import dev.retrovision.app.data.CatalogFlags
+import dev.retrovision.app.data.CatalogRow
 import dev.retrovision.app.data.DbHit
 import dev.retrovision.core.identity.AdvertisementInfo
 import kotlinx.coroutines.Dispatchers
@@ -48,12 +56,12 @@ private const val MAX_TIMES = 50_000
 private class Stretch(val fromMs: Long, val toMs: Long, val n: Int, val maxRssi: Int, val lat: Double?, val lon: Double?)
 
 /**
- * The full archive: every device still stored (up to the retention period), not only the analysis
- * window, filtered by [query] (address, network names, Bluetooth names). A full scan of an encrypted
- * table, so it waits for a pause in typing and shows progress.
+ * Deep search: a full scan of every stored sighting for [query] in raw bytes (address, network
+ * names, Bluetooth adverts). Slow on large databases; the catalog ([ArchivePane]) is the fast path,
+ * this finds what the analyses never named.
  */
 @Composable
-fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) {
+fun RawSearchPane(query: String, compact: Boolean, modifier: Modifier = Modifier) {
     val app = RetrovisionApp.instance
     var hits by remember { mutableStateOf<List<DbHit>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -126,12 +134,12 @@ fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) 
             }
         }
     }
-    open?.let { h -> ArchiveDetailDialog(h) { open = null } }
+    open?.let { h -> ArchiveDetailDialog(ArchiveItem.of(h)) { open = null } }
 }
 
 /** One archived device: every stretch it was heard, with where you were. */
 @Composable
-private fun ArchiveDetailDialog(h: DbHit, onClose: () -> Unit) {
+internal fun ArchiveDetailDialog(h: ArchiveItem, onClose: () -> Unit) {
     var report by remember { mutableStateOf<dev.retrovision.core.analysis.EntityReport?>(null) }
     FullScreenDialog(onDismiss = onClose) {
         Column(Modifier.fillMaxSize()) {
@@ -155,7 +163,7 @@ private fun hitLabel(h: DbHit): String {
 
 /** Every stretch in which one device was heard, over all stored data, with where you were. */
 @Composable
-private fun HitDetail(h: DbHit, onOpenReport: (dev.retrovision.core.analysis.EntityReport) -> Unit) {
+private fun HitDetail(h: ArchiveItem, onOpenReport: (dev.retrovision.core.analysis.EntityReport) -> Unit) {
     val app = RetrovisionApp.instance
     var stretches by remember(h.entityId) { mutableStateOf<List<Stretch>?>(null) }
     var cut by remember(h.entityId) { mutableStateOf(false) }
@@ -167,7 +175,7 @@ private fun HitDetail(h: DbHit, onOpenReport: (dev.retrovision.core.analysis.Ent
     LaunchedEffect(h.entityId) {
         stretches = withContext(Dispatchers.IO) {
             val dao = app.db.dao()
-            val times = dao.timesFor(h.entityId, MAX_TIMES)
+            val times = if (h.ids.size <= 1) dao.timesFor(h.entityId, MAX_TIMES) else dao.timesForAny(h.ids, MAX_TIMES)
             cut = times.size >= MAX_TIMES
             val out = ArrayList<Stretch>()
             var i = 0
@@ -186,13 +194,13 @@ private fun HitDetail(h: DbHit, onOpenReport: (dev.retrovision.core.analysis.Ent
     }
 
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(hitLabel(h), style = MaterialTheme.typography.titleMedium)
-        Text(
-            "${h.entityId} · ${h.days} " + Texts.tr("day(s)", "giorni") + " · ${h.n} " + Texts.tr("sightings", "rilevazioni"),
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        var watching by remember { mutableStateOf(false) }
+        Text(h.title, style = MaterialTheme.typography.titleMedium)
+        h.lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        if (h.targets.isNotEmpty()) OutlinedButton(onClick = { watching = true }) { Text(Texts.tr("Tell me when it comes back", "Avvisami quando torna")) }
+        if (watching) WatchDialog(h.title, h.targets, h.lastMs) { watching = false }
         // In the current analysis window: the full report (evidence, verdict, lookups) is one tap away.
-        val live = Collector.analysis.value?.entities?.firstOrNull { it.entityId == h.entityId || h.entityId in it.memberIds }
+        val live = Collector.analysis.value?.entities?.firstOrNull { it.entityId == h.entityId || h.entityId in it.memberIds || it.memberIds.any { m -> m in h.ids } }
         if (live != null) OutlinedButton(onClick = { onOpenReport(live) }) { Text(Texts.tr("Open full details", "Apri i dettagli completi")) }
         else if (System.currentTimeMillis() - h.lastMs < app.prefs.lookbackMin * 60_000L) {
             OutlinedButton(enabled = !opening, onClick = {
@@ -231,4 +239,194 @@ private fun HitDetail(h: DbHit, onOpenReport: (dev.retrovision.core.analysis.Ent
             }
         }
     }
+}
+
+/** One device as the archive detail shows it, from the catalog or from a deep search hit. */
+internal class ArchiveItem(
+    val entityId: String,
+    /** Entity ids its sightings are stored under. */
+    val ids: List<String>,
+    val title: String,
+    val lines: List<String>,
+    val lastMs: Long,
+    /** Ways to watch it ("tell me when it comes back"); empty = not offered. */
+    val targets: List<WatchTarget>,
+) {
+    companion object {
+        fun of(h: DbHit) = ArchiveItem(
+            h.entityId, listOf(h.entityId), hitLabel(h),
+            listOf("${h.entityId} · ${h.days} " + Texts.tr("day(s)", "giorni") + " · ${h.n} " + Texts.tr("sightings", "rilevazioni")),
+            h.lastMs,
+            watchTargets(h.entityId, listOf(h.entityId.substringAfter(':')), stable = false, linked = false, signature = null, name = null),
+        )
+
+        fun of(c: CatalogRow): ArchiveItem {
+            val fmt = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+            val addrs = c.addresses.split('\n').filter { it.isNotBlank() }
+            val members = c.members.split('\n').filter { it.isNotBlank() }.ifEmpty { listOf(c.entityId) }
+            val ssid = c.ssids.substringBefore('\n').takeIf { c.kind == "WIFI_AP" && it.isNotBlank() }
+            return ArchiveItem(
+                c.entityId, (members + c.entityId).distinct(), catalogTitle(c),
+                listOfNotNull(
+                    catalogCategory(c) + (if (c.vendor.isNotBlank()) " · " + c.vendor else "") + flagText(c.flags),
+                    "${c.days} " + Texts.tr("day(s)", "giorni") + " · max ${c.maxRssi} dBm" +
+                        (if (c.maxPlaces > 0) " · " + Texts.tr("places ", "luoghi ") + c.maxPlaces else "") +
+                        (if (c.maxScore >= 0.3) " · score %.2f".format(c.maxScore) else ""),
+                    fmt.format(Date(c.firstMs)) + " → " + fmt.format(Date(c.lastMs)),
+                    addrs.joinToString(" · ").takeIf { it.isNotBlank() },
+                    c.probed.takeIf { it.isNotBlank() }?.let { Texts.tr("Asks for: ", "Cerca: ") + it.replace("\n", ", ") },
+                ),
+                c.lastMs,
+                watchTargets(c.entityId, addrs, c.macTrust == "STABLE", addrs.size > 1 || members.size > 1, c.signature.ifBlank { null }, c.bleName.ifBlank { null } ?: ssid),
+            )
+        }
+    }
+}
+
+private fun catalogCategory(c: CatalogRow): String =
+    runCatching { dev.retrovision.core.identity.DeviceCategory.valueOf(c.category) }.getOrNull()?.let { CategoryUi.icon(it) + " " + CategoryUi.label(it) } ?: c.category
+
+private fun catalogTitle(c: CatalogRow): String {
+    val addr = c.addresses.substringBefore('\n')
+    val name = when {
+        c.bleName.isNotBlank() -> "“${c.bleName}”"
+        c.kind == "WIFI_AP" -> c.ssids.substringBefore('\n').ifBlank { Texts.tr("(hidden network)", "(rete nascosta)") }
+        c.kind == "WIFI_CLIENT" -> Texts.tr("Wi-Fi device", "Dispositivo Wi-Fi")
+        else -> Texts.tr("Bluetooth device", "Dispositivo Bluetooth")
+    }
+    return "$name · $addr"
+}
+
+private fun flagText(f: Int): String = buildString {
+    if ((f and CatalogFlags.ALERTED) != 0) append(" · ⚠ " + Texts.tr("alerted", "ha dato allerta"))
+    if ((f and CatalogFlags.SUSPICIOUS) != 0) append(" · " + Texts.tr("suspicious", "sospetto"))
+    if ((f and CatalogFlags.NOTABLE) != 0) append(" · 👁")
+    if ((f and CatalogFlags.TRACKER) != 0) append(" · 🏷")
+    if ((f and CatalogFlags.DRONE) != 0) append(" · 🛸")
+}
+
+/** Archive filter chips: the live window's, plus two that only make sense over time. */
+internal enum class ArchiveFilter(val emoji: String, val en: String, val itText: String, val cats: List<String> = emptyList(), val flags: Int = 0, val unreliable: Boolean = false) {
+    ALL("", "All", "Tutti"),
+    ALERTED("⚠", "Alerted", "Hanno dato allerta", flags = CatalogFlags.ALERTED),
+    SUSPICIOUS("❗", "Marked suspicious", "Segnati sospetti", flags = CatalogFlags.SUSPICIOUS),
+    SEARCHING("🔍", "Looking for a network", "Cercano una rete", flags = CatalogFlags.SEARCHING),
+    TRACKERS("🏷", "Trackers", "Tracker", flags = CatalogFlags.TRACKER),
+    DRONES("🛸", "Drones", "Droni", flags = CatalogFlags.DRONE),
+    NOTABLE("👁", "Notable", "Notevoli", flags = CatalogFlags.NOTABLE),
+    PHONES("📱", "Phones & PCs", "Telefoni e PC", listOf("PHONE", "COMPUTER", "WIFI_CLIENT")),
+    NETWORKS("📶", "Networks & hotspots", "Reti e hotspot", listOf("ROUTER", "HOTSPOT", "WIFI_DIRECT")),
+    VEHICLES("🚗", "Vehicles & cameras", "Veicoli e camere", listOf("VEHICLE", "CAMERA")),
+    WEARABLES("⌚", "Wearables & audio", "Indossabili e audio", listOf("WATCH", "AUDIO", "HEALTH")),
+    OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", listOf("TV", "INPUT", "HOME", "BEACON", "BLE_OTHER")),
+    LINKED("🔗", "Linked addresses", "Indirizzi collegati", flags = CatalogFlags.LINKED),
+    RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", unreliable = true),
+    ;
+
+    val label: String get() = Texts.tr(en, itText)
+
+    fun matches(c: CatalogCount): Boolean =
+        (cats.isEmpty() || c.category in cats) && (c.flags and flags) == flags && (!unreliable || c.macTrust != "STABLE")
+}
+
+private const val PAGE = 200
+
+/**
+ * The archive: every device stored (up to the retention period), from the catalog. Listed,
+ * filtered and counted like the live window; a deep search over raw sightings is one tap away for
+ * what the analyses never named.
+ */
+@Composable
+fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) {
+    val app = RetrovisionApp.instance
+    var filter by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(ArchiveFilter.ALL) }
+    var limit by remember(query, filter) { mutableStateOf(PAGE) }
+    var rows by remember { mutableStateOf<List<CatalogRow>?>(null) }
+    var counts by remember { mutableStateOf<Map<ArchiveFilter, Int>>(emptyMap()) }
+    var size by remember { mutableStateOf(0) }
+    var raw by remember(query) { mutableStateOf(false) }
+    var open by remember { mutableStateOf<ArchiveItem?>(null) }
+    val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT) }
+    val filledUntil = app.prefs.catalogFilledUntil
+
+    LaunchedEffect(query, filter, limit) {
+        kotlinx.coroutines.delay(250)
+        val q = Catalog.likeQuery(query)
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val dao = app.db.dao()
+                val page = dao.catalogPage(
+                    anyCat = if (filter.cats.isEmpty()) 1 else 0, cats = filter.cats, flagsAll = filter.flags,
+                    unreliable = if (filter.unreliable) 1 else 0, q = q, limit = limit, offset = 0,
+                )
+                val c = dao.catalogCounts(q)
+                Triple(page, ArchiveFilter.entries.associateWith { f -> c.filter { f.matches(it) }.sumOf { it.n } }, dao.catalogSize())
+            }
+        }.onSuccess { (p, c, n) -> rows = p; counts = c; size = n }.onFailure { rows = emptyList() }
+    }
+
+    if (raw) {
+        Column(modifier) {
+            TextButton(onClick = { raw = false }) { Text(Texts.tr("‹ Back to the catalog", "‹ Torna al catalogo")) }
+            RawSearchPane(query, compact, Modifier.fillMaxSize())
+        }
+        return
+    }
+
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ArchiveFilter.entries.forEach { f ->
+                val n = counts[f] ?: 0
+                if (n == 0 && f != ArchiveFilter.ALL && f != filter) return@forEach
+                FilterChip(selected = filter == f, onClick = { filter = f }, label = { Text((if (f.emoji.isNotEmpty()) f.emoji + " " else "") + f.label + " $n") })
+            }
+        }
+        val list = rows
+        if (list == null) LinearProgressIndicator(Modifier.fillMaxWidth())
+        else {
+            val total = counts[filter] ?: list.size
+            Text(
+                Texts.tr("$total of $size devices in ${app.prefs.retentionDays} days", "$total di $size dispositivi in ${app.prefs.retentionDays} giorni") +
+                    if (filledUntil == 0L || System.currentTimeMillis() - filledUntil > app.prefs.lookbackMin * 60_000L + 3_600_000L) Texts.tr(" · still cataloguing older data", " · sto ancora catalogando i dati più vecchi") else "",
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 8.dp)) {
+                items(list, key = { it.entityId }) { c ->
+                    val cat = runCatching { dev.retrovision.core.identity.DeviceCategory.valueOf(c.category) }.getOrNull()
+                    if (compact) {
+                        Row(
+                            Modifier.fillMaxWidth().clickable { open = ArchiveItem.of(c) }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(cat?.let { CategoryUi.icon(it) } ?: "•", modifier = Modifier.padding(start = 4.dp))
+                            Text(catalogTitle(c), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if ((c.flags and (CatalogFlags.ALERTED or CatalogFlags.SUSPICIOUS)) != 0) Text("⚠", color = MaterialTheme.colorScheme.error)
+                            Text("${c.days} " + Texts.tr("d", "g"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        Panel(onClick = { open = ArchiveItem.of(c) }) {
+                            Text(catalogTitle(c), style = MaterialTheme.typography.titleSmall, maxLines = 1)
+                            Text(
+                                catalogCategory(c) + (if (c.vendor.isNotBlank()) " · " + c.vendor else "") + flagText(c.flags),
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+                            )
+                            Text(
+                                "${c.days} " + Texts.tr("day(s)", "giorni") + " · max ${c.maxRssi} dBm · " + fmt.format(Date(c.firstMs)) + " → " + fmt.format(Date(c.lastMs)),
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (list.size >= limit) item(key = "more") {
+                    OutlinedButton(onClick = { limit += PAGE }, modifier = Modifier.fillMaxWidth()) { Text(Texts.tr("Show more", "Mostra altri")) }
+                }
+                if (query.isNotBlank()) item(key = "raw") {
+                    TextButton(onClick = { raw = true }) {
+                        Text(Texts.tr("Search the raw sightings too (slow)", "Cerca anche negli avvistamenti grezzi (lento)"))
+                    }
+                }
+            }
+        }
+    }
+    open?.let { h -> ArchiveDetailDialog(h) { open = null } }
 }

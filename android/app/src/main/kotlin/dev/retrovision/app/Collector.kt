@@ -90,6 +90,17 @@ data class BleLinkUi(
     val phy: String = "",
 )
 
+/** One watchlist event, for the Watchlist screen (most recent first). */
+class WatchEventUi(
+    val ruleId: Long,
+    val label: String,
+    val kind: dev.retrovision.core.watch.Watchlist.EventKind,
+    val timeMs: Long,
+    val rssi: Int,
+    val absentMs: Long,
+    val what: String,
+)
+
 /** One live probe link. [label] is what the UI shows ("USB JTAG…", "BLE: probe-ab12cd"). */
 class ProbeLinkInfo(val key: String, val label: String, val session: ProbeSession, val usb: Boolean, val sinceMs: Long = System.currentTimeMillis())
 
@@ -127,6 +138,8 @@ object Collector {
     val bleLinks = MutableStateFlow<Map<String, BleLinkUi>>(emptyMap())
     /** Bumped by the UI ("Retry now") to cut the wait between attempts. */
     val bleKick = MutableStateFlow(0L)
+    /** Watchlist events since collection started (newest first, at most 50). */
+    val watchEvents = MutableStateFlow<List<WatchEventUi>>(emptyList())
     /** Paired probes you paused from Status: not looked for, their link dropped. Saved in settings. */
     val blePaused = MutableStateFlow<Set<String>>(emptySet())
     /** Per probe: when you asked to drop and reopen its link (Status → Reconnect). */

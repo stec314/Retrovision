@@ -164,6 +164,14 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("blePaused", emptySet())?.toSet() ?: emptySet()
         set(v) = p.edit().putStringSet("blePaused", v).apply()
 
+    /**
+     * The device catalog was filled from stored sightings up to this time (0 = not yet). Older data
+     * is catalogued once in the background after an update; newer data by every analysis.
+     */
+    var catalogFilledUntil: Long
+        get() = p.getLong("catalogFilledUntil", 0L)
+        set(v) = p.edit().putLong("catalogFilledUntil", v).apply()
+
     /** Split the Wi-Fi channels between probes when several stream at once. */
     var splitChannels: Boolean
         get() = p.getBoolean("splitChannels", true)
