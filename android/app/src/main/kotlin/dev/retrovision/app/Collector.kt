@@ -58,7 +58,13 @@ data class RadarBlip(
 data class RadarFrame(val blips: List<RadarBlip> = emptyList(), val movedM: Double = 0.0, val ts: Long = 0L)
 
 /** Where the wireless (BLE) probe link stands, for the Settings status card. */
-enum class BleStage { OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT, PAUSED }
+enum class BleStage {
+    OFF, CABLE, STOPPED, NO_PERMISSION, BT_OFF, SCANNING, BONDING, CONNECTING, HANDSHAKE, STREAMING, REJECTED, RETRY_WAIT, PAUSED,
+    /** On the cable, with the Bluetooth link already connected: unplugging hands over at once. */
+    STANDBY,
+    /** Out of range: Android reconnects by itself as soon as the probe is heard again. */
+    AWAY,
+}
 
 data class BleLinkUi(
     val stage: BleStage = BleStage.OFF,
@@ -76,6 +82,12 @@ data class BleLinkUi(
     val lastDataMs: Long = 0,
     /** Observations per minute over the last minute while streaming. */
     val obsPerMin: Int = 0,
+    /** Times the link came back by itself after dropping, since collection started. */
+    val reconnects: Int = 0,
+    /** Why the last established link ended ("" = none yet). */
+    val lastDrop: String = "",
+    /** Radio PHY of the open link ("2M" halves air time), "" if unknown. */
+    val phy: String = "",
 )
 
 /** One live probe link. [label] is what the UI shows ("USB JTAG…", "BLE: probe-ab12cd"). */
