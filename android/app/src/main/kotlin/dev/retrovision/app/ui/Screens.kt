@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.Edit
@@ -370,7 +371,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                                 onClose(); MapNav.device.value = r.entityId
                             },
                         )
-                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Refresh, null) }, Texts.tr("Tell me", "Avvisami")) { watching = true })
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Notifications, null) }, Texts.tr("Tell me", "Avvisami")) { watching = true })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Warning, null) }, Texts.tr("Suspicious", "Sospetto"), tint = MaterialTheme.colorScheme.error) { verdict(2) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
