@@ -10,3 +10,6 @@ void rv_ble_scanner_start(const rv_cfg_t *cfg);
 void rv_ble_scanner_stop(void);
 // 0 normal, 1 half scan window, 2 no scanning: called by the session on die temperature.
 void rv_ble_scanner_set_throttle(int level);
+// BLE link mode: hold scanning while a phone connection is being set up (MTU, discovery,
+// pairing, subscription), so the host task answers the phone at once. Safe from any task.
+void rv_ble_scanner_hold(bool hold);

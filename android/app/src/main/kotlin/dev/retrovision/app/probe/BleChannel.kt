@@ -344,14 +344,20 @@ class BleChannel(private val ctx: Context) {
             runCatching { g.setPreferredPhy(BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_OPTION_NO_PREFERRED) }
         }
 
-        if (!discover()) {
+        val found = discover()
+        if (found == null) {
+            // No answer to discovery: the probe is busy or the link is bad. Not a cache problem,
+            // and refreshing the cache now makes some phones (Samsung) drop the link: just retry.
             if (disconnectStatus >= 0) return failDropped()
+            return fail(ReconnectPolicy.Failure.TRANSIENT, "the probe did not answer service discovery")
+        }
+        if (!found) {
             // A re-flashed probe can change its attribute table while the phone keeps the old one
             // cached for the bond: refresh the cache and look again before giving up.
             Diag.w("ble", "service not found, refreshing the GATT cache")
             refreshCache(g)
             delay(300)
-            if (!discover()) {
+            if (discover() != true) {
                 if (disconnectStatus >= 0) return failDropped()
                 return fail(ReconnectPolicy.Failure.NO_SERVICE, "probe service not found: old firmware, or the probe is not set up for Bluetooth")
             }
@@ -388,8 +394,9 @@ class BleChannel(private val ctx: Context) {
         return true
     }
 
-    private suspend fun discover(): Boolean {
-        if (op(OpKind.DISCOVER, 15_000) { it.discoverServices() } != BluetoothGatt.GATT_SUCCESS) return false
+    /** true = service found, false = discovery answered without it, null = no answer. */
+    private suspend fun discover(): Boolean? {
+        if (op(OpKind.DISCOVER, 15_000) { it.discoverServices() } != BluetoothGatt.GATT_SUCCESS) return null
         val svc = gatt?.getService(SVC) ?: return false
         return svc.getCharacteristic(RX) != null && svc.getCharacteristic(TX) != null
     }

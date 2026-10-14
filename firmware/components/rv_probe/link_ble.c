@@ -9,6 +9,7 @@
 // sniffing; the HMAC challenge in Hello/HelloAck (pairing key) decides who gets data.
 #include "link.h"
 #include "link_cfg.h"
+#include "ble_scanner.h"
 
 #include <string.h>
 
@@ -53,6 +54,7 @@ static volatile TaskHandle_t s_host_task;
 static volatile uint32_t s_rx_dropped;
 static volatile int64_t s_conn_since_us;
 static volatile int64_t s_last_rx_us;
+static volatile int64_t s_subscribed_at_us; // when the phone subscribed (0 = not yet)
 static volatile int64_t s_fast_until_us;  // fast advertising until then (after boot or a drop)
 static volatile bool s_adv_fast;          // advertising currently runs at the fast interval
 
@@ -316,6 +318,9 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
             s_mtu = 23;
             rv_link_reset_rx(RV_T_BLE);
             s_conn_since_us = s_last_rx_us = esp_timer_get_time();
+            s_subscribed_at_us = 0;
+            // Answer the phone's setup at once: no scan reports in the way until it subscribed.
+            rv_ble_scanner_hold(true);
             s_conns++;
             ESP_LOGI(TAG, "connected");
             // Longest link-layer packets (fewer, fuller packets per connection event) and the
@@ -337,6 +342,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         s_subscribed = false;
         rv_link_reset_rx(RV_T_BLE);
         s_fast_until_us = esp_timer_get_time() + ADV_FAST_MS * 1000LL;
+        rv_ble_scanner_hold(false);
         advertise();
         return 0;
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -347,6 +353,7 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (ev->subscribe.attr_handle == s_tx_handle) {
             s_subscribed = ev->subscribe.cur_notify;
+            s_subscribed_at_us = s_subscribed ? esp_timer_get_time() : 0;
             if (s_subscribed) {
                 // Ask for 30-50 ms connection events and a 6 s supervision timeout: Wi-Fi
                 // coexistence makes the probe skip some connection events, and the usual
@@ -387,6 +394,10 @@ static bool adv_active(void)
 
 void rv_link_ble_tick(void)
 {
+    // Setup done (subscribed a few seconds ago): scanning resumes next to the link.
+    if (s_subscribed && s_subscribed_at_us && esp_timer_get_time() - s_subscribed_at_us > 3LL * 1000 * 1000) {
+        rv_ble_scanner_hold(false);
+    }
     // Advertising can stop on its own (a failed start, a controller reset, coexistence
     // hiccups): restart it whenever nobody is connected.
     if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE) {

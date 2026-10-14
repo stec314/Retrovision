@@ -104,10 +104,12 @@ static void on_ext(const struct ble_gap_ext_disc_desc *d)
 
 // Thermal throttle: 0 normal, 1 half the scan window, 2 no BLE scanning (Wi-Fi keeps going).
 static volatile int s_throttle;
+// Held while a phone connection is being set up (BLE link mode).
+static volatile bool s_hold;
 
 static void start_scan(void)
 {
-    if (s_throttle >= 2) {
+    if (s_throttle >= 2 || s_hold) {
         return;
     }
     uint16_t window = s_throttle == 1 ? (uint16_t)(s_cfg->ble_window / 2 < 4 ? 4 : s_cfg->ble_window / 2) : s_cfg->ble_window;
@@ -135,10 +137,19 @@ static void start_scan(void)
             .window = window,
             .passive = passive,
         };
-        // duration 0 = forever; no controller duplicate filtering, we dedup
-        // ourselves; 1M PHY only (Coded PHY would halve Wi-Fi air time).
-        rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
-                              gap_cb, NULL);
+        // 1M PHY only (Coded PHY would halve Wi-Fi air time).
+        if (link) {
+            // Link mode: scan 1.2 s of every 1.28 s period with the controller's duplicate
+            // filter reset each period, so each device reaches the host about once a second
+            // (the pipeline merges adverts per second anyway). A crowd would otherwise flood
+            // the host task with reports and it would answer the phone too late.
+            rc = ble_gap_ext_disc(own_addr_type, 120, 1, 2, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
+                                  gap_cb, NULL);
+        } else {
+            // duration 0 = forever; no controller duplicate filtering, we dedup ourselves.
+            rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, BLE_HCI_SCAN_FILT_NO_WL, 0, &p, NULL,
+                                  gap_cb, NULL);
+        }
     } else
 #endif
     {
@@ -147,7 +158,9 @@ static void start_scan(void)
             .window = window,
             .filter_policy = BLE_HCI_SCAN_FILT_NO_WL,
             .passive = passive,
-            .filter_duplicates = 0,
+            // Link mode on a legacy-only chip: controller duplicate filter, so a crowd does not
+            // flood the host (each device then reports once per scan start).
+            .filter_duplicates = link ? 1 : 0,
         };
         rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &p, gap_cb, NULL);
     }
@@ -239,6 +252,21 @@ void rv_ble_scanner_stop(void)
     s_want = false;
     if (ble_gap_disc_active()) {
         ble_gap_disc_cancel();
+    }
+}
+
+void rv_ble_scanner_hold(bool hold)
+{
+    if (hold == s_hold) {
+        return;
+    }
+    s_hold = hold;
+    if (hold) {
+        if (ble_gap_disc_active()) {
+            ble_gap_disc_cancel();
+        }
+    } else if (s_want && s_synced) {
+        start_scan();
     }
 }
 
