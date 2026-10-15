@@ -484,6 +484,41 @@ interface AppDao {
     )
     suspend fun entitiesBetween(from: Long, to: Long): List<EntityHeard>
 
+    // ---- charts ---------------------------------------------------------------------------
+
+    /** When any of [ids] was heard between two times, one row per [bucketMs]. */
+    @Query(
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE entityId IN (:ids) AND timeMs >= :from AND timeMs < :to GROUP BY timeMs / :bucketMs ORDER BY t0 LIMIT :limit",
+    )
+    suspend fun heardBucketsBetween(ids: List<String>, from: Long, to: Long, bucketMs: Long, limit: Int): List<HeardRow>
+
+    /** Signal of any of [ids] between two times. */
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId IN (:ids) AND timeMs >= :from AND timeMs < :to AND rssi != 0 ORDER BY timeMs LIMIT :limit")
+    suspend fun signalBetween(ids: List<String>, from: Long, to: Long, limit: Int): List<TimeRssi>
+
+    /**
+     * What the receivers were doing, per [bucketMs]: any sighting from a probe, any from the phone.
+     * Sampled ([stride]) for long spans: a listening probe hears dozens of frames a minute.
+     */
+    @Query(
+        "SELECT (timeMs / :bucketMs) AS k, MAX(CASE WHEN source != 'phone' THEN 1 ELSE 0 END) AS probe, " +
+            "MAX(CASE WHEN source = 'phone' THEN 1 ELSE 0 END) AS phone FROM sightings " +
+            "WHERE timeMs >= :from AND timeMs < :to AND (id % :stride) = 0 GROUP BY k",
+    )
+    suspend fun receiverBuckets(from: Long, to: Long, bucketMs: Long, stride: Int): List<ReceiverBucket>
+
+    @Query("SELECT (timeMs / :bucketMs) AS k, MIN(accuracyM) AS acc FROM fixes WHERE timeMs >= :from AND timeMs < :to GROUP BY k")
+    suspend fun fixBuckets(from: Long, to: Long, bucketMs: Long): List<FixBucket>
+
+    /** Devices worth a lane or a row: flagged ([mask]) and heard since [since], highest score first. */
+    @Query("SELECT * FROM catalog WHERE lastMs >= :since AND (flags & :mask) != 0 ORDER BY maxScore DESC, lastMs DESC LIMIT :limit")
+    suspend fun catalogFlagged(since: Long, mask: Int, limit: Int): List<CatalogRow>
+
+    /** Devices heard at the most places, for the places matrix. */
+    @Query("SELECT * FROM catalog WHERE lastMs >= :since AND maxPlaces >= :minPlaces AND category != 'ROUTER' ORDER BY maxPlaces DESC, days DESC LIMIT :limit")
+    suspend fun catalogMultiPlace(since: Long, minPlaces: Int, limit: Int): List<CatalogRow>
+
     // ---- kept devices --------------------------------------------------------------------
 
     @Query("SELECT * FROM pins ORDER BY createdMs DESC")
@@ -537,6 +572,10 @@ interface AppDao {
     @Query("DELETE FROM watches")
     suspend fun wipeWatches()
 }
+
+class ReceiverBucket(val k: Long, val probe: Int, val phone: Int)
+
+class FixBucket(val k: Long, val acc: Float)
 
 class EntityHeard(val entityId: String, val n: Int, val firstMs: Long, val lastMs: Long, val maxRssi: Int)
 

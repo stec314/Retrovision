@@ -27,6 +27,8 @@ object EvidencePdf {
         val facts: List<String>,
         val reasons: List<String>,
         val stretches: List<Stretch>,
+        /** Signal and your movement over the last hours it was heard (two charts, one time axis). */
+        val signal: ChartsData.Signal? = null,
     )
 
     private const val W = 595
@@ -121,6 +123,39 @@ object EvidencePdf {
             pts.forEach { c.drawCircle(px(it), py(it), 2.2f, dot) }
             c.drawText("%.0f m".format(spanM), M + box + 8, y + box, body)
             y += box + 8
+        }
+
+        val sg = input.signal
+        if (sg != null && sg.rssi.isNotEmpty()) {
+            y += 6f
+            line("Its signal and your movement, last hours before its last sighting (same time axis)", head, 4f)
+            val w = W - 2 * M
+            val tf0 = DateFormat.getTimeInstance(DateFormat.SHORT)
+            fun xs(t: Long) = M + ((t - sg.fromMs).toFloat() / (sg.toMs - sg.fromMs).coerceAtLeast(1)) * w
+            val grid = Paint().apply { color = Color.LTGRAY; strokeWidth = 0.4f }
+            val ink = Paint().apply { color = Color.rgb(60, 60, 140); isAntiAlias = true; strokeWidth = 1.2f }
+            // Signal, -100 (bottom) to -30 dBm (top).
+            need(110f)
+            var c = page!!.canvas
+            val h1 = 90f
+            for (v in listOf(-30, -65, -100)) { val yy = y + h1 * (-30 - v) / 70f; c.drawLine(M, yy, M + w, yy, grid); c.drawText("$v dBm", M + w - 40, yy - 2, mono) }
+            for ((t, r) in sg.rssi) c.drawCircle(xs(t), y + h1 * (-30 - r.coerceIn(-100, -30)) / 70f, 1.4f, ink)
+            y += h1 + 8f
+            // Distance travelled since the start of the span.
+            need(80f)
+            c = page!!.canvas
+            val h2 = 60f
+            val maxM = sg.travelled.maxOfOrNull { it.second }?.coerceAtLeast(100.0) ?: 100.0
+            c.drawLine(M, y + h2, M + w, y + h2, grid)
+            var px = -1f; var py = -1f
+            for ((t, m) in sg.travelled) {
+                val xx = xs(t); val yy = y + h2 - (m / maxM).toFloat() * h2
+                if (px >= 0) c.drawLine(px, py, xx, yy, ink)
+                px = xx; py = yy
+            }
+            c.drawText("distance you moved, max " + (if (maxM >= 1000) "%.1f km".format(maxM / 1000) else "${maxM.toInt()} m"), M, y + 8, mono)
+            y += h2 + 4f
+            line(tf0.format(Date(sg.fromMs)) + " → " + tf0.format(Date(sg.toMs)) + ". Steady signal while the distance climbs: it moved with you.", body)
         }
 
         y += 6f

@@ -204,12 +204,14 @@ private fun HitDetail(h: ArchiveItem, onOpenReport: (dev.retrovision.core.analys
             if (uri == null) return@rememberLauncherForActivityResult
             scope.launch(Dispatchers.IO) {
                 val live = Collector.analysis.value?.entities?.firstOrNull { it.entityId == h.entityId || it.memberIds.any { m -> m in h.ids } }
+                val signal = runCatching { dev.retrovision.app.data.ChartsData.signal(app.db.dao(), h.ids, h.lastMs - 6 * 3_600_000L, h.lastMs + 5 * 60_000L) }.getOrNull()
                 runCatching {
                     dev.retrovision.app.data.EvidencePdf.write(
                         ctx, uri,
                         dev.retrovision.app.data.EvidencePdf.Input(
                             h.title, h.ids, h.lines, live?.reasons?.map { Texts.reason(it) }.orEmpty(),
                             list.map { dev.retrovision.app.data.EvidencePdf.Stretch(it.fromMs, it.toMs, it.n, it.maxRssi, it.lat, it.lon) },
+                            signal,
                         ),
                         runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty(),
                     )
@@ -248,6 +250,10 @@ private fun HitDetail(h: ArchiveItem, onOpenReport: (dev.retrovision.core.analys
                 }
             }) { Text(Texts.tr("Analyse", "Analizza")) }
         }
+        Expandable(
+            Texts.tr("Charts", "Grafici"),
+            summary = Texts.tr("Signal and your movement · when it is around", "Segnale e tuoi spostamenti · quando c'è"),
+        ) { DeviceChartsSection(h.ids, h.lastMs) }
         Overline(Texts.tr("When and where", "Quando e dove"))
         val list = stretches
         if (list == null) LinearProgressIndicator(Modifier.fillMaxWidth())

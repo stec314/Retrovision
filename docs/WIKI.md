@@ -598,6 +598,20 @@ Where you see it: the 👥 **Moving together** filter in Devices shows **one car
 
 This is not scored: being in a group is how people and cars are, not a threat. The score has its own, stricter rule near the alert threshold (*Moves together with N other devices*). Use it to understand what you see: if one member of a group alerts, the others are probably the same person.
 
+## Charts
+
+Five views, each answering a question a map cannot. They follow one rule: one y-axis per chart (two measures = two charts on the same time axis), magnitudes in one colour from light to dark with a scale, red only for flagged devices and always with ⚠.
+
+**Device timeline** (Places). One row per device: the flagged ones (alerts, score of *some signs* or more, devices marked suspicious or that alerted in the period) and the members of their groups, at most 16. A mark wherever it was heard over 6 h, 24 h or 7 days. Behind every row, your stays: grey at routine places, tinted elsewhere; the top row (*You*) shows them alone. How to read it: a neighbour lights up only in the grey bands; a device sharing your route lights up once; **a device that follows you lights up in tinted bands at different places**. Tap a name to open it.
+
+**Listening** (under the timeline). Three strips: the probe heard anything, the phone's Bluetooth heard anything, a GPS fix within your accuracy limit. Where a strip is blank nothing could have been heard (probe unplugged, collection stopped) or placed: a device missing there is unknown, not absent. Probe and phone activity are read from what they stored (sampled over long spans), so a probe that heard nothing at all in a very quiet place also shows blank.
+
+**Signal and your movement** (device detail and archive detail, *Charts*). Two charts on one time axis, up to its last sighting (1–24 h): its signal (−100 to −30 dBm), and the distance you had moved. Steady signal while the distance climbs: it travels with you. Signal fading as you go: you left it behind. The evidence file includes the same two charts for the last 6 hours.
+
+**When it is around** (same place). A weekday × hour grid over every stored sighting: how many days it was heard in each hour (darker = more; tap a cell for the number). The same hours every week is a routine: a commuter, a colleague, a neighbour. Needs a week or more of data to mean anything.
+
+**Devices × places** (Places). Rows: devices heard at several places, plus flagged, grouped and network-knowing ones (at most 30). Columns: your routine places (days heard there) and *Elsewhere* (distinct ~200 m spots outside them), over 7, 14 or 30 days. A row lit in several unrelated columns is worth a look; one lit only at home is a neighbour.
+
 ## Who was there
 
 Places → *Who was there*. Put a **stay** of the timeline or a **routine place** into slot A or B (the A / B buttons on each row), then: *Who was at A*, *At B*, or **In both**. A stay is its time span; a place is every time you were within its radius over the last 1–30 days (from your GPS track, one fix per 30 s, ±2 min). The list shows every device heard then, most heard first, with alerts and suspicious ones marked; your own devices are left out. Tap one for its archive entry.

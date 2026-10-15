@@ -426,6 +426,11 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     AssociationsPanel(r) { other = it }
 
                     Expandable(
+                        Texts.tr("Charts", "Grafici"),
+                        summary = Texts.tr("Signal and your movement · when it is around", "Segnale e tuoi spostamenti · quando c'è"),
+                    ) { DeviceChartsSection((r.memberIds + r.entityId).toList(), r.lastSeenMs) }
+
+                    Expandable(
                         Texts.tr("Why", "Perché"),
                         summary = r.reasons.firstOrNull()?.let { Texts.reason(it) },
                         initiallyOpen = true,

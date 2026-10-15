@@ -329,6 +329,16 @@ fun PlacesScreen(modifier: Modifier) {
             }
         }
 
+        Expandable(
+            title = Texts.tr("Device timeline", "Cronologia dispositivi"),
+            summary = Texts.tr("Flagged devices over time, against your stays, with when you were listening", "I dispositivi segnalati nel tempo, sulle tue soste, con quando eri in ascolto"),
+        ) { DeviceTimelineSection() }
+
+        Expandable(
+            title = Texts.tr("Devices × places", "Dispositivi × luoghi"),
+            summary = Texts.tr("Which devices turn up at which of your places", "Quali dispositivi compaiono in quali dei tuoi luoghi"),
+        ) { PlacesMatrixSection() }
+
         val slotA by WhoSlots.a.collectAsState()
         val slotB by WhoSlots.b.collectAsState()
         Expandable(
