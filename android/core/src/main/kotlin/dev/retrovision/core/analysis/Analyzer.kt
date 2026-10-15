@@ -392,7 +392,12 @@ class AnalysisResult(
     val routineOnlyIds: List<String> = emptyList(),
     /** Entities trimmed from [entities], kept as searchable stubs. */
     val others: List<EntityStub> = emptyList(),
+    /** Devices that move together (same places, same times), largest overlap first. */
+    val coTravel: List<CoTravel.Group> = emptyList(),
 ) {
+    /** Entity id -> its co-travel group, for the device detail and the filters. */
+    val groupOf: Map<String, CoTravel.Group> by lazy { coTravel.flatMap { g -> g.members.map { it to g } }.toMap() }
+
     /** Computed once: the UI reads this on every redraw, over tens of thousands of entities. */
     val alerts: List<EntityReport> by lazy { entities.filter { it.alert } }
 }
@@ -493,7 +498,15 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             others = ordered.drop(n).map { EntityStub.of(it) }
             ordered.take(n).sortedWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         }
-        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly, others)
+        // Devices that move together, over every device (kept or trimmed), fixed ones left out.
+        val coTravel = CoTravel.find(
+            reports.filter { r ->
+                r.category != dev.retrovision.core.identity.DeviceCategory.ROUTER &&
+                    !(r.kind == EntityKind.WIFI_AP && r.mobileAp == null) &&
+                    r.reasons.none { it is Reason.StaysPut || it is Reason.OneAreaOnly }
+            }.map { CoTravel.Input(it.entityId, it.visits) },
+        )
+        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly, others, coTravel)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {

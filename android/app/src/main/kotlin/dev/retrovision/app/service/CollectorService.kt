@@ -1175,6 +1175,44 @@ class CollectorService : Service() {
             // One summary notification per analysis, not one per device (field: five in a few minutes).
             if (fresh.isNotEmpty()) notifySummary(shown, fresh)
         }
+        if (prefs.alertsEnabled && !inQuietHours(now)) {
+            // A device that is not your phone asked for one of your networks away from home: it has
+            // been connected to your Wi-Fi (a guest, an ex, a technician). Only once your phone is
+            // identified, or your own phone would be the first to trigger it.
+            if (prefs.alertKnowsMyNetwork && prefs.ownFingerprints.isNotEmpty()) {
+                for (r in result.entities) {
+                    val probe = r.reasons.firstOrNull { it is dev.retrovision.core.analysis.Reason.ProbesForYourNetwork } as? dev.retrovision.core.analysis.Reason.ProbesForYourNetwork ?: continue
+                    val key = "net:" + r.entityId
+                    if (r.memberIds.any { it in snoozed }) continue
+                    val last = notifiedAt[key]
+                    if (last == null || now - last > 24 * 3600_000L) {
+                        notifiedAt[key] = now
+                        notifySimple(key, Texts.tr("A device knows your network", "Un dispositivo conosce la tua rete"),
+                            Texts.tr(
+                                "${Texts.entityLabel(r)} asked for “${probe.ssids.joinToString("”, “")}” away from your routine places. It has been connected to your Wi-Fi before.",
+                                "${Texts.entityLabel(r)} ha cercato “${probe.ssids.joinToString("”, “")}” lontano dai tuoi luoghi abituali. In passato si è collegato alla tua Wi-Fi.",
+                            ))
+                    }
+                }
+            }
+            if (prefs.alertStakeout && now - lastStakeoutCheck > 15 * 60_000L) {
+                lastStakeoutCheck = now
+                val today = localDay(now)
+                val start = prefs.baselineStartDay
+                if (start != 0L && today >= start + 7) {
+                    val done = prefs.stakeoutNotified
+                    val fresh = dao.newAtRoutineNow(maxOf(today - 14, start + 7), 2).filter { it.entityId !in done }
+                    if (fresh.isNotEmpty()) {
+                        prefs.stakeoutNotified = (done + fresh.map { it.entityId }).toList().takeLast(500).toSet()
+                        notifySimple("stakeout", Texts.tr("New near your routine places", "Nuovi vicino ai tuoi luoghi abituali"),
+                            Texts.tr(
+                                "${fresh.size} device(s) first seen there recently came back on several days: " + fresh.take(3).joinToString { it.label.ifBlank { it.entityId } },
+                                "${fresh.size} dispositivi visti lì da poco sono tornati in più giorni: " + fresh.take(3).joinToString { it.label.ifBlank { it.entityId } },
+                            ))
+                    }
+                }
+            }
+        }
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
         // Devices you marked suspicious (pins) are kept past the retention period.
@@ -1197,6 +1235,7 @@ class CollectorService : Service() {
     }
 
     private var lastLearn = 0L
+    private var lastStakeoutCheck = 0L
     private var lastFixPrune = 0L
     private var warmedLookbackMs = -1L
     /** Devices heard since then are written to the catalog by the next analysis. */
@@ -1525,6 +1564,19 @@ class CollectorService : Service() {
             .setAutoCancel(true)
         ).build()
         nm.notify(("d" + d.key).hashCode(), n)
+    }
+
+    private fun notifySimple(key: String, title: String, text: String) {
+        val nm = getSystemService(NotificationManager::class.java)
+        val n = hideOnLockScreen(NotificationCompat.Builder(this, if (prefs.alertSilent) CH_ALERTS_SILENT else CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(contentIntent())
+            .setAutoCancel(true)
+        ).build()
+        nm.notify(key.hashCode(), n)
     }
 
     private fun notifyThreat(th: dev.retrovision.core.analysis.WifiThreats.Threat) {

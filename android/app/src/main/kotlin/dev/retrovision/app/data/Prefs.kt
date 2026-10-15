@@ -164,6 +164,21 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("blePaused", emptySet())?.toSet() ?: emptySet()
         set(v) = p.edit().putStringSet("blePaused", v).apply()
 
+    /** Notify when a device not yours asks for one of your networks away from your routine places. */
+    var alertKnowsMyNetwork: Boolean
+        get() = p.getBoolean("alertKnowsMyNetwork", true)
+        set(v) = p.edit().putBoolean("alertKnowsMyNetwork", v).apply()
+
+    /** Notify when a device newly turns up at your routine places on several days (stakeout check). */
+    var alertStakeout: Boolean
+        get() = p.getBoolean("alertStakeout", false)
+        set(v) = p.edit().putBoolean("alertStakeout", v).apply()
+
+    /** Stakeout candidates already notified (entity ids), so each is notified once. */
+    var stakeoutNotified: Set<String>
+        get() = p.getStringSet("stakeoutNotified", emptySet())?.toSet() ?: emptySet()
+        set(v) = p.edit().putStringSet("stakeoutNotified", v).apply()
+
     /** Days a device you mark suspicious is kept past the retention period (0 = for ever). */
     var pinKeepDays: Int
         get() = p.getInt("pinKeepDays", 365)

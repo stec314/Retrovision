@@ -287,6 +287,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     var confirmMine by remember { mutableStateOf(false) }
     var muteType by remember { mutableStateOf(false) }
     var watching by remember { mutableStateOf(false) }
+    var other by remember { mutableStateOf<EntityReport?>(null) }
     var showRaw by remember { mutableStateOf(false) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
     val lv = dev.retrovision.core.analysis.Levels.of(r)
@@ -422,6 +423,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     // A device that may follow you: the map is the evidence people understand.
                     if (flagged) DeviceMapPanel(r, lv) { onClose(); MapNav.device.value = r.entityId }
 
+                    AssociationsPanel(r) { other = it }
+
                     Expandable(
                         Texts.tr("Why", "Perché"),
                         summary = r.reasons.firstOrNull()?.let { Texts.reason(it) },
@@ -464,6 +467,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     }
     if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
 
+    other?.let { o -> DeviceDialog(o) { other = null } }
     if (watching) WatchDialog(Texts.entityLabel(r), watchTargets(r), r.lastSeenMs) { watching = false }
     if (muteType) MuteTypeDialog(r, onClose = { muteType = false }, onDone = { muteType = false; onClose() })
 
@@ -1129,6 +1133,36 @@ private fun NotificationsSection() {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(Texts.tr("Notify when a device may be following you", "Avvisa quando un dispositivo potrebbe seguirti"), modifier = Modifier.weight(1f))
         Switch(checked = enabled, onCheckedChange = { enabled = it; prefs.alertsEnabled = it })
+    }
+    var knowsNet by remember { mutableStateOf(prefs.alertKnowsMyNetwork) }
+    var stakeout by remember { mutableStateOf(prefs.alertStakeout) }
+    if (enabled) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Texts.tr("A device that knows my network", "Un dispositivo che conosce la mia rete"))
+                Text(
+                    Texts.tr(
+                        "Asked for one of your networks away from your routine places. Needs your phone identified (My devices), or your phone would trigger it.",
+                        "Ha cercato una tua rete lontano dai luoghi abituali. Serve il telefono riconosciuto (I miei dispositivi), altrimenti lo farebbe scattare il tuo telefono.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = knowsNet, onCheckedChange = { knowsNet = it; prefs.alertKnowsMyNetwork = it })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Texts.tr("New near my routine places", "Nuovi vicino ai miei luoghi abituali"))
+                Text(
+                    Texts.tr(
+                        "A device first seen there in the last two weeks that came back on 2+ days (parked car, tag). Neighbours change cars too.",
+                        "Un dispositivo visto lì per la prima volta nelle ultime due settimane e tornato in 2+ giorni (auto parcheggiata, tag). Anche i vicini cambiano auto.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = stakeout, onCheckedChange = { stakeout = it; prefs.alertStakeout = it })
+        }
     }
     if (enabled) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

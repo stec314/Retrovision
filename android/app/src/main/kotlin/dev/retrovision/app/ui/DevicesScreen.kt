@@ -135,6 +135,8 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", {
         it.category in setOf(DeviceCategory.TV, DeviceCategory.INPUT, DeviceCategory.HOME, DeviceCategory.BEACON, DeviceCategory.BLE_OTHER)
     }),
+    GROUPED("👥", "Moving together", "Si muovono insieme", { r -> Collector.analysis.value?.groupOf?.containsKey(r.entityId) == true }),
+    KNOWS_NET("🏠", "Asks for my network", "Cerca la mia rete", { r -> r.reasons.any { it is dev.retrovision.core.analysis.Reason.ProbesForYourNetwork } }),
     LINKED("🔗", "Linked addresses", "Indirizzi collegati", { it.addresses.size > 1 }),
     RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", { it.macTrust != MacTrust.STABLE }),
     ;

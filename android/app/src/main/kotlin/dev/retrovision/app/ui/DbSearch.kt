@@ -198,6 +198,28 @@ private fun HitDetail(h: ArchiveItem, onOpenReport: (dev.retrovision.core.analys
         Text(h.title, style = MaterialTheme.typography.titleMedium)
         h.lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (h.targets.isNotEmpty()) OutlinedButton(onClick = { watching = true }) { Text(Texts.tr("Tell me when it comes back", "Avvisami quando torna")) }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val pdf = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+            val list = stretches ?: return@rememberLauncherForActivityResult
+            if (uri == null) return@rememberLauncherForActivityResult
+            scope.launch(Dispatchers.IO) {
+                val live = Collector.analysis.value?.entities?.firstOrNull { it.entityId == h.entityId || it.memberIds.any { m -> m in h.ids } }
+                runCatching {
+                    dev.retrovision.app.data.EvidencePdf.write(
+                        ctx, uri,
+                        dev.retrovision.app.data.EvidencePdf.Input(
+                            h.title, h.ids, h.lines, live?.reasons?.map { Texts.reason(it) }.orEmpty(),
+                            list.map { dev.retrovision.app.data.EvidencePdf.Stretch(it.fromMs, it.toMs, it.n, it.maxRssi, it.lat, it.lon) },
+                        ),
+                        runCatching { ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName }.getOrNull().orEmpty(),
+                    )
+                }.onFailure { dev.retrovision.app.Diag.e("pdf", "evidence export failed", it) }
+            }
+        }
+        OutlinedButton(enabled = stretches != null, onClick = {
+            val day = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.ROOT).format(Date())
+            pdf.launch("retrovision-evidence-$day.pdf")
+        }) { Text(Texts.tr("Evidence file (PDF)", "Fascicolo di prova (PDF)")) }
         var kept by remember(h.entityId) { mutableStateOf(false) }
         OutlinedButton(enabled = !kept, onClick = {
             kept = true
@@ -288,6 +310,9 @@ internal class ArchiveItem(
                     fmt.format(Date(c.firstMs)) + " → " + fmt.format(Date(c.lastMs)),
                     addrs.joinToString(" · ").takeIf { it.isNotBlank() },
                     c.probed.takeIf { it.isNotBlank() }?.let { Texts.tr("Asks for: ", "Cerca: ") + it.replace("\n", ", ") },
+                    c.together.takeIf { it.isNotBlank() }?.let { t ->
+                        "👥 " + Texts.tr("Moved together with: ", "Si è mosso insieme a: ") + t.split('\n').joinToString(", ") { anyLabel(it) }
+                    },
                 ),
                 c.lastMs,
                 watchTargets(c.entityId, addrs, c.macTrust == "STABLE", addrs.size > 1 || members.size > 1, c.signature.ifBlank { null }, c.bleName.ifBlank { null } ?: ssid),
@@ -316,6 +341,8 @@ private fun flagText(f: Int): String = buildString {
     if ((f and CatalogFlags.NOTABLE) != 0) append(" · 👁")
     if ((f and CatalogFlags.TRACKER) != 0) append(" · 🏷")
     if ((f and CatalogFlags.DRONE) != 0) append(" · 🛸")
+    if ((f and CatalogFlags.GROUPED) != 0) append(" · 👥")
+    if ((f and CatalogFlags.KNOWS_MY_NETWORK) != 0) append(" · 🏠")
 }
 
 /** Archive filter chips: the live window's, plus two that only make sense over time. */
@@ -332,6 +359,8 @@ internal enum class ArchiveFilter(val emoji: String, val en: String, val itText:
     VEHICLES("🚗", "Vehicles & cameras", "Veicoli e camere", listOf("VEHICLE", "CAMERA")),
     WEARABLES("⌚", "Wearables & audio", "Indossabili e audio", listOf("WATCH", "AUDIO", "HEALTH")),
     OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", listOf("TV", "INPUT", "HOME", "BEACON", "BLE_OTHER")),
+    GROUPED("👥", "Moving together", "Si muovono insieme", flags = CatalogFlags.GROUPED),
+    KNOWS_NET("🏠", "Asked for my network", "Hanno cercato la mia rete", flags = CatalogFlags.KNOWS_MY_NETWORK),
     LINKED("🔗", "Linked addresses", "Indirizzi collegati", flags = CatalogFlags.LINKED),
     RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", unreliable = true),
     ;

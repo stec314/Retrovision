@@ -587,6 +587,26 @@ All of these are in Settings → Notifications:
 | Only away from routine places | Mute following alerts at confirmed routine places |
 | Drone alerts | Notify when a drone is heard (first time, then at most every 30 min per drone) |
 | Probe disconnected | Notify if a streaming probe drops out for more than 15 s |
+| A device that knows my network | A device that is not your phone asked for one of your networks away from your routine places: it has been connected to your Wi-Fi. Once per device per day. Needs your phone identified, or your own phone triggers it. On by default |
+| New near my routine places | A device first seen at your routine places in the last two weeks came back on 2+ days (see *stakeout check*). Each device once. Off by default |
+
+## Devices that move together
+
+Every analysis looks for devices heard **at the same places at the same times**: a phone, a watch and earbuds on one person; a car's head unit and the driver's phone; two people walking together. Two devices are grouped when they share at least **2** places where both were heard within 5 minutes of each other, covering at least **70%** of the places of the one heard at fewer places and **50%** of the other's. Groups chain (A with B, B with C), keeping at most 12 members. Left out: fixed devices (routers, devices heard in one area only: everything at your home is "together" with your router) and crowded places (over 400 devices at one place, like a station, give no pairs).
+
+Where you see it: **Associated with** in a device's detail (tap a member to open it), the 👥 **Moving together** filter in Devices (live and archive), and the archive entry ("Moved together with…", kept across days). The same panel lists the other ties the app knows: rare networks two addresses both ask for, the access point a client is connected to and the clients of an access point (with *Capture data frames*).
+
+This is not scored: being in a group is how people and cars are, not a threat. The score has its own, stricter rule near the alert threshold (*Moves together with N other devices*). Use it to understand what you see: if one member of a group alerts, the others are probably the same person.
+
+## Who was there
+
+Places → *Who was there*. Put a **stay** of the timeline or a **routine place** into slot A or B (the A / B buttons on each row), then: *Who was at A*, *At B*, or **In both**. A stay is its time span; a place is every time you were within its radius over the last 1–30 days (from your GPS track, one fix per 30 s, ±2 min). The list shows every device heard then, most heard first, with alerts and suspicious ones marked; your own devices are left out. Tap one for its archive entry.
+
+The useful question is **In both**: the devices heard at your home last night *and* at the gym today. Random coincidences between two places you chose are rare, so what is left deserves a look. Limit: addresses that rotate cannot match across days.
+
+## Evidence file
+
+*Evidence file (PDF)* in an archived device's detail writes a dated PDF: what it is, why it was flagged (if it is in the current analysis), every stretch it was heard with your position, a north-up sketch of those positions, and the **SHA-256 of the data table** (identifiers and stretches in UTC). Keep a copy outside the phone (email it to yourself) so the date can be shown; the hash then shows the table was not changed afterwards. It says what your receivers heard and when, not who owns the device.
 
 ## Watchlist: tell me when it comes back
 

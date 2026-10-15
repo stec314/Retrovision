@@ -34,6 +34,7 @@ object Catalog {
         val places: Int,
         val flags: Int,
         val signature: String?,
+        val together: List<String> = emptyList(),
     )
 
     private fun snap(r: EntityReport): Snap {
@@ -44,6 +45,7 @@ object Catalog {
         if (r.addresses.size > 1) f = f or CatalogFlags.LINKED
         if (r.alert) f = f or CatalogFlags.ALERTED
         if (r.probedSsids.isNotEmpty() || r.joinAttempts.isNotEmpty()) f = f or CatalogFlags.SEARCHING
+        if (r.reasons.any { it is dev.retrovision.core.analysis.Reason.ProbesForYourNetwork }) f = f or CatalogFlags.KNOWS_MY_NETWORK
         return Snap(
             r.entityId, r.kind.name, r.category, r.macTrust.name, r.addresses.toList(), r.ssids.toList(), r.probedSsids.toList(),
             r.bleName ?: r.model, r.bleCompanyId, r.memberIds, r.firstSeenMs, r.lastSeenMs, r.maxRssi, r.score, r.placeIds.size, f, r.bleSignature,
@@ -70,7 +72,8 @@ object Catalog {
     private fun mergeLines(old: String, new: Collection<String>, max: Int): String =
         lines(new + old.split('\n'), max)
 
-    private fun merge(old: CatalogRow?, s: Snap, suspicious: Boolean): CatalogRow {
+    private fun merge(old: CatalogRow?, s0: Snap, suspicious: Boolean, together: List<String>): CatalogRow {
+        val s = s0
         val vendor = (s.companyId?.let { Vendors.forCompany(it) } ?: s.addresses.firstOrNull()?.let { Vendors.forMac(it) }).orEmpty()
         val day = localDay(s.lastMs)
         val firstDay = localDay(s.firstMs)
@@ -86,6 +89,7 @@ object Catalog {
         val v = vendor.ifEmpty { old?.vendor.orEmpty() }
         var flags = (old?.flags ?: 0) or s.flags
         if (suspicious) flags = flags or CatalogFlags.SUSPICIOUS
+        if (together.isNotEmpty()) flags = flags or CatalogFlags.GROUPED
         // A full report knows the category best; a stub (trimmed device) does not downgrade it.
         val category = if (old != null && s.category == DeviceCategory.BLE_OTHER) old.category else s.category.name
         val search = buildString {
@@ -102,6 +106,7 @@ object Catalog {
             days = days, lastDay = maxOf(old?.lastDay ?: 0L, day), maxRssi = maxOf(old?.maxRssi ?: -127, s.maxRssi),
             maxScore = maxOf(old?.maxScore ?: 0.0, s.score), maxPlaces = maxOf(old?.maxPlaces ?: 0, s.places),
             signature = s.signature ?: old?.signature.orEmpty(),
+            together = if (together.isNotEmpty()) mergeLines(old?.together.orEmpty(), together, 12) else old?.together.orEmpty(),
         )
     }
 
@@ -116,7 +121,10 @@ object Catalog {
         var n = 0
         for (chunk in snaps.chunked(400)) {
             val old = dao.catalogRows(chunk.map { it.entityId }).associateBy { it.entityId }
-            val rows = chunk.map { s -> merge(old[s.entityId], s, s.entityId in suspicious || s.members.any { it in suspicious }) }
+            val rows = chunk.map { s ->
+                val together = result.groupOf[s.entityId]?.members?.filter { it != s.entityId }.orEmpty()
+                merge(old[s.entityId], s, s.entityId in suspicious || s.members.any { it in suspicious }, together)
+            }
             dao.putCatalog(rows)
             n += rows.size
         }
@@ -131,7 +139,7 @@ object Catalog {
 
     private fun CatalogRow.copyFlags(f: Int) = CatalogRow(
         entityId, kind, category, macTrust, f, bleName, ssids, probed, addresses, members, vendor, search,
-        firstMs, lastMs, days, lastDay, maxRssi, maxScore, maxPlaces, signature,
+        firstMs, lastMs, days, lastDay, maxRssi, maxScore, maxPlaces, signature, together,
     )
 
     /**

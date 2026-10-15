@@ -161,6 +161,8 @@ class CatalogRow(
     val maxPlaces: Int,
     /** BLE advert signature, when it has one (for watching a device that rotates its address). */
     @androidx.room.ColumnInfo(defaultValue = "''") val signature: String = "",
+    /** Devices it was last seen moving with (co-travel group), newline-separated entity ids. */
+    @androidx.room.ColumnInfo(defaultValue = "''") val together: String = "",
 )
 
 /** A device or name you asked to be told about ("tell me when it comes back"). */
@@ -391,6 +393,9 @@ interface AppDao {
     @Query("SELECT * FROM baseline WHERE mobile = 1 AND firstDay >= :sinceDay AND days >= :minDays AND entityId NOT IN (SELECT entityId FROM ignores) ORDER BY lastMs DESC LIMIT 50")
     fun newAtRoutine(sinceDay: Long, minDays: Int): kotlinx.coroutines.flow.Flow<List<BaselineRow>>
 
+    @Query("SELECT * FROM baseline WHERE mobile = 1 AND firstDay >= :sinceDay AND days >= :minDays AND entityId NOT IN (SELECT entityId FROM ignores) ORDER BY lastMs DESC LIMIT 50")
+    suspend fun newAtRoutineNow(sinceDay: Long, minDays: Int): List<BaselineRow>
+
     @Query("SELECT * FROM companions WHERE entityId = :id")
     suspend fun companion(id: String): CompanionRow?
 
@@ -472,6 +477,13 @@ interface AppDao {
     @Query("DELETE FROM catalog WHERE lastMs < :before AND entityId NOT IN (SELECT entityId FROM pins WHERE untilMs > :now)")
     suspend fun pruneCatalog(before: Long, now: Long): Int
 
+    /** Every device heard between two times: one row each (who was there). */
+    @Query(
+        "SELECT entityId, COUNT(*) AS n, MIN(timeMs) AS firstMs, MAX(timeMs) AS lastMs, MAX(rssi) AS maxRssi " +
+            "FROM sightings WHERE timeMs >= :from AND timeMs < :to GROUP BY entityId",
+    )
+    suspend fun entitiesBetween(from: Long, to: Long): List<EntityHeard>
+
     // ---- kept devices --------------------------------------------------------------------
 
     @Query("SELECT * FROM pins ORDER BY createdMs DESC")
@@ -526,6 +538,8 @@ interface AppDao {
     suspend fun wipeWatches()
 }
 
+class EntityHeard(val entityId: String, val n: Int, val firstMs: Long, val lastMs: Long, val maxRssi: Int)
+
 class CatalogCount(val category: String, val flags: Int, val macTrust: String, val n: Int)
 
 /** Bits of [CatalogRow.flags]. */
@@ -537,6 +551,10 @@ object CatalogFlags {
     const val ALERTED = 16
     const val SEARCHING = 32
     const val SUSPICIOUS = 64
+    /** Moved together with other devices (same places, same times). */
+    const val GROUPED = 128
+    /** Asked for one of your own networks away from your routine places (not your phone). */
+    const val KNOWS_MY_NETWORK = 256
 }
 
 @Database(
@@ -544,7 +562,7 @@ object CatalogFlags {
         SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
         CompanionRow::class, FeedbackRow::class, CatalogRow::class, WatchRow::class, PinRow::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -634,6 +652,12 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `catalog` ADD COLUMN `together` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -646,7 +670,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build()
         }
     }
