@@ -198,6 +198,19 @@ private fun HitDetail(h: ArchiveItem, onOpenReport: (dev.retrovision.core.analys
         Text(h.title, style = MaterialTheme.typography.titleMedium)
         h.lines.forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         if (h.targets.isNotEmpty()) OutlinedButton(onClick = { watching = true }) { Text(Texts.tr("Tell me when it comes back", "Avvisami quando torna")) }
+        var kept by remember(h.entityId) { mutableStateOf(false) }
+        OutlinedButton(enabled = !kept, onClick = {
+            kept = true
+            scope.launch {
+                val dao = app.db.dao()
+                val now = System.currentTimeMillis()
+                for (id in h.ids) {
+                    dao.addFeedback(dev.retrovision.app.data.FeedbackRow(entityId = id, label = 2, score = 0.0, reasons = "archive", timeMs = now))
+                    Catalog.markSuspicious(dao, id)
+                }
+                Catalog.keep(dao, h.ids, h.title, app.prefs.pinKeepDays)
+            }
+        }) { Text(if (kept) Texts.tr("Suspicious · kept ✓", "Sospetto · conservato ✓") else Texts.tr("Suspicious: keep it", "Sospetto: conservalo")) }
         if (watching) WatchDialog(h.title, h.targets, h.lastMs) { watching = false }
         // In the current analysis window: the full report (evidence, verdict, lookups) is one tap away.
         val live = Collector.analysis.value?.entities?.firstOrNull { it.entityId == h.entityId || h.entityId in it.memberIds || it.memberIds.any { m -> m in h.ids } }

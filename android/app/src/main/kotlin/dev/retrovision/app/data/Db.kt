@@ -184,6 +184,19 @@ class WatchRow(
     val createdMs: Long,
 )
 
+/**
+ * A device kept past the retention period (you marked it suspicious): its sightings, its catalog
+ * entry and your GPS positions around them are not deleted until [untilMs].
+ */
+@Entity(tableName = "pins")
+class PinRow(
+    @PrimaryKey val entityId: String,
+    val label: String,
+    val createdMs: Long,
+    /** Kept until then; Long.MAX_VALUE = for ever. */
+    val untilMs: Long,
+)
+
 /** One device found by a search over everything stored (not just the analysis window). */
 class DbHit(
     val entityId: String,
@@ -255,8 +268,18 @@ interface AppDao {
     @Query("SELECT * FROM fixes WHERE timeMs >= :from ORDER BY timeMs")
     suspend fun fixesSince(from: Long): List<FixRow>
 
-    @Query("DELETE FROM sightings WHERE timeMs < :before")
-    suspend fun pruneSightings(before: Long): Int
+    @Query("DELETE FROM sightings WHERE timeMs < :before AND entityId NOT IN (SELECT entityId FROM pins WHERE untilMs > :now)")
+    suspend fun pruneSightings(before: Long, now: Long): Int
+
+    @Query("DELETE FROM fixes WHERE timeMs >= :from AND timeMs < :to")
+    suspend fun pruneFixesBetween(from: Long, to: Long): Int
+
+    /** When kept devices were heard before [before], one row per [bucketMs] (to keep your positions then). */
+    @Query(
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE timeMs < :before AND entityId IN (SELECT entityId FROM pins WHERE untilMs > :now) GROUP BY timeMs / :bucketMs ORDER BY t0",
+    )
+    suspend fun pinnedBuckets(before: Long, now: Long, bucketMs: Long): List<HeardRow>
 
     @Query("DELETE FROM fixes WHERE timeMs < :before")
     suspend fun pruneFixes(before: Long): Int
@@ -446,8 +469,28 @@ interface AppDao {
     @Query("SELECT * FROM catalog WHERE entityId = :id")
     suspend fun catalogRow(id: String): CatalogRow?
 
-    @Query("DELETE FROM catalog WHERE lastMs < :before")
-    suspend fun pruneCatalog(before: Long): Int
+    @Query("DELETE FROM catalog WHERE lastMs < :before AND entityId NOT IN (SELECT entityId FROM pins WHERE untilMs > :now)")
+    suspend fun pruneCatalog(before: Long, now: Long): Int
+
+    // ---- kept devices --------------------------------------------------------------------
+
+    @Query("SELECT * FROM pins ORDER BY createdMs DESC")
+    fun pins(): Flow<List<PinRow>>
+
+    @Query("SELECT entityId FROM pins WHERE untilMs > :now")
+    suspend fun pinnedIds(now: Long): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPins(rows: List<PinRow>)
+
+    @Query("DELETE FROM pins WHERE entityId IN (:ids)")
+    suspend fun deletePins(ids: List<String>)
+
+    @Query("DELETE FROM pins WHERE untilMs <= :now")
+    suspend fun prunePins(now: Long): Int
+
+    @Query("DELETE FROM pins")
+    suspend fun wipePins()
 
     @Query("DELETE FROM catalog")
     suspend fun wipeCatalog()
@@ -499,9 +542,9 @@ object CatalogFlags {
 @Database(
     entities = [
         SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
-        CompanionRow::class, FeedbackRow::class, CatalogRow::class, WatchRow::class,
+        CompanionRow::class, FeedbackRow::class, CatalogRow::class, WatchRow::class, PinRow::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -577,6 +620,20 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `pins` (`entityId` TEXT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`createdMs` INTEGER NOT NULL, `untilMs` INTEGER NOT NULL, PRIMARY KEY(`entityId`))",
+                )
+                // Devices already marked suspicious are kept for a year from now.
+                db.execSQL(
+                    "INSERT OR IGNORE INTO pins (entityId, label, createdMs, untilMs) " +
+                        "SELECT entityId, '', MAX(timeMs), CAST(strftime('%s','now') AS INTEGER) * 1000 + 31536000000 FROM feedback WHERE label = 2 GROUP BY entityId",
+                )
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -589,7 +646,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build()
         }
     }

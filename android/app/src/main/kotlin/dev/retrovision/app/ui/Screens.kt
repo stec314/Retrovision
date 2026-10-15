@@ -328,6 +328,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
             )
             if (label == 2) dev.retrovision.app.data.Catalog.markSuspicious(app.db.dao(), m)
         }
+        if (label == 2) dev.retrovision.app.data.Catalog.keep(app.db.dao(), r.memberIds + r.entityId, Texts.entityLabel(r), app.prefs.pinKeepDays)
         Collector.analyzeNow.value = System.nanoTime()
         onClose()
     }
@@ -1009,6 +1010,8 @@ fun SettingsScreen(modifier: Modifier) {
                 style = MaterialTheme.typography.bodySmall,
             )
             HorizontalDivider()
+            KeptDevicesSection()
+            HorizontalDivider()
             SessionsSection()
             HorizontalDivider()
             OutlinedButton(
@@ -1057,7 +1060,7 @@ fun SettingsScreen(modifier: Modifier) {
                     scope.launch {
                         val dao = app.db.dao()
                         dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar(); dao.wipeBaseline()
-                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores(); dao.wipeCatalog(); dao.wipeWatches()
+                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores(); dao.wipeCatalog(); dao.wipeWatches(); dao.wipePins()
                         prefs.catalogFilledUntil = 0L
                         dev.retrovision.app.data.SessionRecorder.dir(app).listFiles()?.forEach { it.delete() }
                         prefs.trustedAps = emptySet(); prefs.ownFingerprints = emptySet()

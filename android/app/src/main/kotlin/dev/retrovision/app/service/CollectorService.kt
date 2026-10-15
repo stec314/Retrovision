@@ -1177,10 +1177,16 @@ class CollectorService : Service() {
         }
         // Retention
         val cutoff = now - prefs.retentionDays * 24L * 3600_000L
-        dao.pruneSightings(cutoff)
-        dao.pruneCatalog(cutoff)
+        // Devices you marked suspicious (pins) are kept past the retention period.
+        dao.pruneSightings(cutoff, now)
+        dao.pruneCatalog(cutoff, now)
         // Fixes are kept longer than sightings: learning routine places needs weeks, not days.
-        dao.pruneFixes(minOf(cutoff, now - 30L * 24 * 3600_000L))
+        // Around the times a kept device was heard they stay as long as the device does.
+        if (now - lastFixPrune > 10 * 60_000L) {
+            lastFixPrune = now
+            dev.retrovision.app.data.Catalog.pruneFixesKeepingPinned(dao, minOf(cutoff, now - 30L * 24 * 3600_000L), now)
+            dao.prunePins(now)
+        }
         dao.pruneCompanions(now - 30L * 24 * 3600_000L)
         dao.pruneFeedback(now - 180L * 24 * 3600_000L)
         if (now - lastLearn > 15 * 60_000L) {
@@ -1191,6 +1197,7 @@ class CollectorService : Service() {
     }
 
     private var lastLearn = 0L
+    private var lastFixPrune = 0L
     private var warmedLookbackMs = -1L
     /** Devices heard since then are written to the catalog by the next analysis. */
     private var catalogSince = 0L

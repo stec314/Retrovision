@@ -134,6 +134,38 @@ object Catalog {
         firstMs, lastMs, days, lastDay, maxRssi, maxScore, maxPlaces, signature,
     )
 
+    /**
+     * Keeps a device past the retention period (you marked it suspicious): every id its sightings
+     * are stored under, for [Prefs.pinKeepDays] from now.
+     */
+    suspend fun keep(dao: AppDao, ids: Collection<String>, label: String, keepDays: Int) {
+        val now = System.currentTimeMillis()
+        val until = if (keepDays <= 0) Long.MAX_VALUE else now + keepDays * 86_400_000L
+        dao.putPins(ids.distinct().map { PinRow(it, label, now, until) })
+    }
+
+    /**
+     * Deletes your GPS positions older than [before], except around the times a kept device was
+     * heard (±5 min), so a kept device still shows where you were when it was near.
+     */
+    suspend fun pruneFixesKeepingPinned(dao: AppDao, before: Long, now: Long) {
+        val margin = 5 * 60_000L
+        val keep = ArrayList<LongArray>()
+        for (b in dao.pinnedBuckets(before, now, 10 * 60_000L)) {
+            val a = b.t0 - margin
+            val z = b.t1 + margin
+            val last = keep.lastOrNull()
+            if (last != null && a <= last[1]) last[1] = maxOf(last[1], z) else keep += longArrayOf(a, z)
+        }
+        var from = 0L
+        for (k in keep) {
+            if (k[0] >= before) break
+            if (k[0] > from) dao.pruneFixesBetween(from, k[0])
+            from = maxOf(from, k[1])
+        }
+        if (from < before) dao.pruneFixesBetween(from, before)
+    }
+
     /** Search text as the catalog stores it: lower case; addresses also without separators. */
     fun likeQuery(q: String): String {
         val t = q.trim().lowercase()

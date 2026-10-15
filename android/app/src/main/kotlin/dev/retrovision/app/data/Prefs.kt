@@ -164,6 +164,11 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("blePaused", emptySet())?.toSet() ?: emptySet()
         set(v) = p.edit().putStringSet("blePaused", v).apply()
 
+    /** Days a device you mark suspicious is kept past the retention period (0 = for ever). */
+    var pinKeepDays: Int
+        get() = p.getInt("pinKeepDays", 365)
+        set(v) = p.edit().putInt("pinKeepDays", v).apply()
+
     /**
      * The device catalog was filled from stored sightings up to this time (0 = not yet). Older data
      * is catalogued once in the background after an update; newer data by every analysis.

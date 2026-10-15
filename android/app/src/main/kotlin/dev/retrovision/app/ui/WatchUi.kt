@@ -312,3 +312,48 @@ private fun AddWatchDialog(onClose: () -> Unit) {
         dismissButton = { TextButton(onClick = onClose) { Text(Texts.tr("Cancel", "Annulla")) } },
     )
 }
+
+/**
+ * Devices kept past the retention period (marked suspicious): how long, which, and removing one.
+ * Keeping also keeps your GPS positions around the times they were heard.
+ */
+@Composable
+fun KeptDevicesSection() {
+    val app = RetrovisionApp.instance
+    val dao = app.db.dao()
+    val pins by remember { dao.pins() }.collectAsState(initial = emptyList())
+    var days by remember { mutableIntStateOf(app.prefs.pinKeepDays) }
+    val scope = rememberCoroutineScope()
+    val fmt = remember { DateFormat.getDateInstance(DateFormat.SHORT) }
+    // One row per device: merged devices are pinned under each of their ids with the same label.
+    val groups = pins.groupBy { it.label.ifBlank { it.entityId } }
+
+    Text(Texts.tr("Suspicious devices kept", "Dispositivi sospetti conservati") + " (${groups.size})", style = MaterialTheme.typography.titleSmall)
+    Text(
+        Texts.tr(
+            "A device you mark Suspicious is kept past the retention period: its sightings, its archive entry and your GPS positions around them. Evidence, not a habit: they are other people's data.",
+            "Un dispositivo che segni come Sospetto viene conservato oltre il periodo di conservazione: avvistamenti, voce d'archivio e le tue posizioni GPS in quei momenti. Sono prove, non un'abitudine: sono dati di altre persone.",
+        ),
+        style = MaterialTheme.typography.bodySmall,
+    )
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(90 to Texts.tr("90 days", "90 giorni"), 365 to Texts.tr("1 year", "1 anno"), 0 to Texts.tr("For ever", "Per sempre")).forEach { (d, l) ->
+            FilterChip(days == d, { days = d; app.prefs.pinKeepDays = d }, label = { Text(l) })
+        }
+    }
+    Text(Texts.tr("Applies to devices marked from now on.", "Vale per i dispositivi segnati da ora in poi."), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    groups.forEach { (label, rows) ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                val until = rows.maxOf { it.untilMs }
+                Text(
+                    Texts.tr("kept since ", "conservato dal ") + fmt.format(Date(rows.minOf { it.createdMs })) + " · " +
+                        if (until == Long.MAX_VALUE) Texts.tr("for ever", "per sempre") else Texts.tr("until ", "fino al ") + fmt.format(Date(until)),
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { scope.launch { dao.deletePins(rows.map { it.entityId }) } }) { Text(Texts.tr("Release", "Rilascia")) }
+        }
+    }
+}
