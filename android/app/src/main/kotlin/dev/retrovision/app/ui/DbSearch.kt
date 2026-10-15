@@ -382,7 +382,7 @@ private const val PAGE = 200
 fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) {
     val app = RetrovisionApp.instance
     var filter by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(ArchiveFilter.ALL) }
-    var limit by remember(query, filter) { mutableStateOf(PAGE) }
+    var limit by remember(query, filter) { mutableStateOf(if (filter == ArchiveFilter.GROUPED) 5000 else PAGE) }
     var rows by remember { mutableStateOf<List<CatalogRow>?>(null) }
     var counts by remember { mutableStateOf<Map<ArchiveFilter, Int>>(emptyMap()) }
     var size by remember { mutableStateOf(0) }
@@ -433,7 +433,18 @@ fun ArchivePane(query: String, compact: Boolean, modifier: Modifier = Modifier) 
                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             LazyColumn(verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 8.dp)) {
-                items(list, key = { it.entityId }) { c ->
+                if (filter == ArchiveFilter.GROUPED) {
+                    val groups = archiveGroups(list)
+                    item(key = "groups-h") {
+                        Text(
+                            Texts.tr("${groups.size} groups, kept across days.", "${groups.size} gruppi, conservati nei giorni."),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    items(groups, key = { "g" + it.key }) { g ->
+                        GroupCard(g) { id -> list.firstOrNull { it.entityId == id }?.let { open = ArchiveItem.of(it) } }
+                    }
+                } else items(list, key = { it.entityId }) { c ->
                     val cat = runCatching { dev.retrovision.core.identity.DeviceCategory.valueOf(c.category) }.getOrNull()
                     if (compact) {
                         Row(
