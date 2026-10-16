@@ -220,28 +220,42 @@ fun RadarView() {
 
 @Composable
 private fun BoardStrip(conn: dev.retrovision.app.ConnectionUi) {
-    val s = conn.session
-    Row(
+    // One line per live probe (cable first). [conn] ticks a few times a second and drives the redraw.
+    val links by Collector.links.collectAsState()
+    val all = links.values.sortedBy { if (it.usb) 0 else 1 }
+    Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color(0xFF0A1416)).padding(10.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (s == null) {
-            Text(Texts.tr("No probe", "Nessuna sonda"), color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
-        } else {
-            val h = probeHealth(s)
-            Text(h.dot, color = h.color, fontSize = 14.sp)
-            Column(Modifier.weight(1f)) {
-                Text(s.info?.let { probeModel(it.probeType) } ?: "—", color = Neon.cyan, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                Text(
-                    "Wi-Fi ${s.wifiObs}" + (if (s.wifi5Obs > 0) " (5 GHz ${s.wifi5Obs})" else "") + " · BLE ${s.bleObs}" + (if (s.channel > 0) " · ch ${s.channel}" else ""),
-                    color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
-                )
-            }
-            Column(horizontalAlignment = Alignment.End) {
-                if (s.channel > 0) Text("${"%.0f".format(s.chipTempC)}°C", color = h.color, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                Text(h.text, color = h.color, fontSize = 10.sp)
-            }
+        if (all.isEmpty()) {
+            val s = conn.session
+            if (s == null) Text(Texts.tr("No probe", "Nessuna sonda"), color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+            else BoardLine(s, "")
+        }
+        for (l in all) BoardLine(l.session.state.value, if (l.usb) "USB" else "BLE " + l.label.removePrefix("BLE: "))
+    }
+}
+
+@Composable
+private fun BoardLine(s: dev.retrovision.app.probe.SessionState, via: String) {
+    val h = probeHealth(s)
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(h.dot, color = h.color, fontSize = 14.sp)
+        Column(Modifier.weight(1f)) {
+            Text(
+                (s.info?.let { probeModel(it.probeType) } ?: "—") + if (via.isNotEmpty()) "  ·  $via" else "",
+                color = Neon.cyan, fontFamily = FontFamily.Monospace, fontSize = 13.sp,
+            )
+            Text(
+                "Wi-Fi ${s.wifiObs}" + (if (s.wifi5Obs > 0) " (5 GHz ${s.wifi5Obs})" else "") + " · BLE ${s.bleObs}" +
+                    (if (s.channel > 0) " · ch ${s.channel}" else "") +
+                    (if (s.linkRssi != 0) " · ${s.linkRssi} dBm" else ""),
+                color = Neon.dim, fontFamily = FontFamily.Monospace, fontSize = 11.sp,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            if (s.channel > 0) Text("${"%.0f".format(s.chipTempC)}°C", color = h.color, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
+            Text(h.text, color = h.color, fontSize = 10.sp)
         }
     }
 }
