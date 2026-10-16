@@ -1607,11 +1607,16 @@ private fun SensorDetails(running: Boolean) {
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.fillMaxWidth()) {
+        // One card per live probe (cable first); with none, the connection line says why.
+        val links by Collector.links.collectAsState()
+        val probes = links.values.sortedBy { if (it.usb) 0 else 1 }.map { l ->
+            (Texts.tr("Probe", "Sonda") + " · " + (if (l.usb) "USB" else l.label.removePrefix("BLE: ") + " (Bluetooth)")) to l.session.state.value
+        }.ifEmpty { listOf(Texts.tr("Probe", "Sonda") to conn.session) }
+        for ((title, ss) in probes) Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
-                Text(linkText(conn.link, conn.device, conn.error))
-                conn.session?.let { s ->
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                if (links.isEmpty()) Text(linkText(conn.link, conn.device, conn.error))
+                ss?.let { s ->
                     s.info?.let {
                         Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
                         Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
@@ -1634,6 +1639,7 @@ private fun SensorDetails(running: Boolean) {
                         color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     )
                     if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024}) · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
+                    if (s.bleReport.isNotEmpty()) Text(bleReportText(s.bleReport).first, style = MaterialTheme.typography.bodySmall)
                     if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
             }
