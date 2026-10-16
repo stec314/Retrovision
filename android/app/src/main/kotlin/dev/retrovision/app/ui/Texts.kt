@@ -188,6 +188,7 @@ object Texts {
         dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
         dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
+        dev.retrovision.core.analysis.ScoreCap.FAINT_EVERYWHERE -> tr("faint everywhere: distant fixed transmitter (max 0.45)", "debole ovunque: trasmettitore fisso lontano (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.ONE_STRETCH -> tr("rotating address heard in one unbroken stretch (max 0.60)", "indirizzo che cambia, sentito in un solo tratto continuo (max 0,60)")
     }
 
@@ -334,6 +335,10 @@ object Texts {
         is Reason.OneAreaOnly -> tr(
             "Access point only heard within ~${r.extentM.toInt()} m of one area. A fixed router fits that; a follower would have to be heard farther apart than its range (≥ 600 m). No alert until it is",
             "Access point sentito solo entro ~${r.extentM.toInt()} m da una zona. Un router fisso è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ 600 m). Nessuna allerta finché non succede",
+        )
+        is Reason.FaintEverywhere -> tr(
+            "Faint wherever you were (around ${r.typicalRssi} dBm) and never asked for a network: a distant rooftop link or mast with a wide reach, not something near you",
+            "Debole ovunque fossi (circa ${r.typicalRssi} dBm) e non ha mai cercato reti: un collegamento su un tetto o un'antenna lontana con grande portata, non qualcosa vicino a te",
         )
         is Reason.OneStretchOnly -> tr(
             "Heard in one unbroken stretch of ${r.minutes} min with an address that rotates: it was near you (same car or train, a car alongside, or one of your own devices), but nothing shows it coming back after a break",
