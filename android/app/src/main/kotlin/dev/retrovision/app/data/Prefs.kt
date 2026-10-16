@@ -164,6 +164,34 @@ class Prefs(ctx: Context) {
         get() = p.getStringSet("blePaused", emptySet())?.toSet() ?: emptySet()
         set(v) = p.edit().putStringSet("blePaused", v).apply()
 
+    /** Notify when a device not yours asks for one of your networks away from your routine places. */
+    var alertKnowsMyNetwork: Boolean
+        get() = p.getBoolean("alertKnowsMyNetwork", true)
+        set(v) = p.edit().putBoolean("alertKnowsMyNetwork", v).apply()
+
+    /** Notify when a device newly turns up at your routine places on several days (stakeout check). */
+    var alertStakeout: Boolean
+        get() = p.getBoolean("alertStakeout", false)
+        set(v) = p.edit().putBoolean("alertStakeout", v).apply()
+
+    /** Stakeout candidates already notified (entity ids), so each is notified once. */
+    var stakeoutNotified: Set<String>
+        get() = p.getStringSet("stakeoutNotified", emptySet())?.toSet() ?: emptySet()
+        set(v) = p.edit().putStringSet("stakeoutNotified", v).apply()
+
+    /** Days a device you mark suspicious is kept past the retention period (0 = for ever). */
+    var pinKeepDays: Int
+        get() = p.getInt("pinKeepDays", 365)
+        set(v) = p.edit().putInt("pinKeepDays", v).apply()
+
+    /**
+     * The device catalog was filled from stored sightings up to this time (0 = not yet). Older data
+     * is catalogued once in the background after an update; newer data by every analysis.
+     */
+    var catalogFilledUntil: Long
+        get() = p.getLong("catalogFilledUntil", 0L)
+        set(v) = p.edit().putLong("catalogFilledUntil", v).apply()
+
     /** Split the Wi-Fi channels between probes when several stream at once. */
     var splitChannels: Boolean
         get() = p.getBoolean("splitChannels", true)

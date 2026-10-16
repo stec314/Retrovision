@@ -92,6 +92,34 @@ object Texts {
         dev.retrovision.core.analysis.WifiThreats.Kind.BLE_SPAM -> tr("Bluetooth spam attack", "Attacco BLE spam")
     }
 
+    /** "3 h 20 min", "45 min", "2 d 4 h": an absence in words. */
+    fun span(ms: Long): String {
+        val m = ms / 60_000L
+        return when {
+            m < 1 -> tr("under a minute", "meno di un minuto")
+            m < 60 -> "$m min"
+            m < 48 * 60 -> "${m / 60} h" + (if (m % 60 != 0L) " ${m % 60} min" else "")
+            else -> "${m / 1440} " + tr("d", "g") + (if ((m % 1440) / 60 != 0L) " ${(m % 1440) / 60} h" else "")
+        }
+    }
+
+    /** Title and text of a watchlist notification. */
+    fun watchEvent(label: String, e: dev.retrovision.core.watch.Watchlist.Event): Pair<String, String> {
+        val sig = if (e.rssi != 0) " · ${e.rssi} dBm" else ""
+        val what = if (e.what.isNotBlank() && e.what != label) " (${e.what})" else ""
+        return when (e.kind) {
+            dev.retrovision.core.watch.Watchlist.EventKind.RETURNED ->
+                tr("Back nearby: $label", "Di nuovo vicino: $label") to
+                    tr("Heard again after ${span(e.absentMs)}$what$sig.", "Sentito di nuovo dopo ${span(e.absentMs)}$what$sig.")
+            dev.retrovision.core.watch.Watchlist.EventKind.FIRST_SEEN ->
+                tr("Nearby: $label", "Vicino: $label") to
+                    tr("Heard for the first time$what$sig.", "Sentito per la prima volta$what$sig.")
+            dev.retrovision.core.watch.Watchlist.EventKind.GONE ->
+                tr("Not heard any more: $label", "Non si sente più: $label") to
+                    tr("Silent for ${span(e.absentMs)}. Did you leave it behind?", "Silenzioso da ${span(e.absentMs)}. L'hai dimenticato?")
+        }
+    }
+
     fun drone(d: dev.retrovision.core.analysis.Drones.Drone): String {
         val ago = ((System.currentTimeMillis() - d.lastMs) / 60_000).let { if (it < 1) tr("now", "ora") else tr("$it min ago", "$it min fa") }
         if (!d.remoteId) return tr(
@@ -160,6 +188,7 @@ object Texts {
         dev.retrovision.core.analysis.ScoreCap.STAYS_PUT -> tr("it stays in one spot (max 0.35)", "resta in un punto fisso (max 0,35)")
         dev.retrovision.core.analysis.ScoreCap.ONE_AREA -> tr("access point only heard around one area (max 0.45)", "access point sentito solo in una zona (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.RESIDENT -> tr("it belongs to your routine places (max 0.25)", "appartiene ai tuoi luoghi di routine (max 0,25)")
+        dev.retrovision.core.analysis.ScoreCap.FAINT_EVERYWHERE -> tr("faint everywhere: distant fixed transmitter (max 0.45)", "debole ovunque: trasmettitore fisso lontano (max 0,45)")
         dev.retrovision.core.analysis.ScoreCap.ONE_STRETCH -> tr("rotating address heard in one unbroken stretch (max 0.60)", "indirizzo che cambia, sentito in un solo tratto continuo (max 0,60)")
     }
 
@@ -306,6 +335,10 @@ object Texts {
         is Reason.OneAreaOnly -> tr(
             "Access point only heard within ~${r.extentM.toInt()} m of one area. A fixed router fits that; a follower would have to be heard farther apart than its range (≥ 600 m). No alert until it is",
             "Access point sentito solo entro ~${r.extentM.toInt()} m da una zona. Un router fisso è compatibile; chi ti segue dovrebbe essere sentito a distanze maggiori della sua portata (≥ 600 m). Nessuna allerta finché non succede",
+        )
+        is Reason.FaintEverywhere -> tr(
+            "Faint wherever you were (around ${r.typicalRssi} dBm) and never asked for a network: a distant rooftop link or mast with a wide reach, not something near you",
+            "Debole ovunque fossi (circa ${r.typicalRssi} dBm) e non ha mai cercato reti: un collegamento su un tetto o un'antenna lontana con grande portata, non qualcosa vicino a te",
         )
         is Reason.OneStretchOnly -> tr(
             "Heard in one unbroken stretch of ${r.minutes} min with an address that rotates: it was near you (same car or train, a car alongside, or one of your own devices), but nothing shows it coming back after a break",

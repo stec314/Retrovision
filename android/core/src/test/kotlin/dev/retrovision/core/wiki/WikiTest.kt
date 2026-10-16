@@ -101,6 +101,6 @@ class WikiTest {
         has("over **${r.legM.toInt()} m**")
         has("**≥ ${dev.retrovision.core.analysis.NetworkLinker.MIN_SHARED_RARE}** networks that at most **${dev.retrovision.core.analysis.NetworkLinker.MAX_ASKERS}** devices")
         has("within **${dev.retrovision.core.analysis.ApUptimeLinker.MAX_HANDOVER_MS / 60_000} min**")
-        has("(**± ${dev.retrovision.core.analysis.ApUptimeLinker.MAX_BOOT_DIFF_MS / 1000} s**)")
+        has("(**± ${dev.retrovision.core.analysis.ApUptimeLinker.MAX_BOOT_DIFF_MS} ms**)")
     }
 }

@@ -135,6 +135,8 @@ enum class DeviceFilter(val emoji: String, val en: String, val itText: String, v
     OTHER("ᛒ", "Other Bluetooth", "Altro Bluetooth", {
         it.category in setOf(DeviceCategory.TV, DeviceCategory.INPUT, DeviceCategory.HOME, DeviceCategory.BEACON, DeviceCategory.BLE_OTHER)
     }),
+    GROUPED("👥", "Moving together", "Si muovono insieme", { r -> Collector.analysis.value?.groupOf?.containsKey(r.entityId) == true }),
+    KNOWS_NET("🏠", "Asks for my network", "Cerca la mia rete", { r -> r.reasons.any { it is dev.retrovision.core.analysis.Reason.ProbesForYourNetwork } }),
     LINKED("🔗", "Linked addresses", "Indirizzi collegati", { it.addresses.size > 1 }),
     RANDOM_MAC("⚠", "Unreliable MAC", "MAC non affidabile", { it.macTrust != MacTrust.STABLE }),
     ;
@@ -316,7 +318,26 @@ fun DevicesScreen(modifier: Modifier) {
                         }
                     }
                 }
-                items(list.take(shownMax), key = { it.entityId }) { r ->
+                if (filter == DeviceFilter.GROUPED) {
+                    // Moving together: one card per group, not a flat list of members.
+                    val ids = list.map { it.entityId }.toSet()
+                    val groups = liveGroups(analysis).filter { g -> g.members.any { it.id in ids } }
+                    item(key = "groups-h") {
+                        Text(
+                            Texts.tr("${groups.size} groups: devices heard at the same places at the same times.", "${groups.size} gruppi: dispositivi sentiti negli stessi luoghi negli stessi momenti."),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    items(groups, key = { "g" + it.key }) { g ->
+                        GroupCard(g) { id ->
+                            val r = all.firstOrNull { it.entityId == id }
+                            if (r != null) selected = r else {
+                                val f = Collector.analyzeOne ?: return@GroupCard
+                                scope.launch { runCatching { f(id) }.getOrNull()?.let { selected = it } }
+                            }
+                        }
+                    }
+                } else items(list.take(shownMax), key = { it.entityId }) { r ->
                     if (compact) CompactEntityRow(r) { selected = r } else EntityCard(r, query) { selected = r }
                 }
                 if (view.stubs.isNotEmpty()) {

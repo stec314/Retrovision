@@ -25,7 +25,9 @@ import dev.retrovision.core.model.WifiKind
  * by more than one candidate.
  */
 object ApUptimeLinker {
-    const val MAX_BOOT_DIFF_MS = 2_000L
+    // Same radio: boot estimates agree within ~80 ms in field data (clock sync + TSF drift). 300 ms keeps
+    // a margin; at 2 s two routers in one house restarting after a power blip were linked (field case).
+    const val MAX_BOOT_DIFF_MS = 300L
     const val MAX_HANDOVER_MS = 30 * 60_000L
     const val MAX_OVERLAP_MS = 60_000L
     const val CROWD_WINDOW_MS = 60_000L

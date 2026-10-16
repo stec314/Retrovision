@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.Edit
@@ -285,6 +286,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     var busy by remember { mutableStateOf(false) }
     var confirmMine by remember { mutableStateOf(false) }
     var muteType by remember { mutableStateOf(false) }
+    var watching by remember { mutableStateOf(false) }
+    var other by remember { mutableStateOf<EntityReport?>(null) }
     var showRaw by remember { mutableStateOf(false) }
     val fmt = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
     val lv = dev.retrovision.core.analysis.Levels.of(r)
@@ -324,7 +327,9 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     reasons = r.reasons.joinToString(",") { it::class.simpleName ?: "?" }, timeMs = System.currentTimeMillis(),
                 ),
             )
+            if (label == 2) dev.retrovision.app.data.Catalog.markSuspicious(app.db.dao(), m)
         }
+        if (label == 2) dev.retrovision.app.data.Catalog.keep(app.db.dao(), r.memberIds + r.entityId, Texts.entityLabel(r), app.prefs.pinKeepDays)
         Collector.analyzeNow.value = System.nanoTime()
         onClose()
     }
@@ -368,6 +373,7 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                                 onClose(); MapNav.device.value = r.entityId
                             },
                         )
+                        add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Notifications, null) }, Texts.tr("Tell me", "Avvisami")) { watching = true })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Warning, null) }, Texts.tr("Suspicious", "Sospetto"), tint = MaterialTheme.colorScheme.error) { verdict(2) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Clear, null) }, Texts.tr("False alarm", "Falso allarme")) { verdict(0) })
                         add(ActionTileSpec({ androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Filled.Done, null) }, Texts.tr("It's mine", "È mio")) { confirmMine = true })
@@ -417,6 +423,13 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
                     // A device that may follow you: the map is the evidence people understand.
                     if (flagged) DeviceMapPanel(r, lv) { onClose(); MapNav.device.value = r.entityId }
 
+                    AssociationsPanel(r) { other = it }
+
+                    Expandable(
+                        Texts.tr("Charts", "Grafici"),
+                        summary = Texts.tr("Signal and your movement · when it is around", "Segnale e tuoi spostamenti · quando c'è"),
+                    ) { DeviceChartsSection((r.memberIds + r.entityId).toList(), r.lastSeenMs) }
+
                     Expandable(
                         Texts.tr("Why", "Perché"),
                         summary = r.reasons.firstOrNull()?.let { Texts.reason(it) },
@@ -459,6 +472,8 @@ internal fun DeviceDialog(r: EntityReport, onClose: () -> Unit) {
     }
     if (findIt) FindItDialog(r.entityId, Texts.entityLabel(r), r.memberIds + r.entityId) { findIt = false }
 
+    other?.let { o -> DeviceDialog(o) { other = null } }
+    if (watching) WatchDialog(Texts.entityLabel(r), watchTargets(r), r.lastSeenMs) { watching = false }
     if (muteType) MuteTypeDialog(r, onClose = { muteType = false }, onDone = { muteType = false; onClose() })
 
     if (confirmMine) {
@@ -788,6 +803,13 @@ fun SettingsScreen(modifier: Modifier) {
             ).joinToString(" · "),
         ) { NotificationsSection() }
 
+        val watchRows by remember { app.db.dao().watches() }.collectAsState(initial = emptyList())
+        Expandable(
+            title = Texts.tr("Watchlist", "Lista di controllo"),
+            summary = if (watchRows.isEmpty()) Texts.tr("Nothing watched", "Niente sotto controllo")
+            else Texts.tr("${watchRows.count { it.enabled }} active of ${watchRows.size}", "${watchRows.count { it.enabled }} attive su ${watchRows.size}"),
+        ) { WatchlistSection() }
+
         Expandable(
             title = Texts.tr("My devices, networks and phone", "Miei dispositivi, reti e telefono"),
             summary = Texts.tr(
@@ -997,6 +1019,8 @@ fun SettingsScreen(modifier: Modifier) {
                 style = MaterialTheme.typography.bodySmall,
             )
             HorizontalDivider()
+            KeptDevicesSection()
+            HorizontalDivider()
             SessionsSection()
             HorizontalDivider()
             OutlinedButton(
@@ -1045,7 +1069,8 @@ fun SettingsScreen(modifier: Modifier) {
                     scope.launch {
                         val dao = app.db.dao()
                         dao.wipeSightings(); dao.wipeFixes(); dao.wipeEnrichments(); dao.wipeFamiliar(); dao.wipeBaseline()
-                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores()
+                        dao.wipeCompanions(); dao.wipeFeedback(); dao.wipeIgnores(); dao.wipeCatalog(); dao.wipeWatches(); dao.wipePins()
+                        prefs.catalogFilledUntil = 0L
                         dev.retrovision.app.data.SessionRecorder.dir(app).listFiles()?.forEach { it.delete() }
                         prefs.trustedAps = emptySet(); prefs.ownFingerprints = emptySet()
                         prefs.targets = emptySet(); prefs.testFirstAlerts = emptySet()
@@ -1113,6 +1138,36 @@ private fun NotificationsSection() {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(Texts.tr("Notify when a device may be following you", "Avvisa quando un dispositivo potrebbe seguirti"), modifier = Modifier.weight(1f))
         Switch(checked = enabled, onCheckedChange = { enabled = it; prefs.alertsEnabled = it })
+    }
+    var knowsNet by remember { mutableStateOf(prefs.alertKnowsMyNetwork) }
+    var stakeout by remember { mutableStateOf(prefs.alertStakeout) }
+    if (enabled) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Texts.tr("A device that knows my network", "Un dispositivo che conosce la mia rete"))
+                Text(
+                    Texts.tr(
+                        "Asked for one of your networks away from your routine places. Needs your phone identified (My devices), or your phone would trigger it.",
+                        "Ha cercato una tua rete lontano dai luoghi abituali. Serve il telefono riconosciuto (I miei dispositivi), altrimenti lo farebbe scattare il tuo telefono.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = knowsNet, onCheckedChange = { knowsNet = it; prefs.alertKnowsMyNetwork = it })
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(Texts.tr("New near my routine places", "Nuovi vicino ai miei luoghi abituali"))
+                Text(
+                    Texts.tr(
+                        "A device first seen there in the last two weeks that came back on 2+ days (parked car, tag). Neighbours change cars too.",
+                        "Un dispositivo visto lì per la prima volta nelle ultime due settimane e tornato in 2+ giorni (auto parcheggiata, tag). Anche i vicini cambiano auto.",
+                    ),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = stakeout, onCheckedChange = { stakeout = it; prefs.alertStakeout = it })
+        }
     }
     if (enabled) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -1552,11 +1607,16 @@ private fun SensorDetails(running: Boolean) {
         }
     }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.fillMaxWidth()) {
+        // One card per live probe (cable first); with none, the connection line says why.
+        val links by Collector.links.collectAsState()
+        val probes = links.values.sortedBy { if (it.usb) 0 else 1 }.map { l ->
+            (Texts.tr("Probe", "Sonda") + " · " + (if (l.usb) "USB" else l.label.removePrefix("BLE: ") + " (Bluetooth)")) to l.session.state.value
+        }.ifEmpty { listOf(Texts.tr("Probe", "Sonda") to conn.session) }
+        for ((title, ss) in probes) Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(Texts.tr("Probe", "Sonda"), style = MaterialTheme.typography.titleMedium)
-                Text(linkText(conn.link, conn.device, conn.error))
-                conn.session?.let { s ->
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                if (links.isEmpty()) Text(linkText(conn.link, conn.device, conn.error))
+                ss?.let { s ->
                     s.info?.let {
                         Text(probeModel(it.probeType), style = MaterialTheme.typography.bodyLarge)
                         Text("fw ${it.firmware} · proto ${it.protocol} · id ${it.hardwareId}", style = MaterialTheme.typography.bodySmall)
@@ -1579,6 +1639,7 @@ private fun SensorDetails(running: Boolean) {
                         color = if (lossPct > 5) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     )
                     if (s.channel > 0) Text("${s.freeHeap / 1024} KiB free (lowest ${s.minFreeHeap / 1024}) · ${"%.0f".format(s.chipTempC)} °C", style = MaterialTheme.typography.bodySmall)
+                    if (s.bleReport.isNotEmpty()) Text(bleReportText(s.bleReport).first, style = MaterialTheme.typography.bodySmall)
                     if (s.lastLog.isNotEmpty()) Text(s.lastLog, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                 }
             }

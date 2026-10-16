@@ -123,6 +123,82 @@ class FamiliarRow(
     val createdMs: Long,
 )
 
+/**
+ * One device in the archive: a summary kept up to date from every analysis, so the archive can be
+ * listed, filtered and counted without scanning millions of encrypted sightings. Kept as long as
+ * its sightings are (same retention).
+ */
+@Entity(tableName = "catalog", indices = [Index("lastMs"), Index("category")])
+class CatalogRow(
+    @PrimaryKey val entityId: String,
+    /** EntityKind name. */
+    val kind: String,
+    /** DeviceCategory name. */
+    val category: String,
+    /** MacTrust name. */
+    val macTrust: String,
+    /** CatalogFlags bits. */
+    val flags: Int,
+    val bleName: String,
+    /** Networks it announces (access points), newline-separated, at most a few. */
+    val ssids: String,
+    /** Networks it asks for, newline-separated, at most a dozen. */
+    val probed: String,
+    /** Addresses, newline-separated, at most 8 (the first is the main one). */
+    val addresses: String,
+    /** Entity ids its sightings are stored under (merged devices have several), newline-separated. */
+    val members: String,
+    val vendor: String,
+    /** Lower-case text the search box matches. */
+    val search: String,
+    val firstMs: Long,
+    val lastMs: Long,
+    /** Distinct local days it was heard (counted as analyses see it). */
+    val days: Int,
+    val lastDay: Long,
+    val maxRssi: Int,
+    val maxScore: Double,
+    val maxPlaces: Int,
+    /** BLE advert signature, when it has one (for watching a device that rotates its address). */
+    @androidx.room.ColumnInfo(defaultValue = "''") val signature: String = "",
+    /** Devices it was last seen moving with (co-travel group), newline-separated entity ids. */
+    @androidx.room.ColumnInfo(defaultValue = "''") val together: String = "",
+)
+
+/** A device or name you asked to be told about ("tell me when it comes back"). */
+@Entity(tableName = "watches")
+class WatchRow(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val label: String,
+    /** Watchlist.Kind name. */
+    val kind: String,
+    val pattern: String,
+    val onReturn: Boolean,
+    val minAbsenceMin: Int,
+    val minRssi: Int,
+    val onAbsence: Boolean,
+    val absenceMin: Int,
+    /** Only alert away from your confirmed routine places. */
+    val awayOnly: Boolean,
+    val enabled: Boolean,
+    val lastHeardMs: Long,
+    val lastAlertMs: Long,
+    val createdMs: Long,
+)
+
+/**
+ * A device kept past the retention period (you marked it suspicious): its sightings, its catalog
+ * entry and your GPS positions around them are not deleted until [untilMs].
+ */
+@Entity(tableName = "pins")
+class PinRow(
+    @PrimaryKey val entityId: String,
+    val label: String,
+    val createdMs: Long,
+    /** Kept until then; Long.MAX_VALUE = for ever. */
+    val untilMs: Long,
+)
+
 /** One device found by a search over everything stored (not just the analysis window). */
 class DbHit(
     val entityId: String,
@@ -194,8 +270,18 @@ interface AppDao {
     @Query("SELECT * FROM fixes WHERE timeMs >= :from ORDER BY timeMs")
     suspend fun fixesSince(from: Long): List<FixRow>
 
-    @Query("DELETE FROM sightings WHERE timeMs < :before")
-    suspend fun pruneSightings(before: Long): Int
+    @Query("DELETE FROM sightings WHERE timeMs < :before AND entityId NOT IN (SELECT entityId FROM pins WHERE untilMs > :now)")
+    suspend fun pruneSightings(before: Long, now: Long): Int
+
+    @Query("DELETE FROM fixes WHERE timeMs >= :from AND timeMs < :to")
+    suspend fun pruneFixesBetween(from: Long, to: Long): Int
+
+    /** When kept devices were heard before [before], one row per [bucketMs] (to keep your positions then). */
+    @Query(
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE timeMs < :before AND entityId IN (SELECT entityId FROM pins WHERE untilMs > :now) GROUP BY timeMs / :bucketMs ORDER BY t0",
+    )
+    suspend fun pinnedBuckets(before: Long, now: Long, bucketMs: Long): List<HeardRow>
 
     @Query("DELETE FROM fixes WHERE timeMs < :before")
     suspend fun pruneFixes(before: Long): Int
@@ -245,6 +331,10 @@ interface AppDao {
 
     @Query("SELECT timeMs, rssi FROM sightings WHERE entityId = :id ORDER BY timeMs LIMIT :limit")
     suspend fun timesFor(id: String, limit: Int): List<TimeRssi>
+
+    /** Every sighting time of a device stored under several entity ids (a merged device). */
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId IN (:ids) ORDER BY timeMs LIMIT :limit")
+    suspend fun timesForAny(ids: List<String>, limit: Int): List<TimeRssi>
 
     @Query("SELECT * FROM fixes WHERE timeMs BETWEEN :from AND :to ORDER BY ABS(timeMs - :at) LIMIT 1")
     suspend fun fixNear(from: Long, to: Long, at: Long): FixRow?
@@ -303,6 +393,9 @@ interface AppDao {
     @Query("SELECT * FROM baseline WHERE mobile = 1 AND firstDay >= :sinceDay AND days >= :minDays AND entityId NOT IN (SELECT entityId FROM ignores) ORDER BY lastMs DESC LIMIT 50")
     fun newAtRoutine(sinceDay: Long, minDays: Int): kotlinx.coroutines.flow.Flow<List<BaselineRow>>
 
+    @Query("SELECT * FROM baseline WHERE mobile = 1 AND firstDay >= :sinceDay AND days >= :minDays AND entityId NOT IN (SELECT entityId FROM ignores) ORDER BY lastMs DESC LIMIT 50")
+    suspend fun newAtRoutineNow(sinceDay: Long, minDays: Int): List<BaselineRow>
+
     @Query("SELECT * FROM companions WHERE entityId = :id")
     suspend fun companion(id: String): CompanionRow?
 
@@ -335,6 +428,9 @@ interface AppDao {
     @Query("SELECT * FROM feedback ORDER BY timeMs DESC")
     fun feedback(): kotlinx.coroutines.flow.Flow<List<FeedbackRow>>
 
+    @Query("SELECT DISTINCT entityId FROM feedback WHERE label = 2")
+    suspend fun suspiciousIds(): List<String>
+
     @Query("SELECT entityId FROM feedback WHERE label = 0 AND timeMs >= :since")
     suspend fun falseAlarmsSince(since: Long): List<String>
 
@@ -349,14 +445,163 @@ interface AppDao {
 
     @Query("DELETE FROM enrichments")
     suspend fun wipeEnrichments()
+
+    // ---- catalog -------------------------------------------------------------------------
+
+    @Query("SELECT * FROM catalog WHERE entityId IN (:ids)")
+    suspend fun catalogRows(ids: List<String>): List<CatalogRow>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putCatalog(rows: List<CatalogRow>)
+
+    /**
+     * The archive: [cats] empty = any category; [flagsAll] = bits that must all be set;
+     * [unreliable] 1 = only addresses that are not stable; [q] = search ("%" = all).
+     */
+    @Query(
+        "SELECT * FROM catalog WHERE (:anyCat = 1 OR category IN (:cats)) AND (flags & :flagsAll) = :flagsAll " +
+            "AND (:unreliable = 0 OR macTrust != 'STABLE') AND search LIKE :q ORDER BY lastMs DESC LIMIT :limit OFFSET :offset",
+    )
+    suspend fun catalogPage(anyCat: Int, cats: List<String>, flagsAll: Int, unreliable: Int, q: String, limit: Int, offset: Int): List<CatalogRow>
+
+    /** Per-category and per-flag counts for the archive filter chips. */
+    @Query("SELECT category, flags, macTrust, COUNT(*) AS n FROM catalog WHERE search LIKE :q GROUP BY category, flags, macTrust")
+    suspend fun catalogCounts(q: String): List<CatalogCount>
+
+    @Query("SELECT COUNT(*) FROM catalog")
+    suspend fun catalogSize(): Int
+
+    @Query("SELECT * FROM catalog WHERE entityId = :id")
+    suspend fun catalogRow(id: String): CatalogRow?
+
+    @Query("DELETE FROM catalog WHERE lastMs < :before AND entityId NOT IN (SELECT entityId FROM pins WHERE untilMs > :now)")
+    suspend fun pruneCatalog(before: Long, now: Long): Int
+
+    /** Every device heard between two times: one row each (who was there). */
+    @Query(
+        "SELECT entityId, COUNT(*) AS n, MIN(timeMs) AS firstMs, MAX(timeMs) AS lastMs, MAX(rssi) AS maxRssi " +
+            "FROM sightings WHERE timeMs >= :from AND timeMs < :to GROUP BY entityId",
+    )
+    suspend fun entitiesBetween(from: Long, to: Long): List<EntityHeard>
+
+    // ---- charts ---------------------------------------------------------------------------
+
+    /** When any of [ids] was heard between two times, one row per [bucketMs]. */
+    @Query(
+        "SELECT MIN(timeMs) AS t0, MAX(timeMs) AS t1, COUNT(*) AS n, MAX(rssi) AS rssi FROM sightings " +
+            "WHERE entityId IN (:ids) AND timeMs >= :from AND timeMs < :to GROUP BY timeMs / :bucketMs ORDER BY t0 LIMIT :limit",
+    )
+    suspend fun heardBucketsBetween(ids: List<String>, from: Long, to: Long, bucketMs: Long, limit: Int): List<HeardRow>
+
+    /** Signal of any of [ids] between two times. */
+    @Query("SELECT timeMs, rssi FROM sightings WHERE entityId IN (:ids) AND timeMs >= :from AND timeMs < :to AND rssi != 0 ORDER BY timeMs LIMIT :limit")
+    suspend fun signalBetween(ids: List<String>, from: Long, to: Long, limit: Int): List<TimeRssi>
+
+    /**
+     * What the receivers were doing, per [bucketMs]: any sighting from a probe, any from the phone.
+     * Sampled ([stride]) for long spans: a listening probe hears dozens of frames a minute.
+     */
+    @Query(
+        "SELECT (timeMs / :bucketMs) AS k, MAX(CASE WHEN source != 'phone' THEN 1 ELSE 0 END) AS probe, " +
+            "MAX(CASE WHEN source = 'phone' THEN 1 ELSE 0 END) AS phone FROM sightings " +
+            "WHERE timeMs >= :from AND timeMs < :to AND (id % :stride) = 0 GROUP BY k",
+    )
+    suspend fun receiverBuckets(from: Long, to: Long, bucketMs: Long, stride: Int): List<ReceiverBucket>
+
+    @Query("SELECT (timeMs / :bucketMs) AS k, MIN(accuracyM) AS acc FROM fixes WHERE timeMs >= :from AND timeMs < :to GROUP BY k")
+    suspend fun fixBuckets(from: Long, to: Long, bucketMs: Long): List<FixBucket>
+
+    /** Devices worth a lane or a row: flagged ([mask]) and heard since [since], highest score first. */
+    @Query("SELECT * FROM catalog WHERE lastMs >= :since AND (flags & :mask) != 0 ORDER BY maxScore DESC, lastMs DESC LIMIT :limit")
+    suspend fun catalogFlagged(since: Long, mask: Int, limit: Int): List<CatalogRow>
+
+    /** Devices heard at the most places, for the places matrix. */
+    @Query("SELECT * FROM catalog WHERE lastMs >= :since AND maxPlaces >= :minPlaces AND category != 'ROUTER' ORDER BY maxPlaces DESC, days DESC LIMIT :limit")
+    suspend fun catalogMultiPlace(since: Long, minPlaces: Int, limit: Int): List<CatalogRow>
+
+    // ---- kept devices --------------------------------------------------------------------
+
+    @Query("SELECT * FROM pins ORDER BY createdMs DESC")
+    fun pins(): Flow<List<PinRow>>
+
+    @Query("SELECT entityId FROM pins WHERE untilMs > :now")
+    suspend fun pinnedIds(now: Long): List<String>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putPins(rows: List<PinRow>)
+
+    @Query("DELETE FROM pins WHERE entityId IN (:ids)")
+    suspend fun deletePins(ids: List<String>)
+
+    @Query("DELETE FROM pins WHERE untilMs <= :now")
+    suspend fun prunePins(now: Long): Int
+
+    @Query("DELETE FROM pins")
+    suspend fun wipePins()
+
+    @Query("DELETE FROM catalog")
+    suspend fun wipeCatalog()
+
+    /** Sighting summary for entities the catalog does not know yet (filling it from old data). */
+    @Query("SELECT MIN(timeMs) FROM sightings")
+    suspend fun oldestSighting(): Long?
+
+    // ---- watchlist -----------------------------------------------------------------------
+
+    @Query("SELECT * FROM watches ORDER BY createdMs DESC")
+    fun watches(): Flow<List<WatchRow>>
+
+    @Query("SELECT * FROM watches")
+    suspend fun watchesNow(): List<WatchRow>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun putWatch(row: WatchRow): Long
+
+    @Query("UPDATE watches SET lastHeardMs = :ms WHERE id = :id AND lastHeardMs < :ms")
+    suspend fun setWatchHeard(id: Long, ms: Long)
+
+    @Query("UPDATE watches SET lastAlertMs = :ms WHERE id = :id")
+    suspend fun setWatchAlerted(id: Long, ms: Long)
+
+    @Query("UPDATE watches SET enabled = :on WHERE id = :id")
+    suspend fun setWatchEnabled(id: Long, on: Boolean)
+
+    @Query("DELETE FROM watches WHERE id = :id")
+    suspend fun deleteWatch(id: Long)
+
+    @Query("DELETE FROM watches")
+    suspend fun wipeWatches()
+}
+
+class ReceiverBucket(val k: Long, val probe: Int, val phone: Int)
+
+class FixBucket(val k: Long, val acc: Float)
+
+class EntityHeard(val entityId: String, val n: Int, val firstMs: Long, val lastMs: Long, val maxRssi: Int)
+
+class CatalogCount(val category: String, val flags: Int, val macTrust: String, val n: Int)
+
+/** Bits of [CatalogRow.flags]. */
+object CatalogFlags {
+    const val TRACKER = 1
+    const val DRONE = 2
+    const val NOTABLE = 4
+    const val LINKED = 8
+    const val ALERTED = 16
+    const val SEARCHING = 32
+    const val SUSPICIOUS = 64
+    /** Moved together with other devices (same places, same times). */
+    const val GROUPED = 128
+    /** Asked for one of your own networks away from your routine places (not your phone). */
+    const val KNOWS_MY_NETWORK = 256
 }
 
 @Database(
     entities = [
         SightingRow::class, FixRow::class, IgnoreRow::class, EnrichRow::class, FamiliarRow::class, BaselineRow::class,
-        CompanionRow::class, FeedbackRow::class,
+        CompanionRow::class, FeedbackRow::class, CatalogRow::class, WatchRow::class, PinRow::class,
     ],
-    version = 5,
+    version = 8,
     exportSchema = false,
 )
 abstract class Db : RoomDatabase() {
@@ -411,6 +656,47 @@ abstract class Db : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : androidx.room.migration.Migration(5, 6) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `catalog` (`entityId` TEXT NOT NULL, `kind` TEXT NOT NULL, `category` TEXT NOT NULL, " +
+                        "`macTrust` TEXT NOT NULL, `flags` INTEGER NOT NULL, `bleName` TEXT NOT NULL, `ssids` TEXT NOT NULL, " +
+                        "`probed` TEXT NOT NULL, `addresses` TEXT NOT NULL, `members` TEXT NOT NULL, `vendor` TEXT NOT NULL, " +
+                        "`search` TEXT NOT NULL, `firstMs` INTEGER NOT NULL, `lastMs` INTEGER NOT NULL, `days` INTEGER NOT NULL, " +
+                        "`lastDay` INTEGER NOT NULL, `maxRssi` INTEGER NOT NULL, `maxScore` REAL NOT NULL, `maxPlaces` INTEGER NOT NULL, " +
+                        "`signature` TEXT NOT NULL DEFAULT '', PRIMARY KEY(`entityId`))",
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalog_lastMs` ON `catalog` (`lastMs`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_catalog_category` ON `catalog` (`category`)")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `watches` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`kind` TEXT NOT NULL, `pattern` TEXT NOT NULL, `onReturn` INTEGER NOT NULL, `minAbsenceMin` INTEGER NOT NULL, " +
+                        "`minRssi` INTEGER NOT NULL, `onAbsence` INTEGER NOT NULL, `absenceMin` INTEGER NOT NULL, `awayOnly` INTEGER NOT NULL, " +
+                        "`enabled` INTEGER NOT NULL, `lastHeardMs` INTEGER NOT NULL, `lastAlertMs` INTEGER NOT NULL, `createdMs` INTEGER NOT NULL)",
+                )
+            }
+        }
+
+        val MIGRATION_6_7 = object : androidx.room.migration.Migration(6, 7) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `pins` (`entityId` TEXT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`createdMs` INTEGER NOT NULL, `untilMs` INTEGER NOT NULL, PRIMARY KEY(`entityId`))",
+                )
+                // Devices already marked suspicious are kept for a year from now.
+                db.execSQL(
+                    "INSERT OR IGNORE INTO pins (entityId, label, createdMs, untilMs) " +
+                        "SELECT entityId, '', MAX(timeMs), CAST(strftime('%s','now') AS INTEGER) * 1000 + 31536000000 FROM feedback WHERE label = 2 GROUP BY entityId",
+                )
+            }
+        }
+
+        val MIGRATION_7_8 = object : androidx.room.migration.Migration(7, 8) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `catalog` ADD COLUMN `together` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /** Opens the SQLCipher-encrypted database; if the key is lost the old file is discarded. */
         fun open(ctx: Context): Db {
             System.loadLibrary("sqlcipher")
@@ -423,7 +709,7 @@ abstract class Db : RoomDatabase() {
             }
             return Room.databaseBuilder(ctx.applicationContext, Db::class.java, NAME)
                 .openHelperFactory(SupportOpenHelperFactory(pass))
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build()
         }
     }

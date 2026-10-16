@@ -321,12 +321,32 @@ fun PlacesScreen(modifier: Modifier) {
                         modifier = Modifier.weight(1f).clickable { mapState.follow = false; mapState.focusOn(r.lat, r.lon) },
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    SlotButtons { dev.retrovision.app.data.WhoWasThere.Slot.Area(r.lat, r.lon, r.radiusM, 7, r.label.ifEmpty { kindText(r) }) }
                     TextButton(onClick = { mapState.startEdit(RoutineEdit(r.id, r.lat, r.lon, r.radiusM, r.label)) }) { Text(Texts.tr("Area", "Area")) }
                     // Marked "rejected" rather than deleted, so the learner does not suggest it again.
                     TextButton(onClick = { setState(scope, r, FamiliarPlace.State.REJECTED) }) { Text(Texts.tr("Remove", "Rimuovi")) }
                 }
             }
         }
+
+        Expandable(
+            title = Texts.tr("Device timeline", "Cronologia dispositivi"),
+            summary = Texts.tr("Flagged devices over time, against your stays, with when you were listening", "I dispositivi segnalati nel tempo, sulle tue soste, con quando eri in ascolto"),
+        ) { DeviceTimelineSection() }
+
+        Expandable(
+            title = Texts.tr("Devices × places", "Dispositivi × luoghi"),
+            summary = Texts.tr("Which devices turn up at which of your places", "Quali dispositivi compaiono in quali dei tuoi luoghi"),
+        ) { PlacesMatrixSection() }
+
+        val slotA by WhoSlots.a.collectAsState()
+        val slotB by WhoSlots.b.collectAsState()
+        Expandable(
+            title = Texts.tr("Who was there", "Chi c'era"),
+            summary = if (slotA == null && slotB == null) Texts.tr("Devices heard during a stay or at a place; and at two of them", "Dispositivi sentiti in una sosta o in un luogo; e in due di essi")
+            else "A: ${slotA?.label ?: "—"} · B: ${slotB?.label ?: "—"}",
+            initiallyOpen = slotA != null || slotB != null,
+        ) { WhoWasThereSection() }
 
         Expandable(
             title = Texts.tr("Timeline", "Timeline") + " (${visits.size})",
@@ -340,14 +360,21 @@ fun PlacesScreen(modifier: Modifier) {
                 val day = dayFmt.format(Date(v.startMs))
                 if (day != lastDay) { lastDay = day; Overline(day, Modifier.padding(top = 6.dp)) }
                 val routine = places.any { it.state == FamiliarPlace.State.CONFIRMED && it.contains(v.lat, v.lon) }
-                Text(
-                    "${timeFmt.format(Date(v.startMs))}–${timeFmt.format(Date(v.endMs))} · ${v.durationMs / 60_000} min · " +
-                        if (routine) Texts.tr("routine place", "luogo di routine") else Texts.tr("other place", "altro luogo"),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.fillMaxWidth()
-                        .clickable { mapState.follow = false; mapState.selection = MapSel.Stay(v); mapState.focusOn(v.lat, v.lon) }
-                        .padding(vertical = 6.dp),
-                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        "${timeFmt.format(Date(v.startMs))}–${timeFmt.format(Date(v.endMs))} · ${v.durationMs / 60_000} min · " +
+                            if (routine) Texts.tr("routine place", "luogo di routine") else Texts.tr("other place", "altro luogo"),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                            .clickable { mapState.follow = false; mapState.selection = MapSel.Stay(v); mapState.focusOn(v.lat, v.lon) }
+                            .padding(vertical = 6.dp),
+                    )
+                    SlotButtons {
+                        dev.retrovision.app.data.WhoWasThere.Slot.Time(
+                            v.startMs, v.endMs, "$day ${timeFmt.format(Date(v.startMs))}–${timeFmt.format(Date(v.endMs))}",
+                        )
+                    }
+                }
             }
         }
 

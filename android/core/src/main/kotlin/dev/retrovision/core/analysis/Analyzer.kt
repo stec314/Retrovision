@@ -172,6 +172,12 @@ sealed class Reason {
      * break. Your own phone, watch and earbuds look exactly like this.
      */
     data class OneStretchOnly(val minutes: Int) : Reason()
+    /**
+     * Wi-Fi that never asked for a network (beacons or data frames only) and was faint everywhere
+     * ([typicalRssi] dBm, 3 in 4 readings at or below it) even kilometres apart: a rooftop link or
+     * mast with a wide reach (WISP, municipal Wi-Fi), not something near you.
+     */
+    data class FaintEverywhere(val typicalRssi: Int) : Reason()
     /** An Apple device that said its owner was driving (Apple Nearby Info): it is in a vehicle. Information only. */
     object ReportsDriving : Reason()
     /** Beacon uptime: running for [days] without a reboot. Typical of a fixed router; information only. */
@@ -304,6 +310,8 @@ enum class ScoreCap(val max: Double) {
     RESIDENT(0.25),
     /** Rotating address heard in one short unbroken stretch: near you for a while, not shown to follow. */
     ONE_STRETCH(0.60),
+    /** Wi-Fi infrastructure heard faintly wherever you were: far away with a wide reach. */
+    FAINT_EVERYWHERE(0.45),
 }
 
 /** How an address came to belong to an entity (shown so you can judge the link yourself). */
@@ -392,7 +400,12 @@ class AnalysisResult(
     val routineOnlyIds: List<String> = emptyList(),
     /** Entities trimmed from [entities], kept as searchable stubs. */
     val others: List<EntityStub> = emptyList(),
+    /** Devices that move together (same places, same times), largest overlap first. */
+    val coTravel: List<CoTravel.Group> = emptyList(),
 ) {
+    /** Entity id -> its co-travel group, for the device detail and the filters. */
+    val groupOf: Map<String, CoTravel.Group> by lazy { coTravel.flatMap { g -> g.members.map { it to g } }.toMap() }
+
     /** Computed once: the UI reads this on every redraw, over tens of thousands of entities. */
     val alerts: List<EntityReport> by lazy { entities.filter { it.alert } }
 }
@@ -493,7 +506,15 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
             others = ordered.drop(n).map { EntityStub.of(it) }
             ordered.take(n).sortedWith(compareByDescending<EntityReport> { it.score }.thenBy { it.entityId })
         }
-        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly, others)
+        // Devices that move together, over every device (kept or trimmed), fixed ones left out.
+        val coTravel = CoTravel.find(
+            reports.filter { r ->
+                r.category != dev.retrovision.core.identity.DeviceCategory.ROUTER &&
+                    !(r.kind == EntityKind.WIFI_AP && r.mobileAp == null) &&
+                    r.reasons.none { it is Reason.StaysPut || it is Reason.OneAreaOnly }
+            }.map { CoTravel.Input(it.entityId, it.visits) },
+        )
+        return AnalysisResult(nowMs, clusterer.places, kept, ignored, turns.size, stops.size, total, routineOnly, others, coTravel)
     }
 
     private fun isIgnored(id: String, list: List<EntitySighting>, ignore: IgnoreList): Boolean {
@@ -765,7 +786,23 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
                 score = minOf(score, ScoreCap.ONE_STRETCH.max)
             }
         }
-        val uptimeDays = if (maxTsfUs > 0) maxTsfUs / 86_400e6 else null
+        // Field data: 5 GHz point-to-point / WISP radios (data frames only, DFS channels) and
+        // municipal outdoor APs are heard at -85..-95 dBm from points 5-8 km apart, with no fade to
+        // place them, and so "travelled with you". Something with you is loud at least some of the
+        // time. Wi-Fi only (BLE tags in a bag can be faint), and never for a client that probes.
+        if (list.first().sighting.radio == Radio.WIFI && probeReqs == 0 && coMove == null) {
+            val rs = list.map { it.sighting.rssi }.filter { it != 0 }.sorted()
+            if (rs.size >= 4) {
+                val p75 = rs[(rs.size * 3 / 4).coerceAtMost(rs.size - 1)]
+                if (p75 <= FAINT_RSSI) {
+                    reasons += Reason.FaintEverywhere(p75)
+                    if (score > ScoreCap.FAINT_EVERYWHERE.max) caps += ScoreCap.FAINT_EVERYWHERE
+                    score = minOf(score, ScoreCap.FAINT_EVERYWHERE.max)
+                }
+            }
+        }
+        // Beacon clocks past a few years are garbage (some phone hotspots randomise the TSF).
+        val uptimeDays = if (maxTsfUs > 0) (maxTsfUs / 86_400e6).takeIf { it <= MAX_UPTIME_DAYS } else null
         if (uptimeDays != null && uptimeDays >= 1.0) reasons += Reason.ApUptime(uptimeDays)
         if (isResident) {
             reasons += Reason.KnownAtRoutine
@@ -1094,6 +1131,9 @@ class Analyzer(private val config: AnalysisConfig = AnalysisConfig()) {
         /** A silence this long splits stretches; a rotating identity heard in one stretch shorter than the max is capped. */
         const val ONE_STRETCH_GAP_MS = 10 * 60_000L
         const val ONE_STRETCH_MAX_MS = 30 * 60_000L
+        /** 3 in 4 readings at or below this, everywhere: far away (see Reason.FaintEverywhere). */
+        const val FAINT_RSSI = -82
+        const val MAX_UPTIME_DAYS = 3 * 365.0
         /**
          * An outdoor AP can be heard ~250-300 m away, so a fixed one can be heard up to ~600 m apart
          * as you walk past on opposite sides. Only beyond that is "it was there too" proof.
